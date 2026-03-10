@@ -9,7 +9,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const API_KEY = '39883ca1bf044bd66cdcd18d2f1bfa39';
+    const API_KEY = 'e2c928001a9cb5f43f528f06ade029bb';
     const url = `https://api.the-odds-api.com/v4/sports/basketball_nba/odds/?apiKey=${API_KEY}&regions=us&markets=h2h,spreads,totals&oddsFormat=american`;
 
     const response = await fetch(url);
