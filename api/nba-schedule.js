@@ -3,48 +3,41 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.status(200).end();
-
   try {
-    const API_KEY = '51177dd2-a3a8-4cf6-bb90-4dbc10cde7ee';
+    const today = new Date().toISOString().split('T')[0];
+    const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+    const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
 
-    // Get today and yesterday's dates
-    const today = new Date();
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-
-    const fmt = d => d.toISOString().split('T')[0]; // YYYY-MM-DD
-    const todayStr = fmt(today);
-    const yesterdayStr = fmt(yesterday);
-
-    // Fetch yesterday's games to find who played
-    const [res1, res2] = await Promise.all([
-      fetch(`https://api.balldontlie.io/v1/games?dates[]=${yesterdayStr}&per_page=30`, {
-        headers: { 'Authorization': API_KEY }
+    const [todayRes, yestRes] = await Promise.all([
+      fetch(`https://api.balldontlie.io/v1/games?dates[]=${today}&per_page=25`, {
+        headers: { 'Authorization': process.env.BALLDONTLIE_API_KEY }
       }),
-      fetch(`https://api.balldontlie.io/v1/games?dates[]=${todayStr}&per_page=30`, {
-        headers: { 'Authorization': API_KEY }
-      })
+      fetch(`https://api.balldontlie.io/v1/games?dates[]=${yesterday}&per_page=25`, {
+        headers: { 'Authorization': process.env.BALLDONTLIE_API_KEY }
+      }),
     ]);
 
-    const [yesterdayData, todayData] = await Promise.all([res1.json(), res2.json()]);
+    const todayData = await todayRes.json();
+    const yestData = await yestRes.json();
 
-    // Teams that played yesterday
-    const playedYesterday = new Set();
-    for (const game of yesterdayData.data || []) {
-      playedYesterday.add(game.home_team.abbreviation);
-      playedYesterday.add(game.visitor_team.abbreviation);
+    const todayTeams = new Set();
+    for (const g of todayData.data || []) {
+      if (g.home_team?.abbreviation) todayTeams.add(g.home_team.abbreviation);
+      if (g.visitor_team?.abbreviation) todayTeams.add(g.visitor_team.abbreviation);
     }
 
-    // Teams playing today — flag B2B
-    const b2bTeams = {};
-    for (const game of todayData.data || []) {
-      const home = game.home_team.abbreviation;
-      const away = game.visitor_team.abbreviation;
-      b2bTeams[home] = { isB2B: playedYesterday.has(home) };
-      b2bTeams[away] = { isB2B: playedYesterday.has(away) };
+    const yestTeams = new Set();
+    for (const g of yestData.data || []) {
+      if (g.home_team?.abbreviation) yestTeams.add(g.home_team.abbreviation);
+      if (g.visitor_team?.abbreviation) yestTeams.add(g.visitor_team.abbreviation);
     }
 
-    return res.status(200).json({ b2bTeams, todayStr, yesterdayStr });
+    const teams = [...todayTeams].map(abbr => ({
+      team: abbr,
+      isB2B: yestTeams.has(abbr),
+    }));
+
+    return res.status(200).json({ teams, lastUpdated: new Date().toISOString() });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
