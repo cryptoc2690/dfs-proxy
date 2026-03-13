@@ -11,6 +11,7 @@ app.use((req, res, next) => {
 const BDL = 'https://api.balldontlie.io';
 const auth = () => ({ 'Authorization': process.env.BALLDONTLIE_API_KEY });
 
+// ODDS â€” isBlowout standardized to >= 8
 app.get('/api/odds', async (req, res) => {
   try {
     const today = new Date().toISOString().split('T')[0];
@@ -48,6 +49,7 @@ app.get('/api/odds', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// SCHEDULE / B2B
 app.get('/api/nba-schedule', async (req, res) => {
   try {
     const today = new Date().toISOString().split('T')[0];
@@ -73,6 +75,7 @@ app.get('/api/nba-schedule', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// PACE â€” season average (authoritative baseline)
 app.get('/api/nba-pace', async (req, res) => {
   try {
     const r = await fetch(`${BDL}/nba/v1/team_season_averages/general?season=2025&season_type=regular&type=advanced&per_page=30`, { headers: auth() });
@@ -89,6 +92,101 @@ app.get('/api/nba-pace', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// PACE RECENT â€” last 15 games per team (blended 40% season / 60% recent in response)
+app.get('/api/nba-pace-recent', async (req, res) => {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0];
+
+    // Get tonight's teams
+    const tonightRes = await fetch(`${BDL}/v1/games?dates[]=${today}&per_page=25`, { headers: auth() });
+    const tonightData = await tonightRes.json();
+    const tonightTeamIds = new Set();
+    const teamIdToAbbr = {};
+    for (const g of tonightData.data || []) {
+      if (g.home_team?.id) { tonightTeamIds.add(g.home_team.id); teamIdToAbbr[g.home_team.id] = g.home_team.abbreviation; }
+      if (g.visitor_team?.id) { tonightTeamIds.add(g.visitor_team.id); teamIdToAbbr[g.visitor_team.id] = g.visitor_team.abbreviation; }
+    }
+
+    // Get season averages for baseline
+    const seasonRes = await fetch(`${BDL}/nba/v1/team_season_averages/general?season=2025&season_type=regular&type=advanced&per_page=30`, { headers: auth() });
+    const seasonData = await seasonRes.json();
+    const seasonPaceMap = {};
+    for (const t of seasonData.data || []) {
+      seasonPaceMap[t.team.abbreviation] = {
+        pace: t.stats.pace,
+        offRating: t.stats.off_rating,
+        defRating: t.stats.def_rating,
+        netRating: t.stats.net_rating,
+      };
+    }
+
+    // Get recent completed games for tonight's teams
+    const recentRes = await fetch(`${BDL}/v1/games?start_date=${thirtyDaysAgo}&end_date=${today}&per_page=100`, { headers: auth() });
+    const recentData = await recentRes.json();
+    const allRecent = (recentData.data || []).filter(g => g.status === 'Final');
+
+    // For each team get their last 15 game IDs
+    const teamGameIds = {};
+    for (const teamId of tonightTeamIds) {
+      const abbr = teamIdToAbbr[teamId];
+      const teamGames = allRecent
+        .filter(g => g.home_team?.id === teamId || g.visitor_team?.id === teamId)
+        .sort((a, b) => new Date(b.date) - new Date(a.date))
+        .slice(0, 15);
+      teamGameIds[abbr] = teamGames.map(g => g.id);
+    }
+
+    // Fetch advanced stats for all unique game IDs
+    const allGameIds = [...new Set(Object.values(teamGameIds).flat())];
+    const statsResults = await Promise.all(
+      allGameIds.map(id =>
+        fetch(`${BDL}/v2/stats/advanced?game_ids[]=${id}&per_page=100`, { headers: auth() })
+          .then(r => r.json()).then(d => d.data || [])
+      )
+    );
+    const allStats = statsResults.flat().filter(s => s.period === 0);
+
+    // Calculate recent pace per team from possessions
+    const teamPossessions = {};
+    const teamMinutes = {};
+    for (const s of allStats) {
+      const teamAbbr = s.team?.abbreviation;
+      if (!teamAbbr || !tonightTeamIds.size) continue;
+      if (!teamPossessions[teamAbbr]) { teamPossessions[teamAbbr] = 0; teamMinutes[teamAbbr] = 0; }
+      teamPossessions[teamAbbr] += (s.possessions || 0);
+      teamMinutes[teamAbbr] += parseFloat(s.min || 0);
+    }
+
+    // Build blended pace map (40% season, 60% recent)
+    const teams = [];
+    for (const [abbr] of Object.entries(teamIdToAbbr)) {
+      const teamAbbr = teamIdToAbbr[abbr] || abbr;
+      const season = seasonPaceMap[teamAbbr] || {};
+      const poss = teamPossessions[teamAbbr] || 0;
+      const mins = teamMinutes[teamAbbr] || 1;
+      // Pace = possessions per 48 min
+      const recentPace = mins > 0 ? (poss / mins) * 48 : null;
+      const seasonPace = season.pace || null;
+      const blendedPace = recentPace && seasonPace
+        ? parseFloat((seasonPace * 0.4 + recentPace * 0.6).toFixed(2))
+        : seasonPace || recentPace;
+      teams.push({
+        teamAbbr: teamAbbr,
+        pace: blendedPace,
+        seasonPace: seasonPace,
+        recentPace: recentPace ? parseFloat(recentPace.toFixed(2)) : null,
+        offRating: season.offRating || null,
+        defRating: season.defRating || null,
+        netRating: season.netRating || null,
+      });
+    }
+
+    res.json({ teams, lastUpdated: new Date().toISOString() });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// INJURIES
 app.get('/api/nba-injuries', async (req, res) => {
   try {
     const r = await fetch(`${BDL}/v1/player_injuries`, { headers: auth() });
@@ -103,6 +201,7 @@ app.get('/api/nba-injuries', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// PROPS
 app.get('/api/nba-props', async (req, res) => {
   try {
     const today = new Date().toISOString().split('T')[0];
@@ -149,60 +248,158 @@ app.get('/api/nba-props', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// DVP â€” recent (auto-calculated from last 15 games) with season fallback
 app.get('/api/nba-dvp', async (req, res) => {
   try {
-    const r = await fetch('https://dfs-proxy.vercel.app/api/nba-dvp');
-    const data = await r.json();
-    res.json(data);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    const today = new Date().toISOString().split('T')[0];
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0];
+
+    // Get tonight's teams
+    const tonightRes = await fetch(`${BDL}/v1/games?dates[]=${today}&per_page=25`, { headers: auth() });
+    const tonightData = await tonightRes.json();
+    const tonightTeamIds = new Set();
+    const teamIdToAbbr = {};
+    for (const g of tonightData.data || []) {
+      if (g.home_team?.id) { tonightTeamIds.add(g.home_team.id); teamIdToAbbr[g.home_team.id] = g.home_team.abbreviation; }
+      if (g.visitor_team?.id) { tonightTeamIds.add(g.visitor_team.id); teamIdToAbbr[g.visitor_team.id] = g.visitor_team.abbreviation; }
+    }
+
+    // Get recent games
+    const recentRes = await fetch(`${BDL}/v1/games?start_date=${thirtyDaysAgo}&end_date=${today}&per_page=100`, { headers: auth() });
+    const recentData = await recentRes.json();
+    const allRecent = (recentData.data || []).filter(g => g.status === 'Final');
+
+    // For each tonight team get their last 15 opponent game IDs (games where they were the defense)
+    const defGameIds = new Set();
+    const teamDefGames = {};
+    for (const teamId of tonightTeamIds) {
+      const abbr = teamIdToAbbr[teamId];
+      const games = allRecent
+        .filter(g => g.home_team?.id === teamId || g.visitor_team?.id === teamId)
+        .sort((a, b) => new Date(b.date) - new Date(a.date))
+        .slice(0, 15);
+      teamDefGames[abbr] = games;
+      for (const g of games) defGameIds.add(g.id);
+    }
+
+    // Fetch regular stats for those games
+    const statsResults = await Promise.all(
+      [...defGameIds].map(id =>
+        fetch(`${BDL}/v1/stats?game_ids[]=${id}&per_page=100`, { headers: auth() })
+          .then(r => r.json()).then(d => d.data || [])
+      )
+    );
+    const allStats = statsResults.flat();
+
+    // Calculate FPPG allowed per position per defending team
+    // DK scoring: pts*1 + reb*1.25 + ast*1.5 + stl*2 + blk*2 + to*-0.5 + 3pm*0.5
+    const dvpAccum = {};
+    const dvpCount = {};
+    const posMap = { 'G': ['PG','SG'], 'F': ['SF','PF'], 'C': ['C'] };
+
+    for (const s of allStats) {
+      const gameId = s.game?.id;
+      const playerTeamId = s.team?.id;
+      if (!gameId || !playerTeamId) continue;
+
+      // Find the game to determine which team was defending
+      const game = allRecent.find(g => g.id === gameId);
+      if (!game) continue;
+      const defTeamId = game.home_team?.id === playerTeamId ? game.visitor_team?.id : game.home_team?.id;
+      const defAbbr = teamIdToAbbr[defTeamId];
+      if (!defAbbr) continue;
+
+      // Calculate DK fantasy points
+      const pts = s.pts || 0;
+      const reb = s.reb || 0;
+      const ast = s.ast || 0;
+      const stl = s.stl || 0;
+      const blk = s.blk || 0;
+      const to = s.turnover || 0;
+      const fg3 = s.fg3m || 0;
+      const min = parseInt(s.min || '0');
+      if (min < 10) continue; // skip garbage time
+
+      const fp = pts * 1 + reb * 1.25 + ast * 1.5 + stl * 2 + blk * 2 + to * -0.5 + fg3 * 0.5;
+      const pos = s.player?.position || '';
+
+      const positions = pos.includes('G') ? ['PG', 'SG'] :
+                        pos.includes('F') ? ['SF', 'PF'] :
+                        pos.includes('C') ? ['C'] :
+                        pos === 'PG' ? ['PG'] :
+                        pos === 'SG' ? ['SG'] :
+                        pos === 'SF' ? ['SF'] :
+                        pos === 'PF' ? ['PF'] : [];
+
+      for (const p of positions) {
+        const key = `${defAbbr}::${p}`;
+        if (!dvpAccum[key]) { dvpAccum[key] = 0; dvpCount[key] = 0; }
+        dvpAccum[key] += fp;
+        dvpCount[key]++;
+      }
+    }
+
+    // Build dvp map
+    const dvpMap = {};
+    for (const [key, total] of Object.entries(dvpAccum)) {
+      const [team, pos] = key.split('::');
+      if (!dvpMap[team]) dvpMap[team] = {};
+      dvpMap[team][pos.toLowerCase()] = parseFloat((total / dvpCount[key]).toFixed(1));
+    }
+
+    // Try season fallback from Vercel for any missing teams
+    let fallback = {};
+    try {
+      const fbRes = await fetch('https://dfs-proxy.vercel.app/api/nba-dvp');
+      fallback = await fbRes.json();
+    } catch (e) { /* ignore */ }
+
+    // Merge: recent data takes priority, fallback fills gaps
+    const finalDvp = { ...(fallback.dvpMap || fallback), ...dvpMap };
+
+    res.json({ dvpMap: finalDvp, source: 'recent-15games', lastUpdated: new Date().toISOString() });
+  } catch (err) {
+    // Full fallback to Vercel on any error
+    try {
+      const r = await fetch('https://dfs-proxy.vercel.app/api/nba-dvp');
+      const data = await r.json();
+      res.json({ ...data, source: 'fallback' });
+    } catch (e) { res.status(500).json({ error: err.message }); }
+  }
 });
 
+// RECENT STATS â€” last 5 games per player (not date-based)
 app.get('/api/nba-recent-stats', async (req, res) => {
   try {
     const today = new Date().toISOString().split('T')[0];
     const fourteenDaysAgo = new Date(Date.now() - 14 * 86400000).toISOString().split('T')[0];
 
-    // Get tonight's games and team IDs
     const tonightRes = await fetch(`${BDL}/v1/games?dates[]=${today}&per_page=25`, { headers: auth() });
     const tonightData = await tonightRes.json();
-    const tonightGames = tonightData.data || [];
-
-    // Build map of teamId -> abbreviation
-    const teamIdToAbbr = {};
     const tonightTeamIds = new Set();
-    for (const g of tonightGames) {
-      if (g.home_team?.id) {
-        tonightTeamIds.add(g.home_team.id);
-        teamIdToAbbr[g.home_team.id] = g.home_team.abbreviation;
-      }
-      if (g.visitor_team?.id) {
-        tonightTeamIds.add(g.visitor_team.id);
-        teamIdToAbbr[g.visitor_team.id] = g.visitor_team.abbreviation;
-      }
+    const teamIdToAbbr = {};
+    for (const g of tonightData.data || []) {
+      if (g.home_team?.id) { tonightTeamIds.add(g.home_team.id); teamIdToAbbr[g.home_team.id] = g.home_team.abbreviation; }
+      if (g.visitor_team?.id) { tonightTeamIds.add(g.visitor_team.id); teamIdToAbbr[g.visitor_team.id] = g.visitor_team.abbreviation; }
     }
 
-    // Get recent games for all tonight's teams
     const recentRes = await fetch(`${BDL}/v1/games?start_date=${fourteenDaysAgo}&end_date=${today}&per_page=100`, { headers: auth() });
     const recentData = await recentRes.json();
     const allRecent = (recentData.data || []).filter(g => g.status === 'Final');
 
-    // For each tonight team, get their 3 most recent games
+    // Per team: get last 5 games
     const gameIdSet = new Set();
     for (const teamId of tonightTeamIds) {
       const teamGames = allRecent
         .filter(g => g.home_team?.id === teamId || g.visitor_team?.id === teamId)
         .sort((a, b) => new Date(b.date) - new Date(a.date))
-        .slice(0, 40);
+        .slice(0, 5);
       for (const g of teamGames) gameIdSet.add(g.id);
     }
 
     const recentGameIds = [...gameIdSet];
+    if (recentGameIds.length === 0) return res.json({ players: [], lastUpdated: new Date().toISOString() });
 
-    if (recentGameIds.length === 0) {
-      return res.json({ players: [], lastUpdated: new Date().toISOString() });
-    }
-
-    // Fetch advanced + regular stats for all those games in parallel
     const [advResults, regResults] = await Promise.all([
       Promise.all(recentGameIds.map(id =>
         fetch(`${BDL}/v2/stats/advanced?game_ids[]=${id}&per_page=100`, { headers: auth() })
@@ -217,7 +414,6 @@ app.get('/api/nba-recent-stats', async (req, res) => {
     const advancedStats = advResults.flat();
     const regularStats = regResults.flat();
 
-    // Build minutes map from regular stats
     const minutesMap = {};
     for (const s of regularStats) {
       const name = `${s.player?.first_name} ${s.player?.last_name}`.trim();
@@ -225,7 +421,6 @@ app.get('/api/nba-recent-stats', async (req, res) => {
       if (name && gameId) minutesMap[`${name}::${gameId}`] = parseInt(s.min || '0', 10);
     }
 
-    // Group advanced stats by player (period=0 = full game)
     const byPlayer = {};
     for (const s of advancedStats) {
       if (s.period !== 0) continue;
