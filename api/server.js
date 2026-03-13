@@ -122,7 +122,7 @@ app.get('/api/nba-props', async (req, res) => {
     for (let i = 0; i < playerIds.length; i += 50) {
       const chunk = playerIds.slice(i, i + 50);
       const params = chunk.map(id => `ids[]=${id}`).join('&');
-      const pRes = await fetch(`${BDL}/v1/players?${params}&per_page=50`, { headers: auth() });
+      const pRes = await fetch(`${BDL}/v1/players?${params}&per_page=100`, { headers: auth() });
       const pData = await pRes.json();
       for (const p of pData.data || []) playerNameMap[p.id] = `${p.first_name} ${p.last_name}`;
     }
@@ -160,26 +160,49 @@ app.get('/api/nba-dvp', async (req, res) => {
 app.get('/api/nba-recent-stats', async (req, res) => {
   try {
     const today = new Date().toISOString().split('T')[0];
-    const sevenDaysAgo = new Date(Date.now() - 14 * 86400000).toISOString().split('T')[0];
-    
+    const fourteenDaysAgo = new Date(Date.now() - 14 * 86400000).toISOString().split('T')[0];
+
+    // Get tonight's games and team IDs
     const tonightRes = await fetch(`${BDL}/v1/games?dates[]=${today}&per_page=25`, { headers: auth() });
     const tonightData = await tonightRes.json();
-    const tonightTeamIds = new Set(
-      (tonightData.data || []).flatMap(g => [g.home_team?.id, g.visitor_team?.id]).filter(Boolean)
-    );
+    const tonightGames = tonightData.data || [];
 
-    const recentRes = await fetch(`${BDL}/v1/games?start_date=${sevenDaysAgo}&end_date=${today}&per_page=50`, { headers: auth() });
+    // Build map of teamId -> abbreviation
+    const teamIdToAbbr = {};
+    const tonightTeamIds = new Set();
+    for (const g of tonightGames) {
+      if (g.home_team?.id) {
+        tonightTeamIds.add(g.home_team.id);
+        teamIdToAbbr[g.home_team.id] = g.home_team.abbreviation;
+      }
+      if (g.visitor_team?.id) {
+        tonightTeamIds.add(g.visitor_team.id);
+        teamIdToAbbr[g.visitor_team.id] = g.visitor_team.abbreviation;
+      }
+    }
+
+    // Get recent games for all tonight's teams
+    const recentRes = await fetch(`${BDL}/v1/games?start_date=${fourteenDaysAgo}&end_date=${today}&per_page=100`, { headers: auth() });
     const recentData = await recentRes.json();
-    const recentGameIds = (recentData.data || [])
-      .filter(g => g.status === 'Final' && (tonightTeamIds.has(g.home_team?.id) || tonightTeamIds.has(g.visitor_team?.id)))
-      .sort((a, b) => new Date(b.date) - new Date(a.date))
-      .slice(0, 5)
-      .map(g => g.id);
+    const allRecent = (recentData.data || []).filter(g => g.status === 'Final');
+
+    // For each tonight team, get their 3 most recent games
+    const gameIdSet = new Set();
+    for (const teamId of tonightTeamIds) {
+      const teamGames = allRecent
+        .filter(g => g.home_team?.id === teamId || g.visitor_team?.id === teamId)
+        .sort((a, b) => new Date(b.date) - new Date(a.date))
+        .slice(0, 40);
+      for (const g of teamGames) gameIdSet.add(g.id);
+    }
+
+    const recentGameIds = [...gameIdSet];
 
     if (recentGameIds.length === 0) {
       return res.json({ players: [], lastUpdated: new Date().toISOString() });
     }
 
+    // Fetch advanced + regular stats for all those games in parallel
     const [advResults, regResults] = await Promise.all([
       Promise.all(recentGameIds.map(id =>
         fetch(`${BDL}/v2/stats/advanced?game_ids[]=${id}&per_page=100`, { headers: auth() })
@@ -194,6 +217,7 @@ app.get('/api/nba-recent-stats', async (req, res) => {
     const advancedStats = advResults.flat();
     const regularStats = regResults.flat();
 
+    // Build minutes map from regular stats
     const minutesMap = {};
     for (const s of regularStats) {
       const name = `${s.player?.first_name} ${s.player?.last_name}`.trim();
@@ -201,6 +225,7 @@ app.get('/api/nba-recent-stats', async (req, res) => {
       if (name && gameId) minutesMap[`${name}::${gameId}`] = parseInt(s.min || '0', 10);
     }
 
+    // Group advanced stats by player (period=0 = full game)
     const byPlayer = {};
     for (const s of advancedStats) {
       if (s.period !== 0) continue;
