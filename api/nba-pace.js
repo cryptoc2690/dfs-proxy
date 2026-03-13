@@ -9,41 +9,20 @@ export default async function handler(req, res) {
       'https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams?limit=30'
     );
     const data = await response.json();
-
     const teamIds = data.sports[0].leagues[0].teams.map(t => t.team.id);
 
-    // Fetch stats for all teams in parallel
-    const statsResponses = await Promise.all(
-      teamIds.map(id =>
-        fetch(`https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/${id}/statistics`)
-          .then(r => r.json())
-      )
-    );
+    const sample = await fetch(
+      `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/${teamIds[0]}/statistics`
+    ).then(r => r.json());
 
-    const teams = statsResponses.map(teamData => {
-      const team = teamData.team;
-      const stats = teamData.results?.stats?.categories || [];
+    const allStats = [];
+    for (const cat of sample.results?.stats?.categories || []) {
+      for (const s of cat.stats || []) {
+        allStats.push({ category: cat.name, name: s.name, displayName: s.displayName, value: s.value });
+      }
+    }
 
-      const getStat = (name) => {
-        for (const cat of stats) {
-          for (const s of cat.stats || []) {
-            if (s.name === name) return parseFloat(s.value) || 0;
-          }
-        }
-        return null;
-      };
-
-      return {
-        teamAbbr: team.abbreviation,
-        teamName: team.displayName,
-        pace: getStat('pace'),
-        offRating: getStat('offensiveRating'),
-        defRating: getStat('defensiveRating'),
-        netRating: getStat('netRating'),
-      };
-    });
-
-    return res.status(200).json({ teams, lastUpdated: new Date().toISOString() });
+    return res.status(200).json({ debug: allStats });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
