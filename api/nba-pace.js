@@ -11,8 +11,17 @@ export default async function handler(req, res) {
     );
     const data = await r.json();
 
-    // Debug first — show raw so we confirm pace field name
-    return res.status(200).json({ raw: data });
+    const teams = (data.data || []).map(t => ({
+      teamAbbr: t.team.abbreviation,
+      teamName: t.team.full_name,
+      pace: t.stats.pace,
+      offRating: t.stats.off_rating,
+      defRating: t.stats.def_rating,
+      netRating: t.stats.net_rating,
+      paceRank: t.stats.pace_rank,
+    }));
+
+    return res.status(200).json({ teams, lastUpdated: new Date().toISOString() });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
