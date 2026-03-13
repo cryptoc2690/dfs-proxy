@@ -5,24 +5,14 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   try {
-    const response = await fetch(
-      'https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams?limit=30'
+    const r = await fetch(
+      'https://api.balldontlie.io/nba/v1/team_season_averages/general?season=2025&season_type=regular&type=advanced&per_page=30',
+      { headers: { 'Authorization': process.env.BALLDONTLIE_API_KEY } }
     );
-    const data = await response.json();
-    const teamIds = data.sports[0].leagues[0].teams.map(t => t.team.id);
+    const data = await r.json();
 
-    const sample = await fetch(
-      `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/${teamIds[0]}/statistics`
-    ).then(r => r.json());
-
-    const allStats = [];
-    for (const cat of sample.results?.stats?.categories || []) {
-      for (const s of cat.stats || []) {
-        allStats.push({ category: cat.name, name: s.name, displayName: s.displayName, value: s.value });
-      }
-    }
-
-    return res.status(200).json({ debug: allStats });
+    // Debug first — show raw so we confirm pace field name
+    return res.status(200).json({ raw: data });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
