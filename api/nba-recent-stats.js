@@ -30,7 +30,7 @@ export default async function handler(req, res) {
         (tonightTeamIds.has(g.home_team?.id) || tonightTeamIds.has(g.visitor_team?.id))
       )
       .sort((a, b) => new Date(b.date) - new Date(a.date))
-      .slice(0, 5)
+      .slice(0, 15)
       .map(g => g.id);
 
     if (recentGameIds.length === 0) {
@@ -84,7 +84,7 @@ export default async function handler(req, res) {
       const sorted = games
         .filter(g => g.date)
         .sort((a, b) => new Date(b.date) - new Date(a.date))
-        .slice(0, 5);
+        .slice(0, 15);
 
       if (sorted.length < 2) return null;
 
