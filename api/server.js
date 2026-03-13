@@ -160,8 +160,8 @@ app.get('/api/nba-dvp', async (req, res) => {
 app.get('/api/nba-recent-stats', async (req, res) => {
   try {
     const today = new Date().toISOString().split('T')[0];
-    const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
-
+    const sevenDaysAgo = new Date(Date.now() - 14 * 86400000).toISOString().split('T')[0];
+    
     const tonightRes = await fetch(`${BDL}/v1/games?dates[]=${today}&per_page=25`, { headers: auth() });
     const tonightData = await tonightRes.json();
     const tonightTeamIds = new Set(
