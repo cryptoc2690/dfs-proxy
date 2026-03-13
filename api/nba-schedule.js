@@ -5,50 +5,43 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   try {
-    const response = await fetch(
-      'https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json'
-    );
+    const API_KEY = '51177dd2-a3a8-4cf6-bb90-4dbc10cde7ee';
 
-    if (!response.ok) {
-      return res.status(response.status).json({ error: 'Schedule fetch failed' });
-    }
-
-    const data = await response.json();
-    const gameDates = data.leagueSchedule?.gameDates || [];
-
-    // Build a map of team -> dates played
-    const teamDates = {};
-    for (const dateObj of gameDates) {
-      const date = dateObj.gameDate; // format: "03/13/2026 00:00:00"
-      for (const game of dateObj.games || []) {
-        const home = game.homeTeam?.teamTricode;
-        const away = game.awayTeam?.teamTricode;
-        if (home) {
-          if (!teamDates[home]) teamDates[home] = [];
-          teamDates[home].push(date.split(' ')[0]);
-        }
-        if (away) {
-          if (!teamDates[away]) teamDates[away] = [];
-          teamDates[away].push(date.split(' ')[0]);
-        }
-      }
-    }
-
-    // Find today and yesterday
+    // Get today and yesterday's dates
     const today = new Date();
-    const todayStr = `${String(today.getMonth()+1).padStart(2,'0')}/${String(today.getDate()).padStart(2,'0')}/${today.getFullYear()}`;
     const yesterday = new Date(today);
     yesterday.setDate(yesterday.getDate() - 1);
-    const yesterdayStr = `${String(yesterday.getMonth()+1).padStart(2,'0')}/${String(yesterday.getDate()).padStart(2,'0')}/${yesterday.getFullYear()}`;
 
-    // Flag teams playing today that also played yesterday
+    const fmt = d => d.toISOString().split('T')[0]; // YYYY-MM-DD
+    const todayStr = fmt(today);
+    const yesterdayStr = fmt(yesterday);
+
+    // Fetch yesterday's games to find who played
+    const [res1, res2] = await Promise.all([
+      fetch(`https://api.balldontlie.io/v1/games?dates[]=${yesterdayStr}&per_page=30`, {
+        headers: { 'Authorization': API_KEY }
+      }),
+      fetch(`https://api.balldontlie.io/v1/games?dates[]=${todayStr}&per_page=30`, {
+        headers: { 'Authorization': API_KEY }
+      })
+    ]);
+
+    const [yesterdayData, todayData] = await Promise.all([res1.json(), res2.json()]);
+
+    // Teams that played yesterday
+    const playedYesterday = new Set();
+    for (const game of yesterdayData.data || []) {
+      playedYesterday.add(game.home_team.abbreviation);
+      playedYesterday.add(game.visitor_team.abbreviation);
+    }
+
+    // Teams playing today — flag B2B
     const b2bTeams = {};
-    for (const [team, dates] of Object.entries(teamDates)) {
-      const playsToday = dates.includes(todayStr);
-      const playedYesterday = dates.includes(yesterdayStr);
-      if (playsToday) {
-        b2bTeams[team] = { isB2B: playedYesterday };
-      }
+    for (const game of todayData.data || []) {
+      const home = game.home_team.abbreviation;
+      const away = game.visitor_team.abbreviation;
+      b2bTeams[home] = { isB2B: playedYesterday.has(home) };
+      b2bTeams[away] = { isB2B: playedYesterday.has(away) };
     }
 
     return res.status(200).json({ b2bTeams, todayStr, yesterdayStr });
@@ -56,8 +49,3 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: err.message });
   }
 }
-```
-
-Check it at:
-```
-https://dfs-proxy.vercel.app/api/nba-schedule
