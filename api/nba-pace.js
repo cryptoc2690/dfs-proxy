@@ -5,39 +5,20 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   try {
-    const url = 'https://stats.nba.com/stats/leaguedashteamstats?Season=2025-26&SeasonType=Regular+Season&MeasureType=Advanced&PerMode=PerGame&LeagueID=00&DateFrom=&DateTo=&Conference=&Division=&GameScope=&GameSegment=&LastNGames=0&Location=&Month=0&OpponentTeamID=0&Outcome=&PORound=&PaceAdjust=N&Period=0&PlayerExperience=&PlayerPosition=&PlusMinus=N&Rank=N&SeasonSegment=&ShotClockRange=&StarterBench=&TeamID=&TwoWay=&VsConference=&VsDivision=';
-    
-    const response = await fetch(url, {
-      headers: {
-        'Referer': 'https://www.nba.com/',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'application/json',
-        'x-nba-stats-origin': 'stats',
-        'x-nba-stats-token': 'true'
-      }
-    });
-
-    if (!response.ok) {
-      return res.status(response.status).json({ error: 'NBA API error', status: response.status });
-    }
+    const response = await fetch(
+      'https://api.balldontlie.io/v1/teams/advanced_stats?season=2025&per_page=30',
+      { headers: { 'Authorization': '51177dd2-a3a8-4cf6-bb90-4dbc10cde7ee' } }
+    );
 
     const data = await response.json();
-    const headers = data.resultSets[0].headers;
-    const rows = data.resultSets[0].rowSet;
-
-    const teams = rows.map(row => {
-      const obj = {};
-      headers.forEach((h, i) => { obj[h] = row[i]; });
-      return {
-        teamId: obj.TEAM_ID,
-        teamName: obj.TEAM_NAME,
-        teamAbbr: obj.TEAM_ABBREVIATION,
-        pace: obj.PACE,
-        offRating: obj.OFF_RATING,
-        defRating: obj.DEF_RATING,
-        netRating: obj.NET_RATING,
-      };
-    });
+    const teams = data.data.map(t => ({
+      teamId: t.team_id,
+      teamName: t.team.full_name,
+      teamAbbr: t.team.abbreviation,
+      pace: t.pace,
+      offRating: t.off_rating,
+      defRating: t.def_rating,
+    }));
 
     return res.status(200).json({ teams });
   } catch (err) {
