@@ -11,7 +11,6 @@ app.use((req, res, next) => {
 const BDL = 'https://api.balldontlie.io';
 const auth = () => ({ 'Authorization': process.env.BALLDONTLIE_API_KEY });
 
-// ODDS
 app.get('/api/odds', async (req, res) => {
   try {
     const today = new Date().toISOString().split('T')[0];
@@ -49,7 +48,6 @@ app.get('/api/odds', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// SCHEDULE / B2B
 app.get('/api/nba-schedule', async (req, res) => {
   try {
     const today = new Date().toISOString().split('T')[0];
@@ -75,7 +73,6 @@ app.get('/api/nba-schedule', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// PACE
 app.get('/api/nba-pace', async (req, res) => {
   try {
     const r = await fetch(`${BDL}/nba/v1/team_season_averages/general?season=2025&season_type=regular&type=advanced&per_page=30`, { headers: auth() });
@@ -92,7 +89,6 @@ app.get('/api/nba-pace', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// INJURIES
 app.get('/api/nba-injuries', async (req, res) => {
   try {
     const r = await fetch(`${BDL}/v1/player_injuries`, { headers: auth() });
@@ -107,7 +103,6 @@ app.get('/api/nba-injuries', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// PROPS
 app.get('/api/nba-props', async (req, res) => {
   try {
     const today = new Date().toISOString().split('T')[0];
@@ -154,7 +149,6 @@ app.get('/api/nba-props', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// DVP â€” forward to Vercel (manually updated)
 app.get('/api/nba-dvp', async (req, res) => {
   try {
     const r = await fetch('https://dfs-proxy.vercel.app/api/nba-dvp');
@@ -163,60 +157,17 @@ app.get('/api/nba-dvp', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// DEBUG STATS
-app.get('/api/debug-stats', async (req, res) => {
-  try {
-    const today = new Date().toISOString().split('T')[0];
-    const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
-    const tonightRes = await fetch(`${BDL}/v1/games?dates[]=${today}&per_page=25`, { headers: auth() });
-    const tonightData = await tonightRes.json();
-    const tonightTeamIds = new Set(
-      (tonightData.data || []).flatMap(g => [g.home_team?.id, g.visitor_team?.id]).filter(Boolean)
-    );
-    const recentRes = await fetch(`${BDL}/v1/games?start_date=${sevenDaysAgo}&end_date=${today}&per_page=50`, { headers: auth() });
-    const recentData = await recentRes.json();
-    const allRecent = recentData.data || [];
-    const filtered = allRecent.filter(g =>
-      g.status === 'Final' &&
-      (tonightTeamIds.has(g.home_team?.id) || tonightTeamIds.has(g.visitor_team?.id))
-    );
-    const recentGameIds = filtered.sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 5).map(g => g.id);
-    let advCount = 0, regCount = 0, period0Count = 0, sampleName = null;
-    if (recentGameIds.length > 0) {
-      const [a, r] = await Promise.all([
-        fetch(`${BDL}/v2/stats/advanced?game_ids[]=${recentGameIds[0]}&per_page=100`, { headers: auth() }).then(x => x.json()),
-        fetch(`${BDL}/v1/stats?game_ids[]=${recentGameIds[0]}&per_page=100`, { headers: auth() }).then(x => x.json()),
-      ]);
-      advCount = a.data?.length || 0;
-      regCount = r.data?.length || 0;
-      period0Count = (a.data || []).filter(s => s.period === 0).length;
-      const first = (a.data || []).find(s => s.period === 0);
-      sampleName = first ? `${first.player?.first_name} ${first.player?.last_name}` : null;
-    }
-    res.json({
-      today, sevenDaysAgo,
-      tonightTeamCount: tonightTeamIds.size,
-      totalRecentGames: allRecent.length,
-      filteredForTonightTeams: filtered.length,
-      recentGameIds,
-      firstGameAdvCount: advCount,
-      firstGameRegCount: regCount,
-      firstGamePeriod0Count: period0Count,
-      samplePlayer: sampleName,
-    });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// RECENT STATS (usage + minutes trends)
 app.get('/api/nba-recent-stats', async (req, res) => {
   try {
     const today = new Date().toISOString().split('T')[0];
     const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+
     const tonightRes = await fetch(`${BDL}/v1/games?dates[]=${today}&per_page=25`, { headers: auth() });
     const tonightData = await tonightRes.json();
     const tonightTeamIds = new Set(
       (tonightData.data || []).flatMap(g => [g.home_team?.id, g.visitor_team?.id]).filter(Boolean)
     );
+
     const recentRes = await fetch(`${BDL}/v1/games?start_date=${sevenDaysAgo}&end_date=${today}&per_page=50`, { headers: auth() });
     const recentData = await recentRes.json();
     const recentGameIds = (recentData.data || [])
@@ -224,23 +175,32 @@ app.get('/api/nba-recent-stats', async (req, res) => {
       .sort((a, b) => new Date(b.date) - new Date(a.date))
       .slice(0, 5)
       .map(g => g.id);
-    if (recentGameIds.length === 0) return res.json({ players: [], lastUpdated: new Date().toISOString() });
+
+    if (recentGameIds.length === 0) {
+      return res.json({ players: [], lastUpdated: new Date().toISOString() });
+    }
+
     const [advResults, regResults] = await Promise.all([
       Promise.all(recentGameIds.map(id =>
-        fetch(`${BDL}/v2/stats/advanced?game_ids[]=${id}&per_page=100`, { headers: auth() }).then(r => r.json()).then(d => d.data || [])
+        fetch(`${BDL}/v2/stats/advanced?game_ids[]=${id}&per_page=100`, { headers: auth() })
+          .then(r => r.json()).then(d => d.data || [])
       )),
       Promise.all(recentGameIds.map(id =>
-        fetch(`${BDL}/v1/stats?game_ids[]=${id}&per_page=100`, { headers: auth() }).then(r => r.json()).then(d => d.data || [])
+        fetch(`${BDL}/v1/stats?game_ids[]=${id}&per_page=100`, { headers: auth() })
+          .then(r => r.json()).then(d => d.data || [])
       )),
     ]);
+
     const advancedStats = advResults.flat();
     const regularStats = regResults.flat();
+
     const minutesMap = {};
     for (const s of regularStats) {
       const name = `${s.player?.first_name} ${s.player?.last_name}`.trim();
       const gameId = s.game?.id;
       if (name && gameId) minutesMap[`${name}::${gameId}`] = parseInt(s.min || '0', 10);
     }
+
     const byPlayer = {};
     for (const s of advancedStats) {
       if (s.period !== 0) continue;
@@ -254,9 +214,15 @@ app.get('/api/nba-recent-stats', async (req, res) => {
         usage: parseFloat(((s.usage_percentage || 0) * 100).toFixed(1)),
       });
     }
+
     const players = Object.entries(byPlayer).map(([name, games]) => {
-      const sorted = games.filter(g => g.date).sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 5);
-      if (sorted.length < 2) return null;
+      const sorted = games
+        .filter(g => g.date)
+        .sort((a, b) => new Date(b.date) - new Date(a.date))
+        .slice(0, 5);
+
+      if (sorted.length < 1) return null;
+
       const avgMinutes = sorted.reduce((s, g) => s + g.minutes, 0) / sorted.length;
       const avgUsage = sorted.reduce((s, g) => s + g.usage, 0) / sorted.length;
       const recent2 = sorted.slice(0, 2);
@@ -265,19 +231,22 @@ app.get('/api/nba-recent-stats', async (req, res) => {
       const priorUsage = prior3.length > 0 ? prior3.reduce((s, g) => s + g.usage, 0) / prior3.length : recentUsage;
       const recentMins = recent2.reduce((s, g) => s + g.minutes, 0) / recent2.length;
       const priorMins = prior3.length > 0 ? prior3.reduce((s, g) => s + g.minutes, 0) / prior3.length : recentMins;
+      const hasTrend = sorted.length >= 2;
+
       return {
         playerName: name,
         avgMinutes: parseFloat(avgMinutes.toFixed(1)),
         avgUsage: parseFloat(avgUsage.toFixed(1)),
         recentMinutes: parseFloat(recentMins.toFixed(1)),
         recentUsage: parseFloat(recentUsage.toFixed(1)),
-        minutesTrend: parseFloat((recentMins - priorMins).toFixed(1)),
-        usageTrend: parseFloat((recentUsage - priorUsage).toFixed(1)),
+        minutesTrend: hasTrend ? parseFloat((recentMins - priorMins).toFixed(1)) : null,
+        usageTrend: hasTrend ? parseFloat((recentUsage - priorUsage).toFixed(1)) : null,
         usageSpike: recentUsage > avgUsage + 4,
         minutesRisk: recentMins < avgMinutes - 4 && avgMinutes >= 25,
         gamesPlayed: sorted.length,
       };
     }).filter(Boolean);
+
     res.json({ players, lastUpdated: new Date().toISOString() });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
