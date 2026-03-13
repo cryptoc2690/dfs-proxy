@@ -54,8 +54,8 @@ export default async function handler(req, res) {
       }
     }
 
-    // Step 4: build final props with resolved names
-    const props = rawProps.map(p => ({
+// Step 4: build props with resolved names
+    const allProps = rawProps.map(p => ({
       playerName: playerNameMap[p.player_id] || null,
       playerId: p.player_id,
       gameId: p.game_id,
@@ -64,7 +64,23 @@ export default async function handler(req, res) {
       overOdds: p.over_odds,
       underOdds: p.under_odds,
       vendor: p.vendor,
-    })).filter(p => p.playerName); // drop any we couldn't resolve
+    })).filter(p => p.playerName);
+
+    // Step 5: deduplicate — one primary line per player
+    // Primary = half-point line (x.5) if exists, else median whole number line
+    const byPlayer = {};
+    for (const p of allProps) {
+      const key = `${p.playerId}_${p.propType}`;
+      if (!byPlayer[key]) byPlayer[key] = [];
+      byPlayer[key].push(p);
+    }
+
+    const props = Object.values(byPlayer).map(entries => {
+      const halfLine = entries.find(e => e.line % 1 === 0.5);
+      if (halfLine) return halfLine;
+      const sorted = [...entries].sort((a, b) => a.line - b.line);
+      return sorted[Math.floor(sorted.length / 2)];
+    });
 
     return res.status(200).json({ props, lastUpdated: new Date().toISOString() });
   } catch (err) {
