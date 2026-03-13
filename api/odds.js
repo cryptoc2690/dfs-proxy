@@ -7,12 +7,11 @@ export default async function handler(req, res) {
   try {
     const today = new Date().toISOString().split('T')[0];
     const r = await fetch(
-      `https://api.balldontlie.io/v2/odds?date=${today}`,
+      `https://api.balldontlie.io/v2/odds?dates[]=${today}`,
       { headers: { 'Authorization': process.env.BALLDONTLIE_API_KEY } }
     );
     const data = await r.json();
 
-    // Debug first — paste what comes back
     return res.status(200).json({ raw: data, testedDate: today });
   } catch (err) {
     return res.status(500).json({ error: err.message });
