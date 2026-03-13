@@ -7,7 +7,7 @@ export default async function handler(req, res) {
   try {
     const headers = { 'Authorization': process.env.BALLDONTLIE_API_KEY };
     const today = new Date().toISOString().split('T')[0];
-    const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+    const sevenDaysAgo = new Date(Date.now() - 14 * 86400000).toISOString().split('T')[0];
 
     // Tonight's team IDs
     const tonightRes = await fetch(
