@@ -7,7 +7,6 @@ export default async function handler(req, res) {
     const today = new Date().toISOString().split('T')[0];
     const headers = { 'Authorization': process.env.BALLDONTLIE_API_KEY };
 
-    // Step 1: get today's game IDs
     const gamesRes = await fetch(
       `https://api.balldontlie.io/v1/games?dates[]=${today}&per_page=25`,
       { headers }
@@ -18,11 +17,10 @@ export default async function handler(req, res) {
       return res.status(200).json({ props: [], note: 'No games today', lastUpdated: new Date().toISOString() });
     }
 
-    // Step 2: fetch props for all games (points only, draftkings)
     const propResults = await Promise.all(
       gameIds.map(id =>
         fetch(
-          `https://api.balldontlie.io/v2/odds/player_props?game_id=${id}&prop_type=points&vendors[]=draftkings`,
+          `https://api.balldontlie.io/v2/odds/player_props?game_id=${id}&prop_type=points&vendors[]=draftkings&per_page=100`,
           { headers }
         ).then(r => r.json())
       )
@@ -32,11 +30,9 @@ export default async function handler(req, res) {
       (r.data || []).filter(p => p.line_value != null)
     );
 
-    // Step 3: collect unique player IDs and resolve names in one batch
     const playerIds = [...new Set(rawProps.map(p => p.player_id).filter(Boolean))];
     let playerNameMap = {};
     if (playerIds.length > 0) {
-      // BDL supports ids[] batch param, max ~100 at a time
       const idChunks = [];
       for (let i = 0; i < playerIds.length; i += 50) {
         idChunks.push(playerIds.slice(i, i + 50));
@@ -54,7 +50,6 @@ export default async function handler(req, res) {
       }
     }
 
-// Step 4: build props with resolved names
     const allProps = rawProps.map(p => ({
       playerName: playerNameMap[p.player_id] || null,
       playerId: p.player_id,
@@ -66,8 +61,6 @@ export default async function handler(req, res) {
       vendor: p.vendor,
     })).filter(p => p.playerName);
 
-    // Step 5: deduplicate — one primary line per player
-    // Primary = half-point line (x.5) if exists, else median whole number line
     const byPlayer = {};
     for (const p of allProps) {
       const key = `${p.playerId}_${p.propType}`;
