@@ -11,10 +11,26 @@ app.use((req, res, next) => {
 const BDL = 'https://api.balldontlie.io';
 const auth = () => ({ 'Authorization': process.env.BALLDONTLIE_API_KEY });
 
+// Returns today's date in ET â€” stays on current date until 2am ET
+// Prevents late slate from flipping to tomorrow after first game tips
+function getSlateDate() {
+  const now = new Date();
+  // Convert to ET (UTC-5 standard, UTC-4 daylight)
+  const etOffset = -5; // use -4 during DST
+  const etNow = new Date(now.getTime() + (etOffset * 60 * 60 * 1000));
+  const etHour = etNow.getUTCHours();
+  // If before 2am ET, use yesterday's date (still on that slate day)
+  if (etHour < 2) {
+    const yesterday = new Date(etNow.getTime() - 86400000);
+    return yesterday.toISOString().split('T')[0];
+  }
+  return etNow.toISOString().split('T')[0];
+}
+
 // ODDS â€” isBlowout standardized to >= 8
 app.get('/api/odds', async (req, res) => {
   try {
-    const today = new Date().toISOString().split('T')[0];
+    const today = getSlateDate();
     const [gamesRes, oddsRes] = await Promise.all([
       fetch(`${BDL}/v1/games?dates[]=${today}&per_page=25`, { headers: auth() }),
       fetch(`${BDL}/v2/odds?dates[]=${today}&per_page=100`, { headers: auth() }),
@@ -52,7 +68,7 @@ app.get('/api/odds', async (req, res) => {
 // SCHEDULE / B2B
 app.get('/api/nba-schedule', async (req, res) => {
   try {
-    const today = new Date().toISOString().split('T')[0];
+    const today = getSlateDate();
     const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
     const [todayRes, yestRes] = await Promise.all([
       fetch(`${BDL}/v1/games?dates[]=${today}&per_page=25`, { headers: auth() }),
@@ -110,7 +126,7 @@ app.get('/api/nba-injuries', async (req, res) => {
 // PROPS
 app.get('/api/nba-props', async (req, res) => {
   try {
-    const today = new Date().toISOString().split('T')[0];
+    const today = getSlateDate();
     const gamesRes = await fetch(`${BDL}/v1/games?dates[]=${today}&per_page=25`, { headers: auth() });
     const gamesData = await gamesRes.json();
     const gameIds = (gamesData.data || []).map(g => g.id);
@@ -157,7 +173,7 @@ app.get('/api/nba-props', async (req, res) => {
 // DVP â€” recent (auto-calculated from last 15 games) with season fallback
 app.get('/api/nba-dvp', async (req, res) => {
   try {
-    const today = new Date().toISOString().split('T')[0];
+    const today = getSlateDate();
     const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0];
 
     // Get tonight's teams
@@ -277,7 +293,7 @@ app.get('/api/nba-dvp', async (req, res) => {
 // RECENT STATS â€” last 5 games per player (not date-based)
 app.get('/api/nba-recent-stats', async (req, res) => {
   try {
-    const today = new Date().toISOString().split('T')[0];
+    const today = getSlateDate();
     const fourteenDaysAgo = new Date(Date.now() - 14 * 86400000).toISOString().split('T')[0];
 
     const tonightRes = await fetch(`${BDL}/v1/games?dates[]=${today}&per_page=25`, { headers: auth() });
