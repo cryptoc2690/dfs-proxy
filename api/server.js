@@ -421,7 +421,9 @@ app.get('/api/nba-injury-replacement', async (req, res) => {
     // Get all games this season for this player's team
     const today = getSlateDate();
     const seasonStart = '2025-10-01';
-    const gamesRes = await fetch(`${BDL}/v1/games?team_ids[]=${match.team_id}&start_date=${seasonStart}&end_date=${today}&per_page=100`, { headers: auth() });
+    const teamId = match.team?.id || match.team_id;
+    if (!teamId) return res.json({ replacements: [], message: 'Team ID not found on player', player: match, lastUpdated: new Date().toISOString() });
+    const gamesRes = await fetch(`${BDL}/v1/games?team_ids[]=${teamId}&start_date=${seasonStart}&end_date=${today}&per_page=100`, { headers: auth() });
     const gamesData = await gamesRes.json();
     const allGames = (gamesData.data || []).filter(g => g.status === 'Final');
 
