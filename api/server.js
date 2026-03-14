@@ -411,7 +411,7 @@ app.get('/api/nba-injury-replacement', async (req, res) => {
       return fullName === playerLower ||
         (firstName && lastName && playerLower.includes(firstName) && playerLower.includes(lastName));
     });
-    if (!match) return res.json({ replacements: [], message: 'Player not found', lastUpdated: new Date().toISOString() });
+    if (!match) return res.json({ replacements: [], message: 'Player not found', searchResults: (searchData.data || []).map(p => p.first_name + ' ' + p.last_name), lastUpdated: new Date().toISOString() });
 
     const playerId = match.id;
 
