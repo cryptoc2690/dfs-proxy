@@ -404,13 +404,16 @@ app.get('/api/nba-injury-replacement', async (req, res) => {
     const searchRes = await fetch(`${BDL}/v1/players?search=${encodeURIComponent(player)}&per_page=10`, { headers: auth() });
     const searchData = await searchRes.json();
     const playerLower = player.toLowerCase().trim();
-    const match = (searchData.data || []).find(p => {
+    const searchResults = searchData.data || [];
+    const match = searchResults.find(p => {
       const fullName = `${p.first_name} ${p.last_name}`.toLowerCase().trim();
       const lastName = p.last_name?.toLowerCase().trim();
       const firstName = p.first_name?.toLowerCase().trim();
       return fullName === playerLower ||
+        fullName.includes(playerLower) ||
+        playerLower.includes(lastName) ||
         (firstName && lastName && playerLower.includes(firstName) && playerLower.includes(lastName));
-    });
+    }) || (searchResults.length === 1 ? searchResults[0] : null);
     if (!match) return res.json({ replacements: [], message: 'Player not found', searchResults: (searchData.data || []).map(p => p.first_name + ' ' + p.last_name), lastUpdated: new Date().toISOString() });
 
     const playerId = match.id;
