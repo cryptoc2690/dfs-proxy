@@ -393,5 +393,126 @@ app.get('/api/nba-recent-stats', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+
+// INJURY REPLACEMENT â€” historical minutes for teammates when player is out
+app.get('/api/nba-injury-replacement', async (req, res) => {
+  try {
+    const { player, team } = req.query;
+    if (!player || !team) return res.status(400).json({ error: 'player and team required' });
+
+    // Find player ID by name search
+    const searchRes = await fetch(`${BDL}/v1/players?search=${encodeURIComponent(player)}&per_page=10`, { headers: auth() });
+    const searchData = await searchRes.json();
+    const match = (searchData.data || []).find(p => {
+      const fullName = `${p.first_name} ${p.last_name}`.toLowerCase();
+      return fullName === player.toLowerCase() || fullName.includes(player.toLowerCase().split(' ')[1] || '');
+    });
+    if (!match) return res.json({ replacements: [], message: 'Player not found', lastUpdated: new Date().toISOString() });
+
+    const playerId = match.id;
+
+    // Get all games this season for this player's team
+    const today = getSlateDate();
+    const seasonStart = '2025-10-01';
+    const gamesRes = await fetch(`${BDL}/v1/games?team_ids[]=${match.team_id}&start_date=${seasonStart}&end_date=${today}&per_page=100`, { headers: auth() });
+    const gamesData = await gamesRes.json();
+    const allGames = (gamesData.data || []).filter(g => g.status === 'Final');
+
+    if (allGames.length === 0) return res.json({ replacements: [], message: 'No games found', lastUpdated: new Date().toISOString() });
+
+    // Get all game IDs
+    const allGameIds = allGames.map(g => g.id);
+
+    // Fetch stats for all games (batch)
+    const statsResults = await Promise.all(
+      allGameIds.map(id =>
+        fetch(`${BDL}/v1/stats?game_ids[]=${id}&per_page=100`, { headers: auth() })
+          .then(r => r.json()).then(d => d.data || [])
+      )
+    );
+    const allStats = statsResults.flat();
+
+    // Find games where the injured player played 0 minutes (DNP)
+    const playerGameMinutes = {};
+    for (const s of allStats) {
+      if (s.player?.id === playerId) {
+        playerGameMinutes[s.game?.id] = parseInt(s.min || '0', 10);
+      }
+    }
+
+    const dnpGameIds = new Set(
+      allGames
+        .filter(g => playerGameMinutes[g.id] === 0 || playerGameMinutes[g.id] === undefined)
+        .map(g => g.id)
+    );
+
+    // Also get all games where player DID play for baseline
+    const playedGameIds = new Set(
+      allGames
+        .filter(g => (playerGameMinutes[g.id] || 0) > 5)
+        .map(g => g.id)
+    );
+
+    if (dnpGameIds.size < 2) {
+      return res.json({ replacements: [], message: 'Insufficient DNP games for analysis', dnpGames: dnpGameIds.size, lastUpdated: new Date().toISOString() });
+    }
+
+    // Calculate teammate average minutes in DNP games vs played games
+    const teammateDnpMinutes = {};
+    const teammatePlayedMinutes = {};
+    const teammateCounts = { dnp: {}, played: {} };
+
+    for (const s of allStats) {
+      if (s.player?.id === playerId) continue; // skip injured player
+      const pTeam = s.team?.abbreviation?.toUpperCase();
+      if (pTeam !== team.toUpperCase()) continue; // only same team
+
+      const name = `${s.player?.first_name} ${s.player?.last_name}`.trim();
+      const mins = parseInt(s.min || '0', 10);
+      const gameId = s.game?.id;
+
+      if (dnpGameIds.has(gameId)) {
+        if (!teammateDnpMinutes[name]) { teammateDnpMinutes[name] = 0; teammateCounts.dnp[name] = 0; }
+        teammateDnpMinutes[name] += mins;
+        teammateCounts.dnp[name]++;
+      }
+      if (playedGameIds.has(gameId)) {
+        if (!teammatePlayedMinutes[name]) { teammatePlayedMinutes[name] = 0; teammateCounts.played[name] = 0; }
+        teammatePlayedMinutes[name] += mins;
+        teammateCounts.played[name]++;
+      }
+    }
+
+    // Build replacement analysis
+    const replacements = Object.keys(teammateDnpMinutes)
+      .filter(name => teammateCounts.dnp[name] >= 2)
+      .map(name => {
+        const avgDnpMins = teammateDnpMinutes[name] / teammateCounts.dnp[name];
+        const avgPlayedMins = teammatePlayedMinutes[name]
+          ? teammatePlayedMinutes[name] / teammateCounts.played[name]
+          : avgDnpMins;
+        const minutesBump = avgDnpMins - avgPlayedMins;
+        return {
+          playerName: name,
+          avgMinutesWhenOut: parseFloat(avgDnpMins.toFixed(1)),
+          avgMinutesNormally: parseFloat(avgPlayedMins.toFixed(1)),
+          minutesBump: parseFloat(minutesBump.toFixed(1)),
+          dnpGamesAnalyzed: teammateCounts.dnp[name],
+          isLikelyBeneficiary: minutesBump >= 4,
+        };
+      })
+      .filter(r => r.avgMinutesWhenOut >= 8)
+      .sort((a, b) => b.minutesBump - a.minutesBump);
+
+    res.json({
+      injuredPlayer: player,
+      team: team.toUpperCase(),
+      dnpGamesAnalyzed: dnpGameIds.size,
+      replacements,
+      lastUpdated: new Date().toISOString()
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Proxy running on port ${PORT}`));
