@@ -452,7 +452,7 @@ app.get('/api/nba-injury-replacement', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// LINEUPS â€” confirmed starters for tonight's games
+// LINEUPS — confirmed starters for tonight's games
 app.get('/api/nba-lineups', async (req, res) => {
   try {
     const today = getSlateDate();
@@ -489,6 +489,143 @@ app.get('/api/nba-lineups', async (req, res) => {
     }
     res.json({ players, startersByTeam, lineupsConfirmed: entries.length > 0, lastUpdated: new Date().toISOString() });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// NBA OFFICIAL INJURY REPORT — scrapes PDF directly from NBA servers
+app.get('/api/nba-injury-report', async (req, res) => {
+  try {
+    const pdfParse = require('pdf-parse');
+
+    // Build candidate URLs — 15-minute snapshots, try last 8 slots
+    const now = new Date();
+    const etNow = new Date(now.getTime() + (-5 * 60 * 60 * 1000));
+
+    const candidates = [];
+    for (let i = 0; i < 8; i++) {
+      const slot = new Date(etNow.getTime() - i * 15 * 60 * 1000);
+      const totalMins = slot.getUTCMinutes();
+      const snapMin = Math.floor(totalMins / 15) * 15;
+      const hour = slot.getUTCHours();
+      const hh = String(hour % 12 || 12).padStart(2, '0');
+      const mm = String(snapMin).padStart(2, '0');
+      const ampm = hour >= 12 ? 'PM' : 'AM';
+      const yyyy = slot.toISOString().split('T')[0];
+      candidates.push(`https://ak-static.cms.nba.com/referee/injury/Injury-Report_${yyyy}_${hh}_${mm}${ampm}.pdf`);
+    }
+
+    // Deduplicate
+    const uniqueCandidates = [...new Set(candidates)];
+
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'application/pdf,*/*',
+    };
+
+    // Try each URL until one returns a valid PDF
+    let pdfBuffer = null;
+    let usedUrl = null;
+    for (const url of uniqueCandidates) {
+      try {
+        const r = await fetch(url, { headers });
+        if (r.ok) {
+          const contentType = r.headers.get('content-type') || '';
+          if (contentType.includes('pdf') || contentType.includes('octet-stream')) {
+            const arrayBuffer = await r.arrayBuffer();
+            pdfBuffer = Buffer.from(arrayBuffer);
+            usedUrl = url;
+            break;
+          }
+        }
+      } catch (e) { continue; }
+    }
+
+    if (!pdfBuffer) {
+      return res.status(200).json({
+        injuries: [],
+        message: 'No injury report PDF found',
+        tried: uniqueCandidates,
+        lastUpdated: new Date().toISOString()
+      });
+    }
+
+    // Parse PDF text
+    const parsed = await pdfParse(pdfBuffer);
+    const lines = parsed.text.split('\n').map(l => l.trim()).filter(Boolean);
+
+    // Team name to abbreviation map
+    const teamNames = {
+      'Atlanta Hawks': 'ATL', 'Boston Celtics': 'BOS', 'Brooklyn Nets': 'BKN',
+      'Charlotte Hornets': 'CHA', 'Chicago Bulls': 'CHI', 'Cleveland Cavaliers': 'CLE',
+      'Dallas Mavericks': 'DAL', 'Denver Nuggets': 'DEN', 'Detroit Pistons': 'DET',
+      'Golden State Warriors': 'GSW', 'Houston Rockets': 'HOU', 'Indiana Pacers': 'IND',
+      'LA Clippers': 'LAC', 'Los Angeles Lakers': 'LAL', 'Memphis Grizzlies': 'MEM',
+      'Miami Heat': 'MIA', 'Milwaukee Bucks': 'MIL', 'Minnesota Timberwolves': 'MIN',
+      'New Orleans Pelicans': 'NOP', 'New York Knicks': 'NYK', 'Oklahoma City Thunder': 'OKC',
+      'Orlando Magic': 'ORL', 'Philadelphia 76ers': 'PHI', 'Phoenix Suns': 'PHX',
+      'Portland Trail Blazers': 'POR', 'Sacramento Kings': 'SAC', 'San Antonio Spurs': 'SAS',
+      'Toronto Raptors': 'TOR', 'Utah Jazz': 'UTA', 'Washington Wizards': 'WAS'
+    };
+
+    const statusKeywords = ['Out For Season', 'Questionable', 'Doubtful', 'Available', 'Out'];
+
+    const injuries = [];
+    let currentTeam = '';
+
+    for (const line of lines) {
+      // Skip date/header lines
+      if (/^\d{2}\/\d{2}\/\d{4}$/.test(line)) continue;
+      if (/Injury Report/.test(line)) continue;
+      if (/Page \d+ of \d+/.test(line)) continue;
+      if (/Game Date|Game Time|Matchup|Team|Player Name|Current Status|Reason/.test(line)) continue;
+
+      // Detect team name
+      const teamMatch = Object.keys(teamNames).find(t => line === t || line.startsWith(t));
+      if (teamMatch) {
+        currentTeam = teamNames[teamMatch];
+        continue;
+      }
+
+      // Skip matchup lines like "GSW@WAS" or time lines
+      if (/[A-Z]{2,3}@[A-Z]{2,3}/.test(line)) continue;
+      if (/^\d{2}:\d{2} \(ET\)/.test(line)) continue;
+      if (/NOT YET SUBMITTED/.test(line)) continue;
+
+      // Find status in line
+      const statusFound = statusKeywords.find(s => line.includes(s));
+      if (!statusFound || !currentTeam) continue;
+
+      // Split on status keyword
+      const parts = line.split(statusFound);
+      const nameRaw = parts[0].trim();
+      const reason = parts[1]?.trim() || '';
+
+      if (!nameRaw || nameRaw.length < 3) continue;
+
+      // Convert "LastName, FirstName" → "FirstName LastName"
+      let playerName = nameRaw;
+      if (nameRaw.includes(',')) {
+        const nameParts = nameRaw.split(',').map(p => p.trim());
+        playerName = `${nameParts[1]} ${nameParts[0]}`.trim();
+      }
+
+      injuries.push({
+        playerName,
+        team: currentTeam,
+        status: statusFound,
+        description: reason,
+      });
+    }
+
+    res.json({
+      injuries,
+      total: injuries.length,
+      sourceUrl: usedUrl,
+      lastUpdated: new Date().toISOString()
+    });
+
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 const PORT = process.env.PORT || 3000;
