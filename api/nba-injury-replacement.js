@@ -6,239 +6,205 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  try {
-    const headers = { 'Authorization': process.env.BALLDONTLIE_API_KEY };
-    const today = new Date().toISOString().split('T')[0];
-    const seasonStart = '2024-10-01';
+  const headers = { 'Authorization': process.env.BALLDONTLIE_API_KEY };
+  const today = new Date().toISOString().split('T')[0];
+  const seasonStart = '2024-10-01';
 
-    // ── Step 1: Tonight's games and team IDs ──────────────────────────────
-    const tonightRes = await fetch(
-      `https://api.balldontlie.io/v1/games?dates[]=${today}&per_page=25`,
-      { headers }
+  const bdlFetch = async (url) => {
+    const r = await fetch(url, { headers });
+    const d = await r.json();
+    if (!r.ok) throw new Error(`BDL error at ${url}: ${JSON.stringify(d)}`);
+    return d;
+  };
+
+  try {
+    // ── Step 1: Tonight's games ──────────────────────────────────────────
+    const tonightData = await bdlFetch(
+      `https://api.balldontlie.io/v1/games?dates[]=${today}&per_page=25`
     );
-    const tonightData = await tonightRes.json();
     const tonightGames = tonightData.data || [];
 
     if (tonightGames.length === 0) {
-      return res.status(200).json({ players: [], lastUpdated: new Date().toISOString() });
+      return res.status(200).json({ players: [], outPlayers: [], lastUpdated: new Date().toISOString() });
     }
 
     const tonightTeamIds = new Set(
       tonightGames.flatMap(g => [g.home_team?.id, g.visitor_team?.id]).filter(Boolean)
     );
 
-    // Map team abbreviation → team ID
-    const teamAbbrToId = {};
+    const teamIdToAbbr = {};
     for (const g of tonightGames) {
-      if (g.home_team?.abbreviation) teamAbbrToId[g.home_team.abbreviation] = g.home_team.id;
-      if (g.visitor_team?.abbreviation) teamAbbrToId[g.visitor_team.abbreviation] = g.visitor_team.id;
+      if (g.home_team?.id) teamIdToAbbr[g.home_team.id] = g.home_team.abbreviation;
+      if (g.visitor_team?.id) teamIdToAbbr[g.visitor_team.id] = g.visitor_team.abbreviation;
     }
 
-    // ── Step 2: Tonight's injured/out players ─────────────────────────────
-    const injuryRes = await fetch(
-      `https://api.balldontlie.io/v1/player_injuries`,
-      { headers }
+    // ── Step 2: Injured players tonight ─────────────────────────────────
+    const injuryData = await bdlFetch(
+      `https://api.balldontlie.io/v1/player_injuries?per_page=100`
     );
-    const injuryData = await injuryRes.json();
     const outPlayers = (injuryData.data || []).filter(i =>
-      i.status === 'Out' &&
-      tonightTeamIds.has(i.team?.id)
+      i.status === 'Out' && tonightTeamIds.has(i.team?.id)
     );
 
     if (outPlayers.length === 0) {
-      return res.status(200).json({ players: [], lastUpdated: new Date().toISOString() });
+      return res.status(200).json({ players: [], outPlayers: [], lastUpdated: new Date().toISOString() });
     }
 
-    // Group out players by team
+    // Group out player names by team ID
     const outByTeam = {};
     for (const p of outPlayers) {
       const teamId = p.team?.id;
       if (!teamId) continue;
+      const name = `${p.player?.first_name} ${p.player?.last_name}`.trim();
       if (!outByTeam[teamId]) outByTeam[teamId] = [];
-      outByTeam[teamId].push(`${p.player?.first_name} ${p.player?.last_name}`.trim());
+      outByTeam[teamId].push(name);
     }
 
-    // ── Step 3: This season's games for tonight's teams ───────────────────
-    const teamGameIds = {}; // teamId → [gameId, ...]
+    // ── Step 3: This season's game IDs per team ──────────────────────────
+    const teamGameIds = {};
     await Promise.all([...tonightTeamIds].map(async (teamId) => {
-      let allGames = [];
+      let allGameIds = [];
       let cursor = null;
-      let page = 0;
-      while (page < 5) { // max 500 games
+      for (let page = 0; page < 6; page++) {
         const url = `https://api.balldontlie.io/v1/games?team_ids[]=${teamId}&start_date=${seasonStart}&end_date=${today}&per_page=100${cursor ? `&cursor=${cursor}` : ''}`;
-        const r = await fetch(url, { headers });
-        const d = await r.json();
+        const d = await bdlFetch(url);
         const games = (d.data || []).filter(g => g.status === 'Final');
-        allGames = allGames.concat(games.map(g => g.id));
+        allGameIds = allGameIds.concat(games.map(g => g.id));
         cursor = d.meta?.next_cursor;
         if (!cursor || games.length === 0) break;
-        page++;
       }
-      teamGameIds[teamId] = allGames;
+      teamGameIds[teamId] = allGameIds;
     }));
 
-    // ── Step 4: For each out player, find their DNP games ────────────────
-    // Pull regular stats for each team's games to find DNP games per player
+    // ── Step 4: Stats for each team's games ──────────────────────────────
     const results = [];
 
     for (const [teamId, outNames] of Object.entries(outByTeam)) {
       const gameIds = teamGameIds[teamId] || [];
-      if (gameIds.length < 3) continue;
+      if (gameIds.length < 5) continue;
 
-      // Fetch regular stats (for minutes) for this team's games in batches of 10
-      const allRegularStats = [];
+      // Fetch regular stats in batches of 10 game IDs
+      const allRegStats = [];
       for (let i = 0; i < gameIds.length; i += 10) {
         const batch = gameIds.slice(i, i + 10);
         const params = batch.map(id => `game_ids[]=${id}`).join('&');
-        const r = await fetch(
-          `https://api.balldontlie.io/v1/stats?${params}&per_page=100`,
-          { headers }
+        const d = await bdlFetch(
+          `https://api.balldontlie.io/v1/stats?${params}&per_page=100`
         );
-        const d = await r.json();
-        allRegularStats.push(...(d.data || []));
+        allRegStats.push(...(d.data || []));
       }
 
-      // Build minutes map: playerName+gameId → minutes
+      // Fetch advanced stats in batches of 10
+      const allAdvStats = [];
+      for (let i = 0; i < gameIds.length; i += 10) {
+        const batch = gameIds.slice(i, i + 10);
+        const params = batch.map(id => `game_ids[]=${id}`).join('&');
+        const d = await bdlFetch(
+          `https://api.balldontlie.io/v2/stats/advanced?${params}&per_page=100&period=0`
+        );
+        allAdvStats.push(...(d.data || []));
+      }
+
+      // Build lookup maps
       const minutesMap = {};
-      const usageMap = {}; // from advanced stats — populated below
-      for (const s of allRegularStats) {
+      for (const s of allRegStats) {
         const name = `${s.player?.first_name} ${s.player?.last_name}`.trim();
-        const gameId = s.game?.id;
-        if (name && gameId) {
-          minutesMap[`${name}::${gameId}`] = parseInt(s.min || '0', 10);
+        if (name && s.game?.id) {
+          minutesMap[`${name}::${s.game.id}`] = parseInt(s.min || '0', 10);
         }
       }
 
-      // Fetch advanced stats for usage
-      const allAdvancedStats = [];
-      for (let i = 0; i < gameIds.length; i += 10) {
-        const batch = gameIds.slice(i, i + 10);
-        const params = batch.map(id => `game_ids[]=${id}`).join('&');
-        const r = await fetch(
-          `https://api.balldontlie.io/v2/stats/advanced?${params}&per_page=100&period=0`,
-          { headers }
-        );
-        const d = await r.json();
-        allAdvancedStats.push(...(d.data || []));
-      }
-
-      for (const s of allAdvancedStats) {
+      const usageMap = {};
+      for (const s of allAdvStats) {
         if (s.period !== 0) continue;
         const name = `${s.player?.first_name} ${s.player?.last_name}`.trim();
-        const gameId = s.game?.id;
-        if (name && gameId) {
-          usageMap[`${name}::${gameId}`] = parseFloat(((s.usage_percentage || 0) * 100).toFixed(1));
+        if (name && s.game?.id) {
+          usageMap[`${name}::${s.game.id}`] = parseFloat(((s.usage_percentage || 0) * 100).toFixed(1));
         }
       }
 
-      // Get all players on this team from the stats
-      const teamPlayers = new Set();
-      for (const s of allRegularStats) {
+      // All teammates (players with minutes this season, excluding out players)
+      const teammates = new Set();
+      for (const s of allRegStats) {
         const name = `${s.player?.first_name} ${s.player?.last_name}`.trim();
-        if (name) teamPlayers.add(name);
-      }
-
-      // For each out player, find which games they DNP'd
-      const dnpGamesByOut = {}; // outPlayerName → Set of gameIds where they DNP'd
-      for (const outName of outNames) {
-        const dnpGames = new Set();
-        for (const gameId of gameIds) {
-          const mins = minutesMap[`${outName}::${gameId}`];
-          // DNP = no entry (undefined) OR 0 minutes
-          if (mins === undefined || mins === 0) {
-            dnpGames.add(gameId);
-          }
-        }
-        // Filter to games where they truly DNP'd (not just didn't play — exclude games
-        // where they had no entry because they weren't on the team yet)
-        // Only count if they have at least 10 games with minutes this season
-        const gamesWithMinutes = gameIds.filter(id => (minutesMap[`${outName}::${id}`] || 0) > 0).length;
-        if (gamesWithMinutes >= 10) {
-          dnpGamesByOut[outName] = dnpGames;
+        if (name && !outNames.includes(name) && (minutesMap[`${name}::${s.game?.id}`] || 0) > 0) {
+          teammates.add(name);
         }
       }
 
-      if (Object.keys(dnpGamesByOut).length === 0) continue;
+      // Season baseline per teammate
+      const baseline = {};
+      for (const name of teammates) {
+        const gamesPlayed = gameIds.filter(id => (minutesMap[`${name}::${id}`] || 0) > 0);
+        if (gamesPlayed.length < 5) continue;
 
-      // ── Step 5: Calculate teammate uplift when out players DNP'd ────────
-      // For additive approach: calculate uplift per out player separately, then sum
-
-      // Season baseline for each teammate
-      const baseline = {}; // playerName → { avgMinutes, avgUsage, gameCount }
-      for (const playerName of teamPlayers) {
-        if (outNames.includes(playerName)) continue; // skip out players themselves
-        const playerGames = gameIds.filter(id => (minutesMap[`${playerName}::${id}`] || 0) > 0);
-        if (playerGames.length < 5) continue;
-
-        const avgMin = playerGames.reduce((s, id) => s + (minutesMap[`${playerName}::${id}`] || 0), 0) / playerGames.length;
-        const usageGames = playerGames.filter(id => usageMap[`${playerName}::${id}`] !== undefined);
+        const avgMin = gamesPlayed.reduce((s, id) => s + (minutesMap[`${name}::${id}`] || 0), 0) / gamesPlayed.length;
+        const usageGames = gamesPlayed.filter(id => usageMap[`${name}::${id}`] !== undefined);
         const avgUsage = usageGames.length > 0
-          ? usageGames.reduce((s, id) => s + (usageMap[`${playerName}::${id}`] || 0), 0) / usageGames.length
+          ? usageGames.reduce((s, id) => s + (usageMap[`${name}::${id}`] || 0), 0) / usageGames.length
           : 0;
 
-        baseline[playerName] = { avgMinutes: avgMin, avgUsage, gameCount: playerGames.length };
+        baseline[name] = { avgMinutes: avgMin, avgUsage, gamesPlayed: gamesPlayed.length };
       }
 
-      // For each teammate, calculate additive uplift from all out players
-      const upliftByTeammate = {}; // playerName → { minutesUplift, usageUplift, sampleSize, outPlayers }
+      // Find DNP games per out player and calculate teammate uplift
+      const uplift = {}; // teammate → { minutesDelta, usageDelta, sampleSize, outPlayers }
 
-      for (const [outName, dnpGames] of Object.entries(dnpGamesByOut)) {
-        if (dnpGames.size < 2) continue; // need at least 2 DNP games
+      for (const outName of outNames) {
+        const gamesWithMinutes = gameIds.filter(id => (minutesMap[`${outName}::${id}`] || 0) > 5).length;
+        if (gamesWithMinutes < 10) continue; // not enough season data
 
-        for (const playerName of Object.keys(baseline)) {
-          const dnpArr = [...dnpGames];
-          const dnpGamesWithPlayer = dnpArr.filter(id => (minutesMap[`${playerName}::${id}`] || 0) > 0);
-          if (dnpGamesWithPlayer.length < 2) continue;
+        const dnpGames = gameIds.filter(id => {
+          const mins = minutesMap[`${outName}::${id}`];
+          return mins === undefined || mins === 0;
+        });
 
-          const avgMinWhenOut = dnpGamesWithPlayer.reduce((s, id) => s + (minutesMap[`${playerName}::${id}`] || 0), 0) / dnpGamesWithPlayer.length;
-          const minutesDelta = avgMinWhenOut - baseline[playerName].avgMinutes;
+        if (dnpGames.length < 2) continue;
 
-          const dnpUsageGames = dnpGamesWithPlayer.filter(id => usageMap[`${playerName}::${id}`] !== undefined);
-          const avgUsageWhenOut = dnpUsageGames.length > 0
-            ? dnpUsageGames.reduce((s, id) => s + (usageMap[`${playerName}::${id}`] || 0), 0) / dnpUsageGames.length
-            : baseline[playerName].avgUsage;
-          const usageDelta = avgUsageWhenOut - baseline[playerName].avgUsage;
+        for (const teammateName of Object.keys(baseline)) {
+          const dnpWithTeammate = dnpGames.filter(id => (minutesMap[`${teammateName}::${id}`] || 0) > 0);
+          if (dnpWithTeammate.length < 2) continue;
 
-          if (!upliftByTeammate[playerName]) {
-            upliftByTeammate[playerName] = { minutesUplift: 0, usageUplift: 0, sampleSize: dnpGamesWithPlayer.length, outPlayers: [] };
+          const avgMinWhenOut = dnpWithTeammate.reduce((s, id) => s + (minutesMap[`${teammateName}::${id}`] || 0), 0) / dnpWithTeammate.length;
+          const minDelta = avgMinWhenOut - baseline[teammateName].avgMinutes;
+
+          const usageWhenOut = dnpWithTeammate.filter(id => usageMap[`${teammateName}::${id}`] !== undefined);
+          const avgUsageWhenOut = usageWhenOut.length > 0
+            ? usageWhenOut.reduce((s, id) => s + (usageMap[`${teammateName}::${id}`] || 0), 0) / usageWhenOut.length
+            : baseline[teammateName].avgUsage;
+          const usageDelta = avgUsageWhenOut - baseline[teammateName].avgUsage;
+
+          if (!uplift[teammateName]) {
+            uplift[teammateName] = { minutesDelta: 0, usageDelta: 0, sampleSize: dnpWithTeammate.length, outPlayers: [] };
           }
-
-          // Additive: sum uplift from each out player
-          upliftByTeammate[playerName].minutesUplift += minutesDelta;
-          upliftByTeammate[playerName].usageUplift += usageDelta;
-          upliftByTeammate[playerName].sampleSize = Math.min(upliftByTeammate[playerName].sampleSize, dnpGamesWithPlayer.length);
-          upliftByTeammate[playerName].outPlayers.push(outName);
+          uplift[teammateName].minutesDelta += minDelta;
+          uplift[teammateName].usageDelta += usageDelta;
+          uplift[teammateName].sampleSize = Math.min(uplift[teammateName].sampleSize, dnpWithTeammate.length);
+          uplift[teammateName].outPlayers.push(outName);
         }
       }
 
-      // ── Step 6: Build output — only flag meaningful deltas ───────────────
-      for (const [playerName, uplift] of Object.entries(upliftByTeammate)) {
-        const base = baseline[playerName];
-        const adjustedMinutes = base.avgMinutes + uplift.minutesUplift;
-        const adjustedUsage = base.avgUsage + uplift.usageUplift;
+      // Build results — only meaningful deltas
+      for (const [name, u] of Object.entries(uplift)) {
+        if (Math.abs(u.minutesDelta) < 3 && Math.abs(u.usageDelta) < 3) continue;
 
-        // Only report if delta is meaningful (±3+ minutes OR ±3% usage)
-        if (Math.abs(uplift.minutesUplift) < 3 && Math.abs(uplift.usageUplift) < 3) continue;
-
-        const confidence = uplift.sampleSize >= 8 ? 'high' : uplift.sampleSize >= 4 ? 'medium' : 'low';
-
+        const base = baseline[name];
         results.push({
-          playerName,
-          team: Object.keys(teamAbbrToId).find(abbr => teamAbbrToId[abbr] === parseInt(teamId)) || '',
+          playerName: name,
+          team: teamIdToAbbr[teamId] || String(teamId),
           baselineMinutes: parseFloat(base.avgMinutes.toFixed(1)),
-          adjustedMinutes: parseFloat(adjustedMinutes.toFixed(1)),
-          minutesDelta: parseFloat(uplift.minutesUplift.toFixed(1)),
+          adjustedMinutes: parseFloat((base.avgMinutes + u.minutesDelta).toFixed(1)),
+          minutesDelta: parseFloat(u.minutesDelta.toFixed(1)),
           baselineUsage: parseFloat(base.avgUsage.toFixed(1)),
-          adjustedUsage: parseFloat(adjustedUsage.toFixed(1)),
-          usageDelta: parseFloat(uplift.usageUplift.toFixed(1)),
-          outPlayers: uplift.outPlayers,
-          sampleSize: uplift.sampleSize,
-          confidence,
+          adjustedUsage: parseFloat((base.avgUsage + u.usageDelta).toFixed(1)),
+          usageDelta: parseFloat(u.usageDelta.toFixed(1)),
+          outPlayers: u.outPlayers,
+          sampleSize: u.sampleSize,
+          confidence: u.sampleSize >= 8 ? 'high' : u.sampleSize >= 4 ? 'medium' : 'low',
         });
       }
     }
 
-    // Sort by absolute minutes delta descending
     results.sort((a, b) => Math.abs(b.minutesDelta) - Math.abs(a.minutesDelta));
 
     return res.status(200).json({
