@@ -549,72 +549,96 @@ app.get('/api/nba-injury-report', async (req, res) => {
     }
 
     // Parse PDF text
+    // NBA injury PDF has no spaces between words — everything concatenated
+    // Line format: "TeamNameLastName,FirstNameStatusReason" or just "LastName,FirstNameStatusReason"
     const parsed = await pdfParse(pdfBuffer);
     const lines = parsed.text.split('\n').map(l => l.trim()).filter(Boolean);
 
-    // Team name to abbreviation map
-    const teamNames = {
-      'Atlanta Hawks': 'ATL', 'Boston Celtics': 'BOS', 'Brooklyn Nets': 'BKN',
-      'Charlotte Hornets': 'CHA', 'Chicago Bulls': 'CHI', 'Cleveland Cavaliers': 'CLE',
-      'Dallas Mavericks': 'DAL', 'Denver Nuggets': 'DEN', 'Detroit Pistons': 'DET',
-      'Golden State Warriors': 'GSW', 'Houston Rockets': 'HOU', 'Indiana Pacers': 'IND',
-      'LA Clippers': 'LAC', 'Los Angeles Lakers': 'LAL', 'Memphis Grizzlies': 'MEM',
-      'Miami Heat': 'MIA', 'Milwaukee Bucks': 'MIL', 'Minnesota Timberwolves': 'MIN',
-      'New Orleans Pelicans': 'NOP', 'New York Knicks': 'NYK', 'Oklahoma City Thunder': 'OKC',
-      'Orlando Magic': 'ORL', 'Philadelphia 76ers': 'PHI', 'Phoenix Suns': 'PHX',
-      'Portland Trail Blazers': 'POR', 'Sacramento Kings': 'SAC', 'San Antonio Spurs': 'SAS',
-      'Toronto Raptors': 'TOR', 'Utah Jazz': 'UTA', 'Washington Wizards': 'WAS'
+    // No-space team name to abbreviation
+    const teamMap = {
+      'GoldenStateWarriors': 'GSW', 'WashingtonWizards': 'WAS',
+      'OrlandoMagic': 'ORL', 'AtlantaHawks': 'ATL',
+      'PhoenixSuns': 'PHX', 'BostonCeltics': 'BOS',
+      'PortlandTrailBlazers': 'POR', 'BrooklynNets': 'BKN',
+      'DallasMavericks': 'DAL', 'NewOrleansPelicans': 'NOP',
+      'MemphisGrizzlies': 'MEM', 'ChicagoBulls': 'CHI',
+      'LosAngelesLakers': 'LAL', 'HoustonRockets': 'HOU',
+      'SanAntonioSpurs': 'SAS', 'LAClippers': 'LAC',
+      'MiamiHeat': 'MIA', 'CharlotteHornets': 'CHA',
+      'OklahomaCityThunder': 'OKC', 'IndianaPacers': 'IND',
+      'ClevelandCavaliers': 'CLE', 'MilwaukeeBucks': 'MIL',
+      'MinnesotaTimberwolves': 'MIN', 'Philadelphia76ers': 'PHI',
+      'DenverNuggets': 'DEN', 'SacramentoKings': 'SAC',
+      'TorontoRaptors': 'TOR', 'UtahJazz': 'UTA',
+      'DetroitPistons': 'DET', 'NewYorkKnicks': 'NYK',
     };
 
-    const statusKeywords = ['Out For Season', 'Questionable', 'Doubtful', 'Available', 'Out'];
+    // Status keywords in no-space format — longer variants first to avoid partial matches
+    const statusKeywords = ['OutForSeason', 'Questionable', 'Doubtful', 'Probable', 'Available', 'Out'];
+    const statusLabels = {
+      'OutForSeason': 'Out For Season', 'Questionable': 'Questionable',
+      'Doubtful': 'Doubtful', 'Probable': 'Probable',
+      'Available': 'Available', 'Out': 'Out',
+    };
 
     const injuries = [];
     let currentTeam = '';
 
     for (const line of lines) {
-      // Skip date/header lines
-      if (/^\d{2}\/\d{2}\/\d{4}$/.test(line)) continue;
-      if (/Injury Report/.test(line)) continue;
-      if (/Page \d+ of \d+/.test(line)) continue;
-      if (/Game Date|Game Time|Matchup|Team|Player Name|Current Status|Reason/.test(line)) continue;
+      // Skip header/page/date lines
+      if (/InjuryReport:|Page\d+of\d+|GameDate|NOTYETSUBMITTED/.test(line)) continue;
+      if (/^\d{2}\/\d{2}\/\d{4}/.test(line)) continue;
 
-      // Detect team name
-      const teamMatch = Object.keys(teamNames).find(t => line === t || line.startsWith(t));
-      if (teamMatch) {
-        currentTeam = teamNames[teamMatch];
-        continue;
+      // Detect team name embedded anywhere in line — update currentTeam
+      for (const [noSpace, abbr] of Object.entries(teamMap)) {
+        if (line.includes(noSpace)) {
+          currentTeam = abbr;
+          break;
+        }
       }
 
-      // Skip matchup lines like "GSW@WAS" or time lines
-      if (/[A-Z]{2,3}@[A-Z]{2,3}/.test(line)) continue;
-      if (/^\d{2}:\d{2} \(ET\)/.test(line)) continue;
-      if (/NOT YET SUBMITTED/.test(line)) continue;
-
-      // Find status in line
+      // Find status keyword
       const statusFound = statusKeywords.find(s => line.includes(s));
       if (!statusFound || !currentTeam) continue;
 
-      // Split on status keyword
-      const parts = line.split(statusFound);
-      const nameRaw = parts[0].trim();
-      const reason = parts[1]?.trim() || '';
+      // Extract name portion — everything before status keyword
+      let beforeStatus = line.split(statusFound)[0];
 
-      if (!nameRaw || nameRaw.length < 3) continue;
-
-      // Convert "LastName, FirstName" → "FirstName LastName"
-      let playerName = nameRaw;
-      if (nameRaw.includes(',')) {
-        const nameParts = nameRaw.split(',').map(p => p.trim());
-        playerName = `${nameParts[1]} ${nameParts[0]}`.trim();
+      // Strip any team name prefix
+      for (const noSpace of Object.keys(teamMap)) {
+        if (beforeStatus.includes(noSpace)) {
+          const idx = beforeStatus.indexOf(noSpace);
+          beforeStatus = beforeStatus.slice(idx + noSpace.length);
+          break;
+        }
       }
+
+      // Strip matchup/time prefixes
+      beforeStatus = beforeStatus.replace(/^\d{2}:\d{2}\(ET\)[A-Z@]+/, '');
+      beforeStatus = beforeStatus.replace(/^[A-Z]{2,3}@[A-Z]{2,3}/, '');
+      beforeStatus = beforeStatus.trim();
+
+      // Must have comma for "LastName,FirstName" format
+      if (!beforeStatus.includes(',')) continue;
+      if (beforeStatus.length < 4) continue;
+
+      // Convert "LastName,FirstName" to "FirstName LastName"
+      const commaIdx = beforeStatus.indexOf(',');
+      const lastName = beforeStatus.slice(0, commaIdx).trim();
+      const firstName = beforeStatus.slice(commaIdx + 1).trim();
+      if (!firstName || !lastName) continue;
+
+      const playerName = `${firstName} ${lastName}`;
+      const reason = (line.split(statusFound)[1] || '').trim();
 
       injuries.push({
         playerName,
         team: currentTeam,
-        status: statusFound,
+        status: statusLabels[statusFound] || statusFound,
         description: reason,
       });
     }
+
 
     res.json({
       injuries,
