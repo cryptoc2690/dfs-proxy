@@ -628,5 +628,29 @@ app.get('/api/nba-injury-report', async (req, res) => {
   }
 });
 
+// NBA INJURY REPORT DEBUG — shows raw PDF text for parser development
+app.get('/api/nba-injury-debug', async (req, res) => {
+  try {
+    const pdfParse = require('pdf-parse');
+    const url = 'https://ak-static.cms.nba.com/referee/injury/Injury-Report_2026-03-16_04_00PM.pdf';
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+      'Accept': 'application/pdf,*/*',
+    };
+    const r = await fetch(url, { headers });
+    const arrayBuffer = await r.arrayBuffer();
+    const pdfBuffer = Buffer.from(arrayBuffer);
+    const parsed = await pdfParse(pdfBuffer);
+    const lines = parsed.text.split('\n').map(l => l.trim()).filter(Boolean);
+    res.json({
+      rawText: parsed.text.slice(0, 3000),
+      lines: lines.slice(0, 80),
+      totalLines: lines.length
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Proxy running on port ${PORT}`));
