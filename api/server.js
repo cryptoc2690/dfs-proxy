@@ -274,16 +274,23 @@ app.get('/api/nba-recent-stats', async (req, res) => {
     const recentRes = await fetch(`${BDL}/v1/games?start_date=${fourteenDaysAgo}&end_date=${today}&per_page=100`, { headers: auth() });
     const recentData = await recentRes.json();
     const allRecent = (recentData.data || []).filter(g => g.status === 'Final');
+
+    // Track which games belong to which team for absent teammate detection
+    const teamGameMap = {}; // teamAbbr -> [gameId, ...]
     const gameIdSet = new Set();
     for (const teamId of tonightTeamIds) {
+      const abbr = teamIdToAbbr[teamId];
       const teamGames = allRecent
         .filter(g => g.home_team?.id === teamId || g.visitor_team?.id === teamId)
         .sort((a, b) => new Date(b.date) - new Date(a.date))
         .slice(0, 5);
+      teamGameMap[abbr] = teamGames.map(g => g.id);
       for (const g of teamGames) gameIdSet.add(g.id);
     }
+
     const recentGameIds = [...gameIdSet];
     if (recentGameIds.length === 0) return res.json({ players: [], lastUpdated: new Date().toISOString() });
+
     const [advResults, regResults] = await Promise.all([
       Promise.all(recentGameIds.map(id =>
         fetch(`${BDL}/v2/stats/advanced?game_ids[]=${id}&per_page=100`, { headers: auth() })
@@ -296,31 +303,79 @@ app.get('/api/nba-recent-stats', async (req, res) => {
     ]);
     const advancedStats = advResults.flat();
     const regularStats = regResults.flat();
+
+    // Build minutes map AND track team rosters per game
     const minutesMap = {};
+    const teamRosterPerGame = {}; // "TEAM::gameId" -> Set of playerNames with >0 minutes
+    const playerTeamMap = {}; // playerName -> teamAbbr
+
     for (const s of regularStats) {
       const name = `${s.player?.first_name} ${s.player?.last_name}`.trim();
       const gameId = s.game?.id;
-      if (name && gameId) minutesMap[`${name}::${gameId}`] = parseInt(s.min || '0', 10);
+      const mins = parseInt(s.min || '0', 10);
+      const teamAbbr = s.team?.abbreviation || '';
+      if (name && gameId) {
+        minutesMap[`${name}::${gameId}`] = mins;
+        if (teamAbbr) playerTeamMap[name] = teamAbbr;
+        // Track who played in each game for each team
+        const rosterKey = `${teamAbbr}::${gameId}`;
+        if (!teamRosterPerGame[rosterKey]) teamRosterPerGame[rosterKey] = new Set();
+        if (mins > 5) teamRosterPerGame[rosterKey].add(name);
+      }
     }
+
+    // Build absent teammates map: for each team's recent games, find players who
+    // regularly play for that team but had 0 minutes in specific games
+    // absentMap: "TEAM::gameId" -> [absentPlayerName, ...]
+    const teamRegulars = {}; // teamAbbr -> Set of players who played 5+ games
+    for (const [key, roster] of Object.entries(teamRosterPerGame)) {
+      const [teamAbbr] = key.split('::');
+      if (!teamRegulars[teamAbbr]) teamRegulars[teamAbbr] = {};
+      for (const name of roster) {
+        teamRegulars[teamAbbr][name] = (teamRegulars[teamAbbr][name] || 0) + 1;
+      }
+    }
+
+    const absentMap = {}; // "TEAM::gameId" -> [absentNames]
+    for (const [teamAbbr, gameIds] of Object.entries(teamGameMap)) {
+      const regulars = Object.entries(teamRegulars[teamAbbr] || {})
+        .filter(([, count]) => count >= 3) // played in 3+ of last 5 games = regular
+        .map(([name]) => name);
+
+      for (const gameId of gameIds) {
+        const rosterKey = `${teamAbbr}::${gameId}`;
+        const playedThisGame = teamRosterPerGame[rosterKey] || new Set();
+        const absent = regulars.filter(name => !playedThisGame.has(name));
+        absentMap[`${teamAbbr}::${gameId}`] = absent;
+      }
+    }
+
     const byPlayer = {};
     for (const s of advancedStats) {
       if (s.period !== 0) continue;
       const name = `${s.player?.first_name} ${s.player?.last_name}`.trim();
       if (!name || name === ' ') continue;
       const gameId = s.game?.id;
+      const teamAbbr = s.team?.abbreviation || '';
+      const absent = absentMap[`${teamAbbr}::${gameId}`] || [];
       if (!byPlayer[name]) byPlayer[name] = [];
       byPlayer[name].push({
         date: s.game?.date,
+        gameId,
+        teamAbbr,
         minutes: minutesMap[`${name}::${gameId}`] ?? 0,
         usage: parseFloat(((s.usage_percentage || 0) * 100).toFixed(1)),
+        absentTeammates: absent.filter(a => a !== name),
       });
     }
+
     const players = Object.entries(byPlayer).map(([name, games]) => {
       const sorted = games
         .filter(g => g.date)
         .sort((a, b) => new Date(b.date) - new Date(a.date))
         .slice(0, 5);
       if (sorted.length < 1) return null;
+
       const avgMinutes = sorted.reduce((s, g) => s + g.minutes, 0) / sorted.length;
       const avgUsage = sorted.reduce((s, g) => s + g.usage, 0) / sorted.length;
       const recent2 = sorted.slice(0, 2);
@@ -330,19 +385,37 @@ app.get('/api/nba-recent-stats', async (req, res) => {
       const recentMins = recent2.reduce((s, g) => s + g.minutes, 0) / recent2.length;
       const priorMins = prior3.length > 0 ? prior3.reduce((s, g) => s + g.minutes, 0) / prior3.length : recentMins;
       const hasTrend = sorted.length >= 2;
+
+      // Collect all absent teammates during the recent 2 games (the spike window)
+      const recentAbsentTeammates = [...new Set(
+        recent2.flatMap(g => g.absentTeammates || [])
+      )];
+
+      // usageSpike: true only if recent usage is elevated AND
+      // the spike is not fully explained by teammate absences
+      // (if all recent games had absences, the spike may revert tonight)
+      const rawSpike = recentUsage > avgUsage + 4;
+      const spikeExplainedByAbsence = rawSpike && recentAbsentTeammates.length > 0 &&
+        recent2.every(g => (g.absentTeammates || []).length > 0);
+
       return {
         playerName: name,
+        teamAbbr: sorted[0]?.teamAbbr || '',
         avgMinutes: parseFloat(avgMinutes.toFixed(1)),
         avgUsage: parseFloat(avgUsage.toFixed(1)),
         recentMinutes: parseFloat(recentMins.toFixed(1)),
         recentUsage: parseFloat(recentUsage.toFixed(1)),
         minutesTrend: hasTrend ? parseFloat((recentMins - priorMins).toFixed(1)) : null,
         usageTrend: hasTrend ? parseFloat((recentUsage - priorUsage).toFixed(1)) : null,
-        usageSpike: recentUsage > avgUsage + 4,
+        usageSpike: rawSpike && !spikeExplainedByAbsence,
+        usageSpikeRaw: rawSpike,
+        spikeExplainedByAbsence,
+        recentAbsentTeammates,
         minutesRisk: recentMins < avgMinutes - 4 && avgMinutes >= 25,
         gamesPlayed: sorted.length,
       };
     }).filter(Boolean);
+
     res.json({ players, lastUpdated: new Date().toISOString() });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
