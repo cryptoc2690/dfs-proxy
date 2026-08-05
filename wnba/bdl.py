@@ -155,6 +155,11 @@ class BalldontlieProjector:
                 "fp": fantasy_points(s) if mins > 0 else 0.0,
                 "team_id": (s.get("team") or {}).get("id"),
                 "game_id": gid,
+                # raw components — used to fill stats that have no prop line
+                "stl": s.get("stl") or 0, "blk": s.get("blk") or 0,
+                "turnover": s.get("turnover") or 0,
+                "pts": s.get("pts") or 0, "reb": s.get("reb") or 0,
+                "ast": s.get("ast") or 0, "fg3m": s.get("fg3m") or 0,
             })
         for pid in by_player:
             by_player[pid].sort(key=lambda r: r["date"], reverse=True)
@@ -164,6 +169,23 @@ class BalldontlieProjector:
 
         # team pace multipliers from season advanced stats
         pace_mult = self._pace_mults(client, season)
+
+        # tonight's games -> game ids (for odds + props, which are per-game)
+        slate_games = client.paginate("/games", {"dates": [slate_date]})
+        slate_game_ids = [g["id"] for g in slate_games]
+
+        # betting odds -> implied team totals -> game environment multiplier.
+        implied = self._implied_totals(client, slate_game_ids, slate_games, abbr_to_id)
+        env_mult = {}
+        if implied:
+            avg_it = sum(implied.values()) / len(implied)
+            env_mult = {a: _clamp(v / avg_it, 0.90, 1.12) for a, v in implied.items()}
+
+        # player props -> market-implied stat lines per balldontlie player id.
+        # This is the strongest projection input: the market already prices
+        # minutes, matchup, pace and injuries, so a props-based projection is
+        # NOT re-scaled by DvP/pace (that would double-count).
+        props = self._player_props(client, slate_game_ids)
 
         # injuries (status by normalized name)
         inj = {}
@@ -199,29 +221,47 @@ class BalldontlieProjector:
             pid = bdl_by_name.get(nm)
             recent = by_player.get(pid, []) if pid else []
             played = [r for r in recent if r["min"] > 0][: self.recent_games]
+            fps = [r["fp"] for r in played]
+            recent_std = ((sum((f - (sum(fps) / len(fps))) ** 2 for f in fps)
+                           / len(fps)) ** 0.5) if len(fps) >= 2 else 0.0
 
-            if len(played) >= 2:
-                fps = [r["fp"] for r in played]
+            props_line = props.get(pid) if pid else None
+            if props_line:
+                # Primary path: build DK points from market prop lines, filling
+                # steals/blocks/turnovers from recent averages (rarely propped).
+                proj = self._dk_from_props(props_line, played)
+                std = recent_std or proj * 0.26
+                base_src = "props"
+                p.notes.append("market props")
+            elif len(played) >= 2:
                 weights = [self.recent_weight ** i for i in range(len(fps))]
                 wsum = sum(weights)
                 recent_fp = sum(f * w for f, w in zip(fps, weights)) / wsum
-                base = 0.65 * recent_fp + 0.35 * p.avg_points
-                std = (sum((f - recent_fp) ** 2 for f in fps) / len(fps)) ** 0.5
+                proj = 0.65 * recent_fp + 0.35 * p.avg_points
+                std = recent_std
+                base_src = "form"
             else:
-                base = p.avg_points
+                proj = p.avg_points
                 std = p.avg_points * 0.28
-                p.notes.append("thin bdl sample — leaned on DK avg")
+                base_src = "dkavg"
+                p.notes.append("thin sample — leaned on DK avg")
 
-            # matchup: opponent FP allowed to this position vs league average
+            # Only scale by matchup/pace/environment when NOT using props (the
+            # market already prices those in).
             opp = opp_of.get(p.team, "")
             m_mult = 1.0
-            if opp and league_pos_avg.get(p.pos):
-                allowed = dvp.get((opp, p.pos))
-                if allowed:
-                    m_mult = _clamp(allowed / league_pos_avg[p.pos], 0.85, 1.18)
-
-            pm = _clamp(pace_mult.get(p.team, 1.0), 0.92, 1.10)
-            proj = base * m_mult * pm
+            if base_src != "props":
+                if opp and league_pos_avg.get(p.pos):
+                    allowed = dvp.get((opp, p.pos))
+                    if allowed:
+                        m_mult = _clamp(allowed / league_pos_avg[p.pos], 0.85, 1.18)
+                pm = _clamp(pace_mult.get(p.team, 1.0), 0.92, 1.10)
+                em = env_mult.get(p.team, 1.0)
+                proj = proj * m_mult * pm * em
+                if m_mult >= 1.06:
+                    p.notes.append(f"soft matchup vs {opp}")
+                elif m_mult <= 0.9:
+                    p.notes.append(f"tough matchup vs {opp}")
 
             p.proj = round(proj, 1)
             p.floor = round(max(0.0, proj - 1.05 * std), 1)
@@ -232,10 +272,6 @@ class BalldontlieProjector:
                 p.proj = round(p.proj * 0.9, 1)
                 p.floor = round(p.floor * 0.7, 1)
                 p.notes.append(f"{p.status} — risk haircut")
-            if m_mult >= 1.06:
-                p.notes.append(f"soft matchup vs {opp}")
-            elif m_mult <= 0.9:
-                p.notes.append(f"tough matchup vs {opp}")
 
         _estimate_ownership(players)
 
@@ -282,6 +318,170 @@ class BalldontlieProjector:
             return {}
         avg = sum(paces.values()) / len(paces)
         return {a: (p / avg if avg else 1.0) for a, p in paces.items()}
+
+    # ------------------------------------------------------------------
+    # Odds + props parsers. balldontlie's live-odds JSON field names are not
+    # 100%% pinned here (sandbox can't reach the API to confirm), so all field
+    # lookups go through _first() over a list of likely keys. If a real record
+    # differs, only these two maps need editing.
+    # ------------------------------------------------------------------
+    def _implied_totals(self, client, game_ids, slate_games, abbr_to_id) -> dict:
+        """abbr -> implied team total, from game betting odds."""
+        id_to_abbr = {v: k for k, v in abbr_to_id.items()}
+        g_home_away = {}
+        for g in slate_games:
+            h = (g.get("home_team") or {}).get("abbreviation")
+            a = (g.get("visitor_team") or {}).get("abbreviation")
+            g_home_away[g["id"]] = (h, a)
+        out = {}
+        for gid in game_ids:
+            try:
+                rows = self._safe_get(client, "/odds", {"game_id": gid})
+            except Exception:  # noqa: BLE001
+                continue
+            row = _prefer_vendor(rows)
+            if not row:
+                continue
+            total = _num(_first(row, "total_value", "total", "over_under", "game_total"))
+            spread_home = _num(_first(row, "spread_home_value", "spread_home",
+                                      "home_spread", "spread"))
+            if total is None:
+                continue
+            home, away = g_home_away.get(gid, (None, None))
+            if spread_home is None:
+                if home:
+                    out[home] = total / 2
+                if away:
+                    out[away] = total / 2
+            else:
+                if home:
+                    out[home] = total / 2 - spread_home / 2
+                if away:
+                    out[away] = total / 2 + spread_home / 2
+        return out
+
+    def _player_props(self, client, game_ids) -> dict:
+        """player_id -> {stat_key: line}. stat_key in
+        {pts, reb, ast, fg3m, stl, blk, pra, dd_prob}."""
+        market_map = {
+            "points": "pts", "player_points": "pts", "pts": "pts",
+            "rebounds": "reb", "player_rebounds": "reb", "reb": "reb",
+            "assists": "ast", "player_assists": "ast", "ast": "ast",
+            "threes": "fg3m", "three_pointers_made": "fg3m", "3pt": "fg3m",
+            "player_threes": "fg3m", "fg3m": "fg3m",
+            "steals": "stl", "blocks": "blk",
+            "points_rebounds_assists": "pra", "pra": "pra",
+            "double_double": "dd", "double-double": "dd",
+        }
+        # collect all vendor lines per (player, stat), then take the median line
+        collected: dict[tuple, list[float]] = {}
+        dd_probs: dict[int, list[float]] = {}
+        for gid in game_ids:
+            try:
+                rows = self._safe_get(client, "/odds/player_props", {"game_id": gid})
+            except Exception:  # noqa: BLE001
+                continue
+            for r in rows:
+                pid = _first(r, "player_id", "playerId")
+                market = str(_first(r, "market", "prop_type", "stat_type",
+                                    "name", "market_key") or "").lower().strip()
+                stat = market_map.get(market)
+                if pid is None or not stat:
+                    continue
+                if stat == "dd":
+                    prob = _implied_prob(_first(r, "over_odds", "over", "price_over",
+                                                "odds_over"))
+                    if prob is not None:
+                        dd_probs.setdefault(pid, []).append(prob)
+                    continue
+                line = _num(_first(r, "line_value", "line", "threshold", "value",
+                                   "over_under", "point"))
+                if line is not None:
+                    collected.setdefault((pid, stat), []).append(line)
+        out: dict[int, dict] = {}
+        for (pid, stat), lines in collected.items():
+            out.setdefault(pid, {})[stat] = _median(lines)
+        for pid, probs in dd_probs.items():
+            out.setdefault(pid, {})["dd_prob"] = _median(probs)
+        return out
+
+    def _dk_from_props(self, line: dict, played: list[dict]) -> float:
+        """Convert market prop lines to DK fantasy points, filling stats that
+        have no prop from recent per-game averages."""
+        def recent_avg(key):
+            vals = [r.get(key, 0) for r in played] if played else []
+            return sum(vals) / len(vals) if vals else 0.0
+
+        pts = line.get("pts", recent_avg("pts"))
+        reb = line.get("reb", recent_avg("reb"))
+        ast = line.get("ast", recent_avg("ast"))
+        fg3 = line.get("fg3m", recent_avg("fg3m"))
+        stl = line.get("stl", recent_avg("stl"))
+        blk = line.get("blk", recent_avg("blk"))
+        to = recent_avg("turnover")  # turnovers essentially never propped
+        # If only a PRA line exists, prefer the sum of individual lines; else PRA.
+        if "pra" in line and not ({"pts", "reb", "ast"} & set(line)):
+            pra = line["pra"]
+            pts, reb, ast = pra * 0.52, pra * 0.28, pra * 0.20  # rough split
+        fp = (pts + 1.25 * reb + 1.5 * ast + 0.5 * fg3 + 2 * stl + 2 * blk
+              - 0.5 * to)
+        # double-double bonus: use the milestone market's implied prob if we have
+        # it, else infer from how many of pts/reb/ast/stl/blk lines clear ~10.
+        if "dd_prob" in line:
+            fp += 1.5 * _clamp(line["dd_prob"], 0.0, 1.0)
+        else:
+            near = sum(1 for v in (pts, reb, ast, stl, blk) if v >= 9.5)
+            if near >= 2:
+                fp += 1.5 * 0.55
+        return round(fp, 2)
+
+    def _safe_get(self, client, path, params) -> list:
+        payload = client._get(path, params)
+        if isinstance(payload, dict):
+            return payload.get("data", []) or []
+        return payload or []
+
+
+def _first(d: dict, *keys):
+    """Return the first present, non-None value among keys."""
+    for k in keys:
+        if k in d and d[k] is not None:
+            return d[k]
+    return None
+
+
+def _num(v):
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _median(vals: list[float]) -> float:
+    s = sorted(vals)
+    n = len(s)
+    if n == 0:
+        return 0.0
+    return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
+
+
+def _implied_prob(american_odds):
+    """American odds -> implied probability (no vig removal)."""
+    o = _num(american_odds)
+    if o is None or o == 0:
+        return None
+    return 100 / (o + 100) if o > 0 else (-o) / (-o + 100)
+
+
+def _prefer_vendor(rows: list, vendor: str = "draftkings"):
+    if not rows:
+        return None
+    for r in rows:
+        if str(r.get("vendor", "")).lower() == vendor:
+            return r
+    return rows[0]
 
 
 def _to_min(raw) -> int:

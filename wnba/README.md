@@ -19,10 +19,12 @@ WNBA specifics that shape strategy:
 - **Tiny slates** → ownership concentrates, correlation matters more, being
   contrarian is harder. Edge lives at the **bottom** of the board (cheap
   players with a real minutes path), which is almost always **injury-driven**.
-- **No Vegas / no props in the WNBA data.** balldontlie has no odds or
-  player-props endpoints for the WNBA, so projections are built from box
-  scores + advanced stats + injuries + pace, and "who starts" is *inferred*
-  from recent minutes + injury status (no confirmed-lineups feed either).
+- **Player props ARE available** (`/wnba/v1/odds/player_props`) — the market's
+  points/rebounds/assists/threes lines are the strongest projection input, so
+  they're the *primary* source. **Betting odds** (`/wnba/v1/odds`) give implied
+  team totals for game-environment scaling. What's missing is a
+  **confirmed-lineups** feed, so "who starts" is inferred from recent minutes +
+  injury status (`/wnba/v1/player_injuries`).
 
 **GPP is a ceiling game, not an average game.** You need a lineup in the right
 tail of outcomes *and* differentiated from the field. So the engine optimizes
@@ -73,10 +75,14 @@ The `--out` CSV uploads straight to DraftKings (`G,G,F,F,UTIL,UTIL` header,
 
 - **`csv`** — DK `AvgPointsPerGame` as the median, fixed variance band. Always
   works, no key. Good for a dry run.
-- **`bdl`** (recommended) — blends recent-5-game DK fantasy output (weighted)
-  with the DK season average, scaled by opponent defense-vs-position (G/F) and
-  team pace; floor/ceiling from the player's own recent variance; OUT players
-  dropped and questionable players haircut, using `player_injuries`.
+- **`bdl`** (recommended) — **props-first**: builds DK points from market prop
+  lines (pts/reb/ast/3pm), filling steals/blocks/TO from recent form. Because
+  the market already prices minutes, matchup, pace and injuries, props-based
+  projections are *not* re-scaled by DvP/pace (no double-count). Players with
+  no props fall back to a recent-form projection (weighted last-5 DK output
+  blended with season avg), scaled by defense-vs-position (G/F), pace, and
+  implied-total environment. OUT dropped, questionable haircut, via
+  `player_injuries`.
 
 Still heuristic (documented in code): **projected ownership** — real ownership
 needs a feed WNBA doesn't expose, so it's a value+salary proxy, good enough to
@@ -85,9 +91,16 @@ needs a feed WNBA doesn't expose, so it's a value+salary proxy, good enough to
 ## The WNBA data proxy (`../api/wnba-*.js`)
 
 Vercel functions mirroring the NBA proxy, for a future base44-style frontend:
-`wnba-slate` (games + pace/ratings), `wnba-injuries`, `wnba-recent-stats`
-(minutes/usage trend + absent-teammate detector), `wnba-dvp` (G/F defense vs
-position). Base path `api.balldontlie.io/wnba/v1`, key via `BALLDONTLIE_API_KEY`.
+`wnba-slate` (games + pace/ratings), `wnba-odds` (implied team totals),
+`wnba-props` (market stat lines per player), `wnba-injuries`,
+`wnba-recent-stats` (minutes/usage trend + absent-teammate detector),
+`wnba-dvp` (G/F defense vs position). Base path `api.balldontlie.io/wnba/v1`,
+key via `BALLDONTLIE_API_KEY`.
+
+> The odds/props JSON field names are read defensively (a `_first()` over
+> likely keys) because this sandbox's network policy blocks balldontlie, so
+> the exact live shape couldn't be confirmed here. One real `player_props` and
+> one `odds` record will let us pin them exactly.
 
 ## Notes carried from the NBA proxy (fix on its next upgrade)
 
