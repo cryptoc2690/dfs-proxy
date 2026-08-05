@@ -159,6 +159,10 @@ INDEX_HTML = r"""<!doctype html>
       </div>
       <div id="cards" class="cards"></div>
       <div id="welcome" class="empty">Drop your DraftKings CSV and hit generate.</div>
+      <details id="expwrap" style="display:none">
+        <summary>Exposure — how spread your lineups are</summary>
+        <table class="ptable" id="exptable"></table>
+      </details>
       <details id="projwrap" style="display:none">
         <summary>Player projections</summary>
         <table class="ptable" id="ptable"></table>
@@ -314,6 +318,17 @@ function render(d){
       (l.stacks.length?'<div class="stacks">stacks: '+l.stacks.join(', ')+'</div>':'')+
       '<table>'+rows+'</table></div>';
   }).join('');
+
+  // exposure — spot over-concentration at a glance
+  const N=d.lineups.length, ec={};
+  d.lineups.forEach(l=>l.players.forEach(p=>{ec[p.name]=(ec[p.name]||0)+1;}));
+  const erows=Object.entries(ec).sort((a,b)=>b[1]-a[1]);
+  if(erows.length){
+    $('#expwrap').style.display='block';
+    $('#exptable').innerHTML='<tr><th>Player</th><th class="num">Lineups</th><th class="num">Exposure</th></tr>'+
+      erows.map(([n,c])=>{const pctv=Math.round(c/N*100);const hot=pctv>=70?' style="color:var(--accent)"':'';
+        return '<tr><td>'+n+'</td><td class="num">'+c+'/'+N+'</td><td class="num"'+hot+'>'+pctv+'%</td></tr>';}).join('');
+  }
 
   // projections table
   if(d.players && d.players.length){
