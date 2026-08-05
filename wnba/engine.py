@@ -61,36 +61,57 @@ def _weighted_pick(cands, rng):
     return cands[-1]
 
 
-def _build_one(pool, max_per_team, rng):
-    template = ["G", "G", "F", "F", "U", "U"]
-    picked, used, team_count, salary = [], set(), {}, 0
-    for i, slot in enumerate(template):
-        slots_after = len(template) - i - 1
-        budget = SALARY_CAP - salary - MIN_SALARY * slots_after
-        elig = [p for p in pool
-                if p.dk_id not in used and p.salary <= budget
-                and (slot == "U" or p.pos == slot)
-                and team_count.get(p.team, 0) < max_per_team]
-        # keep enough G/F headroom to satisfy the minimums
-        feasible = [p for p in elig if _can_complete(picked, p, slots_after)]
-        choices = feasible or elig
-        if not choices:
+def _build_one(pool, max_per_team, rng, cores=None, min_cores=0):
+    # Seed the lineup with the required number of core plays, then fill the
+    # rest with a position-aware greedy that always keeps the G/G/F/F minimums
+    # reachable. (Extra cores can still land in the fill — min_cores is a floor.)
+    picked = []
+    if cores and min_cores > 0:
+        avail = [c for c in cores if c.proj > 0]
+        k = min(min_cores, len(avail))
+        if k > 0:
+            picked = list(rng.sample(avail, k))
+    used = {p.dk_id for p in picked}
+    salary = sum(p.salary for p in picked)
+    team_count = {}
+    for p in picked:
+        team_count[p.team] = team_count.get(p.team, 0) + 1
+    if salary > SALARY_CAP or any(v > max_per_team for v in team_count.values()):
+        return None
+
+    while len(picked) < ROSTER_SIZE:
+        remaining = ROSTER_SIZE - len(picked)
+        g = sum(1 for p in picked if p.is_guard)
+        f = len(picked) - g
+        need_g, need_f = max(0, MIN_GUARDS - g), max(0, MIN_FORWARDS - f)
+        must_guard = need_g >= remaining
+        must_forward = need_f >= remaining
+        budget = SALARY_CAP - salary - MIN_SALARY * (remaining - 1)
+        elig = []
+        for p in pool:
+            if p.dk_id in used or p.salary > budget:
+                continue
+            if team_count.get(p.team, 0) >= max_per_team:
+                continue
+            if (must_guard and not p.is_guard) or (must_forward and p.is_guard):
+                continue
+            ng = need_g - (1 if p.is_guard and need_g else 0)
+            nf = need_f - (1 if not p.is_guard and need_f else 0)
+            if max(0, ng) + max(0, nf) > remaining - 1:
+                continue
+            elig.append(p)
+        if not elig:
             return None
-        p = _weighted_pick(choices, rng)
+        p = _weighted_pick(elig, rng)
         picked.append(p)
         used.add(p.dk_id)
         salary += p.salary
         team_count[p.team] = team_count.get(p.team, 0) + 1
+
     g = sum(1 for p in picked if p.is_guard)
     if g < MIN_GUARDS or (len(picked) - g) < MIN_FORWARDS or salary > SALARY_CAP:
         return None
     return picked
-
-
-def _can_complete(picked, cand, slots_after):
-    g = sum(1 for p in picked if p.is_guard) + (1 if cand.is_guard else 0)
-    f = sum(1 for p in picked if not p.is_guard) + (0 if cand.is_guard else 1)
-    return max(0, MIN_GUARDS - g) + max(0, MIN_FORWARDS - f) <= slots_after
 
 
 def _has_stack(players, stack):
@@ -100,13 +121,14 @@ def _has_stack(players, stack):
     return any(c >= stack for c in counts.values())
 
 
-def build_candidates(pool, count, *, stack, max_per_team, seed=0):
+def build_candidates(pool, count, *, stack, max_per_team, seed=0,
+                     cores=None, min_cores=0):
     rng = random.Random(seed)
     out, seen = [], set()
     tries = 0
     while len(out) < count and tries < count * 15:
         tries += 1
-        lu = _build_one(pool, max_per_team, rng)
+        lu = _build_one(pool, max_per_team, rng, cores, min_cores)
         if not lu:
             continue
         if stack > 1 and not _has_stack(lu, stack):
@@ -197,17 +219,21 @@ def select_final(cands, n, max_exposure):
 
 # ---------------- public API ----------------
 def build_gpp(players, *, n=20, pool_size=None, min_stack=2, max_per_team=4,
-              max_exposure=0.6, leverage=0.35, n_sims=5000, seed=0):
+              max_exposure=0.6, leverage=0.35, n_sims=5000, seed=0,
+              cores=None, min_cores=0):
     pool = [p for p in players if p.proj > 0]
     if len(pool) < ROSTER_SIZE:
         return []
+    cores = [c for c in (cores or []) if c.proj > 0]
     pool_size = pool_size or max(120, n * 8)
     cands = build_candidates(pool, pool_size, stack=min_stack,
-                             max_per_team=max_per_team, seed=seed)
+                             max_per_team=max_per_team, seed=seed,
+                             cores=cores, min_cores=min_cores)
     if not cands:
         # relax the stack requirement rather than return nothing
         cands = build_candidates(pool, pool_size, stack=1,
-                                 max_per_team=max_per_team, seed=seed)
+                                 max_per_team=max_per_team, seed=seed,
+                                 cores=cores, min_cores=min_cores)
     if not cands:
         return []
     simulate_and_score(cands, pool, sims=n_sims, leverage=leverage, seed=seed)

@@ -115,6 +115,18 @@ Still heuristic (documented in code): **projected ownership** — real ownership
 needs a feed WNBA doesn't expose, so it's a value+salary proxy, good enough to
 *rank* leverage, not to trust as a number.
 
+## Game-theory pool (optional)
+
+If you follow a sharp who posts a player pool with core plays, paste it in:
+
+- **Core plays** → every lineup includes at least *Min cores* of them (default 1),
+  and cores get an **ownership bump** (they're the field's chalk) so the leverage
+  engine pivots around them. Winners usually carry 1–2 of 3 cores — set *Min
+  cores* to 2 to lean into that, 1 to keep more pivots.
+- **His full pool** → an ownership *signal, not a filter*. Nobody is excluded:
+  in-pool reads as chalk, **off-pool gets an ownership discount** so a rare sharp
+  play outside his pool surfaces as leverage and still gets used if it projects.
+
 ## Data source
 
 The app talks to the balldontlie WNBA API directly (base

@@ -62,6 +62,7 @@ class Player:
     floor: float = 0.0
     ceil: float = 0.0
     ownership: float = 0.0   # projected ownership %, 0..100 (GPP leverage)
+    core: bool = False       # flagged as a core play in a game-theory pool
     notes: list[str] = field(default_factory=list)
 
     @property

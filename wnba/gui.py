@@ -29,9 +29,12 @@ INDEX_HTML = r"""<!doctype html>
   .panel h2{font-size:13px;text-transform:uppercase;letter-spacing:.6px;
     color:var(--muted);margin:0 0 14px}
   label{display:block;font-size:13px;color:var(--muted);margin:12px 0 5px}
-  input[type=text],input[type=number],input[type=password]{width:100%;background:var(--panel2);
-    border:1px solid var(--line);color:var(--text);border-radius:9px;padding:9px 11px;font-size:14px}
-  input:focus{outline:none;border-color:var(--accent2)}
+  input[type=text],input[type=number],input[type=password],textarea{width:100%;background:var(--panel2);
+    border:1px solid var(--line);color:var(--text);border-radius:9px;padding:9px 11px;font-size:14px;
+    font-family:inherit}
+  textarea{resize:vertical;min-height:58px;line-height:1.35}
+  input:focus,textarea:focus{outline:none;border-color:var(--accent2)}
+  .core-star{color:var(--accent2);font-weight:700}
   .row{display:flex;gap:12px}.row>*{flex:1}
   .drop{margin-top:4px;border:1.5px dashed var(--line);border-radius:12px;padding:26px 14px;
     text-align:center;cursor:pointer;transition:.15s;background:var(--panel2)}
@@ -115,6 +118,20 @@ INDEX_HTML = r"""<!doctype html>
       <div class="hint">Enables live player-prop projections. Without it, the app
         projects from the CSV's own averages. Saved in this browser only.</div>
 
+      <h2 style="margin-top:22px">4 · Game-theory pool <span style="text-transform:none;color:var(--muted)">(optional)</span></h2>
+      <label>Core plays — one name per line</label>
+      <textarea id="cores" rows="3" placeholder="A'ja Wilson
+Kamilla Cardoso
+DiJonai Carrington"></textarea>
+      <div class="row" style="margin-top:6px">
+        <div><label>Min cores / lineup</label><input id="mincores" type="number" value="1" min="0" max="3"></div>
+      </div>
+      <label>His full pool — one name per line (optional)</label>
+      <textarea id="poollist" rows="3" placeholder="blank = treat the whole slate evenly"></textarea>
+      <div class="hint">Nothing is excluded. Cores (★) get an ownership bump and each
+        lineup includes at least "min cores"; players <em>off</em> his pool get an
+        ownership discount, so a sharp off-pool play surfaces as leverage.</div>
+
       <button id="go" class="btn" disabled>Generate lineups</button>
     </div>
 
@@ -184,6 +201,7 @@ async function run(){
     n:+$('#n').value, stack:+$('#stack').value,
     maxExposure:(+$('#exp').value)/100, leverage:(+$('#lev').value)/100,
     apiKey:$('#key').value.trim(),
+    cores:$('#cores').value, pool:$('#poollist').value, minCores:+$('#mincores').value,
   };
   try{
     const res = await fetch('/api/optimize', {method:'POST',headers:{'Content-Type':'application/json'},
@@ -207,9 +225,10 @@ function render(d){
 
   $('#cards').innerHTML = d.lineups.map(l => {
     const rows = l.players.map(p =>
-      '<tr><td class="slot">'+p.slot+'</td><td>'+p.name+'</td><td class="stat">'+p.team+'</td>'+
+      '<tr><td class="slot">'+p.slot+'</td><td>'+(p.core?'<span class="core-star">★</span> ':'')+p.name+'</td><td class="stat">'+p.team+'</td>'+
       '<td class="sal">$'+p.salary.toLocaleString()+'</td><td class="pr">'+p.proj+'</td></tr>').join('');
-    return '<div class="card"><div class="top"><span class="rank">#'+l.rank+'</span>'+
+    const coreTxt = l.cores ? ' · <span class="core-star">★</span>'+l.cores : '';
+    return '<div class="card"><div class="top"><span class="rank">#'+l.rank+coreTxt+'</span>'+
       '<span class="stat"><b>'+l.proj+'</b> proj · <b>'+l.ceiling+'</b> ceil · $'+l.salary.toLocaleString()+' · '+l.totalOwn+'% own</span></div>'+
       (l.stacks.length?'<div class="stacks">stacks: '+l.stacks.join(', ')+'</div>':'')+
       '<table>'+rows+'</table></div>';
@@ -234,6 +253,7 @@ function renderProj(players, key){
   const body = sorted.map(p=>'<tr>'+cols.map(c=>{
     const num = ['salary','proj','floor','ceil','own'].includes(c[0]);
     let v = p[c[0]]; if(c[0]==='salary') v='$'+v.toLocaleString();
+    if(c[0]==='name' && p.core) v='<span class="core-star">★</span> '+v;
     return '<td class="'+(num?'num':'')+'">'+v+'</td>';
   }).join('')+'</tr>').join('');
   const t = $('#ptable'); t.innerHTML = head+body;
