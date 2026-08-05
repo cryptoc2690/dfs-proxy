@@ -82,6 +82,14 @@ def _dff_range(proj, l5, l10, szn):
     return round(proj * 0.70, 1), round(proj * boom, 1)
 
 
+def _out_of_rotation(d):
+    """0 fantasy over the last 5 games (and ~none over the last 10) means the
+    player isn't in the rotation right now, no matter what a stale season
+    average says. Exclude them — unless the projection itself is high enough
+    (>=15) that the source clearly expects a return-to-role tonight."""
+    return d.get("l5", 0) == 0 and d.get("l10", 0) <= 3 and d.get("proj", 0) < 15
+
+
 def apply_dff(players, text):
     """Project from a DFF cheatsheet. Returns a source label."""
     dmap = parse_dff(text)
@@ -99,6 +107,10 @@ def apply_dff(players, text):
             p.status = "OUT"
             p.proj = p.floor = p.ceil = 0.0
             p.notes.append("OUT — excluded")
+            continue
+        if _out_of_rotation(d):
+            p.proj = p.floor = p.ceil = 0.0
+            p.notes.append("0 recent minutes — out of rotation")
             continue
         p.proj = round(d["proj"], 1)
         p.floor, p.ceil = _dff_range(d["proj"], d["l5"], d["l10"], d["szn"])
@@ -122,7 +134,7 @@ def build_players_from_dff(dmap):
     for i, (nm, d) in enumerate(dmap.items()):
         if d["sal"] < 3000:
             continue
-        out = str(d["inj"]).upper() in ("O", "OUT")
+        out = str(d["inj"]).upper() in ("O", "OUT") or _out_of_rotation(d)
         p = Player(name=d["name"], dk_id=f"dff-{i}", salary=d["sal"], team=d["team"],
                    opponent=d["opp"], game=f"{d['team']}@{d['opp']}",
                    is_guard=d["pos"].strip().upper().startswith("G"),
@@ -313,7 +325,7 @@ def run_optimize(csv_text: str, options: dict) -> dict:
             "players": [{
                 "slot": slot, "name": p.name, "team": p.team, "pos": p.pos,
                 "salary": p.salary, "proj": round(p.proj, 1), "core": p.core,
-            } for slot, p in zip(["G", "G", "F", "F", "UTIL", "UTIL"], lu.dk_slots())],
+            } for slot, p in zip(["F", "F", "F", "G", "G", "UTIL"], lu.dk_slots())],
             "upload": [_upload_str(p) for p in lu.dk_slots()],
         } for i, lu in enumerate(lineups)],
     }

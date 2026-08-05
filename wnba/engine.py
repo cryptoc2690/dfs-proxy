@@ -41,12 +41,12 @@ class Lineup:
         return {p.game for p in self.players}
 
     def dk_slots(self) -> list[Player]:
-        """DK upload order: G, G, F, F, UTIL, UTIL."""
+        """DK upload order: F, F, F, G, G, UTIL."""
         g = sorted((p for p in self.players if p.is_guard), key=lambda p: -p.proj)
         f = sorted((p for p in self.players if not p.is_guard), key=lambda p: -p.proj)
-        slotted = [g[0], g[1], f[0], f[1]]
-        rest = sorted(g[2:] + f[2:], key=lambda p: -p.proj)
-        return slotted + rest[:2]
+        slotted = f[:MIN_FORWARDS] + g[:MIN_GUARDS]          # 3 F, 2 G
+        rest = sorted(g[MIN_GUARDS:] + f[MIN_FORWARDS:], key=lambda p: -p.proj)
+        return slotted + rest[:ROSTER_SIZE - MIN_FORWARDS - MIN_GUARDS]  # + UTIL
 
 
 # ---------------- lineup construction ----------------

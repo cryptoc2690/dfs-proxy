@@ -14,14 +14,14 @@ import unicodedata
 from dataclasses import dataclass, field
 
 # --- DraftKings WNBA Classic ruleset ------------------------------------
-# Roster: 6 players filling G, G, F, F, UTIL, UTIL.
-# DK only splits the WNBA into Guards and Forwards (no centers), so every
-# player is either G-eligible or F-eligible. A UTIL slot takes either.
+# Roster: 6 players filling F, F, F, G, G, UTIL (confirmed from real contest
+# standings). DK only splits the WNBA into Guards and Forwards (no centers), so
+# every player is G- or F-eligible; the UTIL slot takes either.
 SALARY_CAP = 50_000
 ROSTER_SIZE = 6
-MIN_GUARDS = 2   # two dedicated G slots must be filled by guards
-MIN_FORWARDS = 2  # two dedicated F slots must be filled by forwards
-# => guards selected in [2, 4], forwards = 6 - guards.
+MIN_GUARDS = 2    # two dedicated G slots must be filled by guards
+MIN_FORWARDS = 3  # three dedicated F slots must be filled by forwards
+# => the 6th (UTIL) is any -> guards in [2, 3], forwards in [3, 4].
 
 # DraftKings scoring (WNBA == NBA formula, including the DD/TD bonuses).
 SCORING = {

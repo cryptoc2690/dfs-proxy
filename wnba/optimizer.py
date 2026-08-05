@@ -42,7 +42,7 @@ def _write_dk_csv(lineups, path):
     import csv as _csv
     with open(path, "w", newline="", encoding="utf-8") as fh:
         w = _csv.writer(fh)
-        w.writerow(["G", "G", "F", "F", "UTIL", "UTIL"])
+        w.writerow(["F", "F", "F", "G", "G", "UTIL"])
         for lu in lineups:
             w.writerow([p.label() for p in lu.dk_slots()])
     print(f"\nWrote {len(lineups)} lineup(s) -> {path}")

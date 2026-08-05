@@ -408,7 +408,7 @@ function renderProj(players, key){
 
 $('#dl').addEventListener('click', ()=>{
   if(!lastResult) return;
-  const rows = [['G','G','F','F','UTIL','UTIL'].join(',')]
+  const rows = [['F','F','F','G','G','UTIL'].join(',')]
     .concat(lastResult.lineups.map(l => l.upload.map(s=>'"'+s+'"').join(',')));
   const blob = new Blob([rows.join('\n')], {type:'text/csv'});
   const a = document.createElement('a');
