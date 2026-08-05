@@ -144,6 +144,16 @@ INDEX_HTML = r"""<!doctype html>
         many to use from value + leverage and diversifies them across your lineups.
         The pool is only an ownership signal — off-pool sharp plays still get used.</div>
 
+      <label style="margin-top:14px">Remove player — out / traded / benched / missed shootaround</label>
+      <div class="typeahead">
+        <input id="removein" type="text" autocomplete="off" placeholder="drop a file first, then type…" disabled>
+        <div id="removedrop" class="drop-menu"></div>
+      </div>
+      <div id="removechips" class="chips"></div>
+      <div class="hint">Zeroes the player <em>and</em> redistributes their minutes/usage
+        onto teammates (weighted to same-position replacements), so the rest of the
+        roster's projections rise the way they actually would.</div>
+
       <button id="go" class="btn" disabled>Generate lineups</button>
     </div>
 
@@ -261,7 +271,8 @@ function makePicker(prefix, icon){
 document.addEventListener('click', e => { if(!e.target.closest('.typeahead')) document.querySelectorAll('.drop-menu').forEach(d=>d.classList.remove('show')); });
 const corePicker = makePicker('core','★');
 const poolPicker = makePicker('pool','');
-function enablePickers(){ corePicker.enable(); poolPicker.enable(); }
+const removePicker = makePicker('remove','🚫');
+function enablePickers(){ corePicker.enable(); poolPicker.enable(); removePicker.enable(); }
 
 $('#go').addEventListener('click', run);
 async function run(){
@@ -271,7 +282,8 @@ async function run(){
   const options = {
     n:+$('#n').value, stack:+$('#stack').value,
     maxExposure:(+$('#exp').value)/100, leverage:(+$('#lev').value)/100,
-    cores:corePicker.sel.join('\n'), pool:poolPicker.sel.join('\n'), dff:dffText,
+    cores:corePicker.sel.join('\n'), pool:poolPicker.sel.join('\n'),
+    remove:removePicker.sel.join('\n'), dff:dffText,
     apiKey:$('#key').value.trim(),
   };
   try{
@@ -289,9 +301,12 @@ function render(d){
   $('#welcome').style.display='none';
   const cls = d.source && d.source.indexOf('dff')===0 ? 'props' : d.source==='csv-only' ? 'csv' : 'season';
   const outTxt = d.out && d.out.length ? ' · OUT: '+d.out.join(', ') : '';
+  const rmTxt = d.removed && d.removed.length ? ' · removed: '+d.removed.join(', ') : '';
+  const slateBadge = d.slateType ?
+    '<span class="badge '+(d.slateType==='stars-and-scrubs'?'csv':'season')+'">'+d.slateType+'</span>' : '';
   $('#status').style.display='flex';
-  $('#status').innerHTML = '<span class="badge '+cls+'">'+d.source+'</span>'+
-    '<span class="meta">'+(d.slate.date||'')+' · '+(d.slate.games||[]).join('  ')+outTxt+'</span>';
+  $('#status').innerHTML = '<span class="badge '+cls+'">'+d.source+'</span>'+slateBadge+
+    '<span class="meta">'+(d.slate.date||'')+' · '+(d.slate.games||[]).join('  ')+outTxt+rmTxt+'</span>';
   $('#tools').style.display = d.lineups.length ? 'block':'none';
 
   $('#cards').innerHTML = d.lineups.map(l => {

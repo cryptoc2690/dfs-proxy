@@ -61,7 +61,7 @@ def _weighted_pick(cands, rng):
     return cands[-1]
 
 
-def _build_one(pool, max_per_team, rng, cores=None, min_cores=0):
+def _build_one(pool, max_per_team, rng, cores=None, min_cores=0, reserve=MIN_SALARY):
     # Seed the lineup with the required number of cores, then fill the rest with
     # a position-aware greedy that always keeps the G/F minimums reachable.
     # (Extra cores can still land in the fill — min_cores is a floor.)
@@ -86,7 +86,7 @@ def _build_one(pool, max_per_team, rng, cores=None, min_cores=0):
         need_g, need_f = max(0, MIN_GUARDS - g), max(0, MIN_FORWARDS - f)
         must_guard = need_g >= remaining
         must_forward = need_f >= remaining
-        budget = SALARY_CAP - salary - MIN_SALARY * (remaining - 1)
+        budget = SALARY_CAP - salary - reserve * (remaining - 1)
         elig = []
         for p in pool:
             if p.dk_id in used or p.salary > budget:
@@ -122,13 +122,13 @@ def _has_stack(players, stack):
 
 
 def build_candidates(pool, count, *, stack, max_per_team, seed=0,
-                     cores=None, min_cores=0):
+                     cores=None, min_cores=0, reserve=MIN_SALARY):
     rng = random.Random(seed)
     out, seen = [], set()
     tries = 0
     while len(out) < count and tries < count * 15:
         tries += 1
-        lu = _build_one(pool, max_per_team, rng, cores, min_cores)
+        lu = _build_one(pool, max_per_team, rng, cores, min_cores, reserve)
         if not lu:
             continue
         if stack > 1 and not _has_stack(lu, stack):
@@ -246,7 +246,14 @@ def build_gpp(players, *, n=20, pool_size=None, min_stack=2, max_per_team=4,
     pool = _viable_pool(pool, n)
     cores = [c for c in (cores or []) if c.proj > 0]
     pool_size = pool_size or max(120, n * 8)
-    kw = dict(max_per_team=max_per_team, seed=seed, cores=cores, min_cores=min_cores)
+    # Salary-aware construction: stars-and-scrubs is only right when a CHEAP
+    # player actually projects. If cheap value exists, reserve less per slot so
+    # the build can pay up + use it; if not, reserve more so it spreads into
+    # mid-range instead of punting two slots into 9-point dead weight.
+    cheap_best = max((p.proj for p in pool if p.salary <= 5500), default=0.0)
+    reserve = 4200 if cheap_best >= 16 else 6000
+    kw = dict(max_per_team=max_per_team, seed=seed, cores=cores,
+              min_cores=min_cores, reserve=reserve)
     cands = build_candidates(pool, pool_size, stack=min_stack, **kw)
     if not cands:  # relax the stack requirement rather than return nothing
         cands = build_candidates(pool, pool_size, stack=1, **kw)

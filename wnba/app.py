@@ -86,6 +86,38 @@ def _slate_date(players):
     return et.date().isoformat()
 
 
+def _apply_removals(players, remove_names):
+    """Zero a removed player AND push ~65% of their production onto teammates,
+    weighted toward same-position replacements (their minutes/usage don't
+    vanish — they flow to the next guys up). Returns the removed names."""
+    removed = [(p, p.proj) for p in players
+               if normalize_name(p.name) in remove_names and p.proj > 0]
+    for p, _ in removed:
+        p.proj = p.floor = p.ceil = 0.0
+        p.notes.append("removed — out/traded/benched")
+    for p, vac in removed:
+        mates = [q for q in players if q.team == p.team and q.proj > 0]
+        if not mates:
+            continue
+        w = {id(q): q.proj * (1.6 if q.pos == p.pos else 1.0) for q in mates}
+        tot = sum(w.values()) or 1.0
+        for q in mates:
+            bump = min(0.65 * vac * w[id(q)] / tot, 0.40 * q.proj, 8.0)
+            if bump <= 0.3:
+                continue
+            q.proj = round(q.proj + bump, 1)
+            q.floor = round(q.floor + bump * 0.7, 1)
+            q.ceil = round(q.ceil + bump * 1.1, 1)
+            q.notes.append(f"+{bump:.0f} ({p.name} out)")
+    return [p.name for p, _ in removed]
+
+
+def _slate_type(players):
+    pool = [p for p in players if p.proj > 0]
+    cheap_best = max((p.proj for p in pool if p.salary <= 5500), default=0.0)
+    return "stars-and-scrubs" if cheap_best >= 16 else "balanced"
+
+
 def _apply_market(players, mk):
     """Apply the four balldontlie market adjustments in priority order."""
     league = mk.get("league_implied")
@@ -237,6 +269,15 @@ def run_optimize(csv_text: str, options: dict) -> dict:
     else:
         return {"error": "Upload a DraftKings salary CSV or a DFF cheatsheet."}
 
+    # Manual removals (out / traded / benched — e.g. a late scratch the sheet
+    # hasn't caught, or someone who missed shootaround). Zero them and push
+    # their minutes/usage onto teammates, so the redistribution is real rather
+    # than just deleting a body. Do it BEFORE market/ownership so both reflect
+    # the post-removal projections.
+    removed = _apply_removals(players, _parse_names(options.get("remove")))
+    if removed and "ownership" not in source_label:
+        _estimate_ownership(players)
+
     # Optional balldontlie market layer — real recent minutes, Vegas implied
     # totals, market-vs-DFF divergence, and the PRA-under-juice haircut. Only
     # where it adds EV; degrades silently to pure DFF if the key/API is absent.
@@ -310,6 +351,8 @@ def run_optimize(csv_text: str, options: dict) -> dict:
 
     return {
         "source": source_label,
+        "slateType": _slate_type(players),
+        "removed": removed,
         "slate": {
             "date": next((p.game_date for p in players if p.game_date), ""),
             "games": sorted({p.game for p in players if p.game}),
