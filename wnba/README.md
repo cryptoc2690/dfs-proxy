@@ -21,6 +21,13 @@ Paste your balldontlie GOAT key into the field in the app (stored in your
 browser only) to get live props-based projections. There is **nothing to
 `pip install`** — it runs on a stock Python 3.8+.
 
+**If macOS blocks it** ("Apple could not verify… is free of malware") — that's
+just Gatekeeper flagging a script downloaded in a ZIP. Either: **System
+Settings → Privacy & Security → scroll to Security → Open Anyway** (one time),
+or run this in Terminal once — type it with a trailing space, drag the
+`dfs-proxy` folder in to fill the path, press Return:
+`xattr -dr com.apple.quarantine ` . Then double-click the launcher again.
+
 ## Or from a terminal
 
 ```bash
