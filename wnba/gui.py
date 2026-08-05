@@ -151,6 +151,16 @@ INDEX_HTML = r"""<!doctype html>
         many to use from value + leverage and diversifies them across your lineups.
         The pool is only an ownership signal — off-pool sharp plays still get used.</div>
 
+      <h2 style="margin-top:22px">5 · Fade <span style="text-transform:none;color:var(--muted)">(optional)</span></h2>
+      <label>Injury / minutes risk — type to add</label>
+      <div class="typeahead">
+        <input id="fadein" type="text" autocomplete="off" placeholder="drop a file first, then type…" disabled>
+        <div id="fadedrop" class="drop-menu"></div>
+      </div>
+      <div id="fadechips" class="chips"></div>
+      <div class="hint">For news the projections can't see — a trade, a minutes restriction,
+        a late scratch. Faded players never appear in any lineup.</div>
+
       <button id="go" class="btn" disabled>Generate lineups</button>
     </div>
 
@@ -284,7 +294,8 @@ function makePicker(prefix, icon){
 document.addEventListener('click', e => { if(!e.target.closest('.typeahead')) document.querySelectorAll('.drop-menu').forEach(d=>d.classList.remove('show')); });
 const corePicker = makePicker('core','★');
 const poolPicker = makePicker('pool','');
-function enablePickers(){ corePicker.enable(); poolPicker.enable(); }
+const fadePicker = makePicker('fade','🚫');
+function enablePickers(){ corePicker.enable(); poolPicker.enable(); fadePicker.enable(); }
 
 $('#go').addEventListener('click', run);
 async function run(){
@@ -295,7 +306,8 @@ async function run(){
     n:+$('#n').value, stack:+$('#stack').value,
     maxExposure:(+$('#exp').value)/100, leverage:(+$('#lev').value)/100,
     apiKey:$('#key').value.trim(),
-    cores:corePicker.sel.join('\n'), pool:poolPicker.sel.join('\n'), dff:dffText,
+    cores:corePicker.sel.join('\n'), pool:poolPicker.sel.join('\n'),
+    fades:fadePicker.sel.join('\n'), dff:dffText,
   };
   try{
     const res = await fetch('/api/optimize', {method:'POST',headers:{'Content-Type':'application/json'},

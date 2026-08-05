@@ -201,9 +201,14 @@ def run_optimize(csv_text: str, options: dict) -> dict:
     # surfaces as leverage and the optimizer will happily use it.
     core_names = _parse_names(options.get("cores"))
     pool_names = _parse_names(options.get("pool"))
+    fade_names = _parse_names(options.get("fades"))
     for p in players:
         nm = normalize_name(p.name)
         p.core = nm in core_names
+        if nm in fade_names:   # your manual news override — trade, minutes cap, scratch
+            p.proj = p.floor = p.ceil = 0.0
+            p.notes.append("faded — your call")
+            continue
         if p.proj <= 0:
             continue
         if p.core:
