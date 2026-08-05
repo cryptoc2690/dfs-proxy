@@ -1,0 +1,5 @@
+DKSalaries.csv
+lineups.csv
+cash.csv
+*.pyc
+__pycache__/
