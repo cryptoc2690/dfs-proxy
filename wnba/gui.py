@@ -35,6 +35,17 @@ INDEX_HTML = r"""<!doctype html>
   textarea{resize:vertical;min-height:58px;line-height:1.35}
   input:focus,textarea:focus{outline:none;border-color:var(--accent2)}
   .core-star{color:var(--accent2);font-weight:700}
+  .typeahead{position:relative}
+  .drop-menu{position:absolute;left:0;right:0;top:100%;z-index:30;background:var(--panel2);
+    border:1px solid var(--line);border-radius:9px;margin-top:4px;max-height:220px;overflow:auto;display:none}
+  .drop-menu.show{display:block}
+  .drop-menu div{padding:8px 11px;cursor:pointer;font-size:14px}
+  .drop-menu div:hover,.drop-menu div.active{background:var(--chip)}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .chip{background:var(--chip);border:1px solid var(--line);border-radius:16px;padding:4px 10px;
+    font-size:13px;display:flex;align-items:center;gap:7px}
+  .chip .x{cursor:pointer;color:var(--muted);font-weight:700}.chip .x:hover{color:var(--accent)}
+  input:disabled{opacity:.5}
   .row{display:flex;gap:12px}.row>*{flex:1}
   .drop{margin-top:4px;border:1.5px dashed var(--line);border-radius:12px;padding:26px 14px;
     text-align:center;cursor:pointer;transition:.15s;background:var(--panel2)}
@@ -118,19 +129,18 @@ INDEX_HTML = r"""<!doctype html>
       <div class="hint">Enables live player-prop projections. Without it, the app
         projects from the CSV's own averages. Saved in this browser only.</div>
 
-      <h2 style="margin-top:22px">4 · Game-theory pool <span style="text-transform:none;color:var(--muted)">(optional)</span></h2>
-      <label>Core plays — one name per line</label>
-      <textarea id="cores" rows="3" placeholder="A'ja Wilson
-Kamilla Cardoso
-DiJonai Carrington"></textarea>
-      <div class="row" style="margin-top:6px">
-        <div><label>Min cores / lineup</label><input id="mincores" type="number" value="1" min="0" max="3"></div>
+      <h2 style="margin-top:22px">4 · Game-theory cores <span style="text-transform:none;color:var(--muted)">(optional)</span></h2>
+      <label>Core plays — type a name to add</label>
+      <div class="typeahead">
+        <input id="corein" type="text" autocomplete="off" placeholder="drop a CSV first, then type…" disabled>
+        <div id="coredrop" class="drop-menu"></div>
       </div>
-      <label>His full pool — one name per line (optional)</label>
-      <textarea id="poollist" rows="3" placeholder="blank = treat the whole slate evenly"></textarea>
-      <div class="hint">Nothing is excluded. Cores (★) get an ownership bump and each
-        lineup includes at least "min cores"; players <em>off</em> his pool get an
-        ownership discount, so a sharp off-pool play surfaces as leverage.</div>
+      <div id="corechips" class="chips"></div>
+      <label style="margin-top:14px">His full pool — optional, paste the name column</label>
+      <textarea id="poollist" rows="3" placeholder="optional — paste his player names (one per line), or skip if you're short on time"></textarea>
+      <div class="hint">Cores (★) are treated as the field's chalk; the app decides how
+        many to use from value + leverage and diversifies them across your lineups.
+        The pool is only an ownership signal — off-pool sharp plays still get used.</div>
 
       <button id="go" class="btn" disabled>Generate lineups</button>
     </div>
@@ -153,7 +163,7 @@ DiJonai Carrington"></textarea>
 </main>
 <script>
 const $ = s => document.querySelector(s);
-let csvText = null, lastResult = null;
+let csvText = null, lastResult = null, playerNames = [], selectedCores = [];
 
 // persist key locally
 $('#key').value = localStorage.getItem('bdlKey') || '';
@@ -188,8 +198,54 @@ function loadFile(f){
   const r = new FileReader();
   r.onload = () => { csvText = r.result; drop.classList.add('loaded');
     drop.innerHTML = '<b>✓ '+f.name+'</b><small>ready — change file anytime</small>';
-    $('#go').disabled = false; };
+    $('#go').disabled = false;
+    playerNames = parseNames(csvText);
+    const ci = $('#corein'); ci.disabled = false; ci.placeholder = 'type a player…';
+  };
   r.readAsText(f);
+}
+function parseNames(text){
+  const lines = text.replace(/\r/g,'').split('\n').filter(l=>l.trim());
+  if(!lines.length) return [];
+  const cols = csvSplit(lines[0]); const iName = cols.findIndex(c=>c.trim().toLowerCase()==='name');
+  const out = [];
+  for(let i=1;i<lines.length;i++){ const c = csvSplit(lines[i]); const nm=(c[iName]||'').trim(); if(nm) out.push(nm); }
+  return [...new Set(out)];
+}
+function csvSplit(line){ const out=[]; let cur='',q=false; for(const ch of line){ if(ch==='"')q=!q; else if(ch===','&&!q){out.push(cur);cur='';} else cur+=ch; } out.push(cur); return out; }
+
+// ---- core type-ahead ----
+const corein = $('#corein'), coredrop = $('#coredrop'); let activeIdx = -1;
+corein.addEventListener('input', showMatches);
+corein.addEventListener('focus', showMatches);
+corein.addEventListener('keydown', e => {
+  const items = coredrop.querySelectorAll('div'); if(!items.length) return;
+  if(e.key==='ArrowDown'){ activeIdx=Math.min(activeIdx+1,items.length-1); paintActive(items); e.preventDefault(); }
+  else if(e.key==='ArrowUp'){ activeIdx=Math.max(activeIdx-1,0); paintActive(items); e.preventDefault(); }
+  else if(e.key==='Enter'){ if(activeIdx>=0){ addCore(items[activeIdx].textContent); e.preventDefault(); } }
+  else if(e.key==='Escape'){ hideDrop(); }
+});
+document.addEventListener('click', e => { if(!e.target.closest('.typeahead')) hideDrop(); });
+function showMatches(){
+  const q = corein.value.trim().toLowerCase();
+  const chosen = new Set(selectedCores.map(s=>s.toLowerCase()));
+  let matches = playerNames.filter(n => !chosen.has(n.toLowerCase()));
+  if(q) matches = matches.filter(n => n.toLowerCase().includes(q));
+  matches = matches.slice(0,8);
+  if(!matches.length){ hideDrop(); return; }
+  activeIdx = -1;
+  coredrop.innerHTML = matches.map(n=>'<div>'+n+'</div>').join('');
+  coredrop.querySelectorAll('div').forEach(d=>d.onclick=()=>addCore(d.textContent));
+  coredrop.classList.add('show');
+}
+function paintActive(items){ items.forEach((it,i)=>it.classList.toggle('active',i===activeIdx)); }
+function hideDrop(){ coredrop.classList.remove('show'); activeIdx=-1; }
+function addCore(name){ if(!selectedCores.includes(name)) selectedCores.push(name); corein.value=''; hideDrop(); renderChips(); corein.focus(); }
+function removeCore(name){ selectedCores = selectedCores.filter(n=>n!==name); renderChips(); }
+function renderChips(){
+  $('#corechips').innerHTML = selectedCores.map(n=>
+    '<span class="chip"><span class="core-star">★</span>'+n+'<span class="x" data-n="'+n.replace(/"/g,'&quot;')+'">✕</span></span>').join('');
+  $('#corechips').querySelectorAll('.x').forEach(x=>x.onclick=()=>removeCore(x.dataset.n));
 }
 
 $('#go').addEventListener('click', run);
@@ -201,7 +257,7 @@ async function run(){
     n:+$('#n').value, stack:+$('#stack').value,
     maxExposure:(+$('#exp').value)/100, leverage:(+$('#lev').value)/100,
     apiKey:$('#key').value.trim(),
-    cores:$('#cores').value, pool:$('#poollist').value, minCores:+$('#mincores').value,
+    cores:selectedCores.join('\n'), pool:$('#poollist').value,
   };
   try{
     const res = await fetch('/api/optimize', {method:'POST',headers:{'Content-Type':'application/json'},

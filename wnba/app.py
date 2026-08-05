@@ -61,7 +61,12 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         if p.proj <= 0:
             continue
         if p.core:
-            p.ownership = min(p.ownership + 12, 65)
+            # A sharp's core is real signal (these hit), so give a small
+            # projection edge — enough to surface them naturally, not force a
+            # count. Tiny ownership tick keeps the leverage math honest.
+            p.proj = round(p.proj * 1.06, 1)
+            p.ceil = round(p.ceil * 1.06, 1)
+            p.ownership = min(p.ownership + 4, 65)
             p.notes.append("GT core")
         elif pool_names and nm in pool_names:
             p.ownership = min(p.ownership + 5, 65)
@@ -75,7 +80,6 @@ def run_optimize(csv_text: str, options: dict) -> dict:
                          "Check the CSV.", "source": getattr(projector, "name", "?")}
 
     cores = [p for p in playable if p.core]
-    default_min = 1 if cores else 0
     lineups = optimize_gpp(
         players,
         n=_int(options.get("n"), 20),
@@ -86,7 +90,9 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         leverage=_float(options.get("leverage"), 0.35),
         n_sims=_int(options.get("sims"), 5000),
         cores=cores,
-        min_cores=_int(options.get("minCores"), default_min),
+        # No forced count — the data (projection vs. leverage) decides how many
+        # cores land in each lineup; exposure caps keep them diversified.
+        min_cores=0,
     )
 
     csv_fallback = any("csv fallback" in n or "no BALLDONTLIE_API_KEY" in n
