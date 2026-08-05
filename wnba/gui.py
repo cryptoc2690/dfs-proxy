@@ -122,6 +122,10 @@ INDEX_HTML = r"""<!doctype html>
       <input id="exp" class="slider" type="range" min="10" max="100" value="60">
       <label>Fade chalk (leverage) — <span id="levv">0.15</span></label>
       <input id="lev" class="slider" type="range" min="0" max="100" value="15">
+      <label style="margin-top:14px">balldontlie key <span style="text-transform:none;color:var(--muted)">— optional, adds market data</span></label>
+      <input id="key" type="password" placeholder="paste to enable real minutes, Vegas totals, props">
+      <div class="hint">When set: real recent minutes (rotation), Vegas implied totals,
+        market-vs-projection news, and the PRA-under haircut. Stored in this browser only.</div>
 
       <h2 style="margin-top:22px">3 · Game-theory cores <span style="text-transform:none;color:var(--muted)">(optional)</span></h2>
       <label>Core plays — type a name to add</label>
@@ -167,6 +171,8 @@ INDEX_HTML = r"""<!doctype html>
 const $ = s => document.querySelector(s);
 let csvText = null, lastResult = null, playerNames = [], dffText = '';
 
+$('#key').value = localStorage.getItem('bdlKey') || '';
+$('#key').addEventListener('input', e => localStorage.setItem('bdlKey', e.target.value));
 $('#exp').addEventListener('input', e => $('#expv').textContent = e.target.value);
 $('#lev').addEventListener('input', e => $('#levv').textContent = (e.target.value/100).toFixed(2));
 
@@ -266,6 +272,7 @@ async function run(){
     n:+$('#n').value, stack:+$('#stack').value,
     maxExposure:(+$('#exp').value)/100, leverage:(+$('#lev').value)/100,
     cores:corePicker.sel.join('\n'), pool:poolPicker.sel.join('\n'), dff:dffText,
+    apiKey:$('#key').value.trim(),
   };
   try{
     const res = await fetch('/api/optimize', {method:'POST',headers:{'Content-Type':'application/json'},

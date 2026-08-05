@@ -48,10 +48,10 @@ def parse_dff(text):
             proj, own = _f(d.get("ppg_projection")), _f(d.get("ownership_projection"))
             inj = (d.get("injury_status") or d.get("position_alt") or "").strip()
             sal, pos, team = int(_f(d.get("salary"))), d.get("position", ""), d.get("team", "")
-            opp = d.get("opp", "")
+            opp, date = d.get("opp", ""), d.get("game_date", "")
             l5, l10, szn = _f(d.get("L5_fppg_avg")), _f(d.get("L10_fppg_avg")), _f(d.get("szn_fppg_avg"))
         elif len(r) >= 18:  # column-shifted export: read by position
-            name, inj = f"{r[0]} {r[1]}", r[3].strip()
+            name, inj, date = f"{r[0]} {r[1]}", r[3].strip(), r[4].strip()
             proj, own = _f(r[16]), 0.0
             sal, pos, team, opp = int(_f(r[11])), r[2].strip(), r[6].strip(), r[7].strip()
             l5, l10, szn = _f(r[13]), _f(r[14]), _f(r[15])
@@ -60,7 +60,7 @@ def parse_dff(text):
         nm = normalize_name(name)
         if nm:
             out[nm] = {"name": name.strip(), "proj": proj, "own": own, "inj": inj,
-                       "sal": sal, "pos": pos, "team": team, "opp": opp,
+                       "sal": sal, "pos": pos, "team": team, "opp": opp, "date": date,
                        "l5": l5, "l10": l10, "szn": szn}
     return out
 
@@ -75,6 +75,51 @@ def _dff_range(proj, l5, l10, szn):
     recent = max([v for v in (l5, l10) if v > 0] or [proj])
     boom = 1.4 + 0.2 * max(0.0, min(1.0, recent / proj - 1)) if proj > 0 else 1.4
     return round(proj * 0.70, 1), round(proj * boom, 1)
+
+
+def _slate_date(players):
+    dates = [p.game_date for p in players if p.game_date]
+    if dates:
+        return max(set(dates), key=dates.count)
+    from datetime import datetime, timedelta
+    et = datetime.utcnow() - timedelta(hours=4)  # WNBA plays in summer -> EDT
+    return et.date().isoformat()
+
+
+def _apply_market(players, mk):
+    """Apply the four balldontlie market adjustments in priority order."""
+    league = mk.get("league_implied")
+    for p in players:
+        if p.proj <= 0:
+            continue
+        nm = normalize_name(p.name)
+
+        # 1. Real recent minutes -> out of rotation (most reliable rotation cut).
+        mins = mk["minutes"].get(nm)
+        if mins is not None and mins < 8:
+            p.proj = p.floor = p.ceil = 0.0
+            p.notes.append("bdl: ~0 recent minutes")
+            continue
+
+        # 2. Market vs DFF -> move toward the market on a big disagreement (news).
+        m = mk["market"].get(nm, {})
+        mproj = m.get("proj")
+        if mproj and abs(mproj - p.proj) >= 6 and abs(mproj - p.proj) >= 0.25 * p.proj:
+            delta = mproj - p.proj
+            ratio = (p.ceil / p.proj) if p.proj else 1.45
+            p.proj, p.floor, p.ceil = round(mproj, 1), round(mproj * 0.7, 1), round(mproj * ratio, 1)
+            p.notes.append(f"market {'+' if delta > 0 else ''}{round(delta)}")
+
+        # 3. PRA juiced under -> slight hit, waived for top-10 blocks+steals.
+        if m.get("pra_under") and mk["stocks_rank"].get(nm, 999) > 10:
+            p.proj = round(p.proj * 0.93, 1)
+            p.ceil = round(p.ceil * 0.95, 1)
+            p.notes.append("PRA juiced under")
+
+        # 4. Vegas implied total -> scale the ceiling by the game environment.
+        if league and p.team in mk["implied"]:
+            env = min(max(mk["implied"][p.team] / league, 0.9), 1.12)
+            p.ceil = round(p.ceil * env, 1)
 
 
 def _out_of_rotation(d):
@@ -134,7 +179,7 @@ def build_players_from_dff(dmap):
                    opponent=d["opp"], game=f"{d['team']}@{d['opp']}",
                    is_guard=d["pos"].strip().upper().startswith("G"),
                    avg_points=d["proj"], status=("OUT" if out else ""),
-                   starting="", game_date="")
+                   starting="", game_date=d.get("date", ""))
         if out:
             p.proj = p.floor = p.ceil = 0.0
         else:
@@ -191,6 +236,26 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         source_label = ("dff+ownership" if has_own else "dff") + " · names only (no DK IDs)"
     else:
         return {"error": "Upload a DraftKings salary CSV or a DFF cheatsheet."}
+
+    # Optional balldontlie market layer — real recent minutes, Vegas implied
+    # totals, market-vs-DFF divergence, and the PRA-under-juice haircut. Only
+    # where it adds EV; degrades silently to pure DFF if the key/API is absent.
+    api_key = (options.get("apiKey") or "").strip()
+    if api_key:
+        slate_date = _slate_date(players)
+        try:
+            from bdl import enrich
+            mk = enrich(api_key, players, slate_date, int(slate_date[:4]))
+        except Exception:  # noqa: BLE001
+            mk = {"ok": False}
+        if mk.get("ok"):
+            had_own = "ownership" in source_label
+            _apply_market(players, mk)
+            source_label += " + market"
+            if mk.get("notes"):   # surface any sub-feed that didn't parse
+                source_label += " (" + "; ".join(mk["notes"]) + ")"
+            if not had_own:       # proj changed -> refresh the value-based ownership
+                _estimate_ownership(players)
 
     # Game-theory pool as an OWNERSHIP signal, never a filter — a sharp play
     # outside his pool is rare but real, so nobody is excluded. Cores read as
