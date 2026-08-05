@@ -63,6 +63,9 @@ class Player:
     ceil: float = 0.0
     ownership: float = 0.0   # projected ownership %, 0..100 (GPP leverage)
     core: bool = False       # flagged as a core play in a game-theory pool
+    redis_bump: float = 0.0  # proj added by removal redistribution (excluded
+                             # from the ownership model so our own boost can't
+                             # inflate a replacement's ownership and re-fade it)
     notes: list[str] = field(default_factory=list)
 
     @property

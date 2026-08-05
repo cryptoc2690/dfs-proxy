@@ -189,11 +189,18 @@ def simulate_and_score(cands, pool, *, sims, leverage, seed=0):
             "ceiling": totals[int(sims * 0.85)],
             "p95": totals[int(sims * 0.95)],
         }
-    owns = [c.total_own for c in cands] or [0]
-    lo, hi = min(owns), max(owns)
+    # Leverage on OVER-ownership (ownership per point of ceiling), not raw
+    # ownership. Raw ownership can't tell good chalk (high-owned because it's the
+    # best play — a big ceiling backs it) from overpriced chalk (high-owned with
+    # no ceiling to show for it). Dividing by ceiling fades only the latter, and
+    # stops a cheap, low-owned, low-ceiling body from reading as "leverage" just
+    # because it's unpopular — it's unpopular because it's worse. Differentiation
+    # still comes from the overlap + exposure caps in select_final, not here.
+    effs = [c.total_own / (c.metrics["ceiling"] or 1.0) for c in cands] or [0]
+    lo, hi = min(effs), max(effs)
     span = (hi - lo) or 1.0
-    for c in cands:
-        on = (c.total_own - lo) / span
+    for c, eff in zip(cands, effs):
+        on = (eff - lo) / span
         c.metrics["score"] = c.metrics["ceiling"] * (1 + leverage * (1 - 2 * on))
     cands.sort(key=lambda c: -c.metrics["score"])
 

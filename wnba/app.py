@@ -108,6 +108,7 @@ def _apply_removals(players, remove_names):
             q.proj = round(q.proj + bump, 1)
             q.floor = round(q.floor + bump * 0.7, 1)
             q.ceil = round(q.ceil + bump * 1.1, 1)
+            q.redis_bump += bump   # kept out of the ownership model (see below)
             q.notes.append(f"+{bump:.0f} ({p.name} out)")
     return [p.name for p, _ in removed]
 

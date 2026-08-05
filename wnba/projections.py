@@ -50,11 +50,21 @@ def _estimate_ownership(players: list[Player]) -> None:
     vs ~0.12 for a salary-tier heuristic. Raise value to a power to concentrate
     ownership on the chalk, then normalize so the pool sums to ~600% (six roster
     spots) — giving realistic magnitudes, not just an order.
+
+    Value is computed on the *pre-redistribution* projection: when we boost a
+    teammate because someone's out, that's our edge, and it must NOT loop back
+    into their estimated ownership and get them extra-faded. (The field's real
+    ownership bump from the news is separate from our mechanical boost.)
     """
     playable = [p for p in players if p.proj > 0]
     if not playable:
         return
-    scores = {p.dk_id: max(p.value, 0.1) ** 1.6 for p in playable}
+
+    def _own_value(p):
+        base = max(p.proj - p.redis_bump, 0.0)
+        return base / (p.salary / 1000.0) if p.salary else 0.0
+
+    scores = {p.dk_id: max(_own_value(p), 0.1) ** 1.6 for p in playable}
     total = sum(scores.values()) or 1.0
     for p in players:
         p.ownership = round(scores.get(p.dk_id, 0.0) / total * 600, 1) if p.proj > 0 else 0.0
