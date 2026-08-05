@@ -122,8 +122,8 @@ INDEX_HTML = r"""<!doctype html>
       </div>
       <label>Max exposure — <span id="expv">60</span>%</label>
       <input id="exp" class="slider" type="range" min="10" max="100" value="60">
-      <label>Fade chalk (leverage) — <span id="levv">0.25</span></label>
-      <input id="lev" class="slider" type="range" min="0" max="100" value="25">
+      <label>Fade chalk (leverage) — <span id="levv">0.15</span></label>
+      <input id="lev" class="slider" type="range" min="0" max="100" value="15">
 
       <h2 style="margin-top:22px">3 · balldontlie key <span style="text-transform:none;color:var(--muted)">(optional)</span></h2>
       <input id="key" type="password" placeholder="GOAT API key — stays on your machine">

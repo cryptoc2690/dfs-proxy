@@ -153,8 +153,8 @@ def run_optimize(csv_text: str, options: dict) -> dict:
 
     playable = [p for p in players if p.proj > 0]
     if len(playable) < 6:
-        return {"error": "Not enough playable players after projections. "
-                         "Check the CSV.", "source": getattr(projector, "name", "?")}
+        return {"error": "Not enough playable players (check the CSV, or you "
+                         "faded too many).", "source": source_label_base or "?"}
 
     cores = [p for p in playable if p.core]
     lineups = optimize_gpp(
@@ -164,12 +164,17 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         min_stack=_int(options.get("stack"), 2),
         max_per_team=_int(options.get("maxPerTeam"), 4),
         max_exposure=_float(options.get("maxExposure"), 0.6),
-        leverage=_float(options.get("leverage"), 0.35),
+        leverage=_float(options.get("leverage"), 0.15),
         n_sims=_int(options.get("sims"), 5000),
         cores=cores,
         # No forced count — the data (projection vs. leverage) decides how many
         # cores land in each lineup; exposure caps keep them diversified.
         min_cores=0,
+        # Differentiation: no two of your lineups may share more than this many
+        # players, so the set is unique even when everyone runs the same
+        # projections (WNBA's whole problem). The data still drives which plays;
+        # this just forces the set to spread — including the A'ja on/off split.
+        max_overlap=_int(options.get("maxOverlap"), 4),
     )
 
     if source_label_base:
