@@ -143,32 +143,43 @@ def enrich(api_key, players, slate_date, season):
     team_ids = {t for g in games for t in ((g.get("home_team") or {}).get("id"),
                                            (g.get("visitor_team") or {}).get("id")) if t}
 
-    _implied_totals(c, game_ids, home_away, out)
+    _implied_totals(c, slate_date, home_away, out)
     _recent_minutes_and_stocks(c, team_ids, slate_date, season, out)
     _market_projections(c, game_ids, out)
     return out
 
 
-def _implied_totals(c, game_ids, home_away, out):
+def _implied_totals(c, slate_date, home_away, out):
+    # Game odds are date-based (props are per-game); one call for the slate.
     try:
-        vals = {}
-        for gid in game_ids:
-            rows = c.get("/odds", {"game_id": gid}).get("data", [])
-            row = next((r for r in rows if str(r.get("vendor", "")).lower() == "draftkings"), None) or (rows[0] if rows else None)
-            if not row:
-                continue
-            total = _num(_first(row, "total_value", "total", "over_under", "game_total"))
-            sh = _num(_first(row, "spread_home_value", "spread_home", "home_spread", "spread"))
-            h, a = home_away.get(gid, (None, None))
-            if total is None:
-                continue
-            vals[h] = total / 2 - (sh / 2 if sh is not None else 0)
-            vals[a] = total / 2 + (sh / 2 if sh is not None else 0)
-        if vals:
-            out["implied"] = vals
-            out["league_implied"] = sum(vals.values()) / len(vals)
-    except Exception as e:  # noqa: BLE001
-        out["notes"].append(f"odds skipped: {type(e).__name__}")
+        rows = c.get("/odds", {"dates": [slate_date]}).get("data", [])
+    except Exception:  # noqa: BLE001 — fall back to a bare per-date query
+        try:
+            rows = c.get("/odds", {"date": slate_date}).get("data", [])
+        except Exception as e:  # noqa: BLE001
+            out["notes"].append(f"odds skipped: {type(e).__name__}")
+            return
+    by_game = {}
+    for r in rows:
+        gid = r.get("game_id") or (r.get("game") or {}).get("id")
+        if gid is None:
+            continue
+        if gid not in by_game or str(r.get("vendor", "")).lower() == "draftkings":
+            by_game[gid] = r
+    vals = {}
+    for gid, row in by_game.items():
+        total = _num(_first(row, "total_value", "total", "over_under", "game_total"))
+        sh = _num(_first(row, "spread_home_value", "spread_home", "home_spread", "spread"))
+        h, a = home_away.get(gid, (None, None))
+        if total is None or not h:
+            continue
+        vals[h] = total / 2 - (sh / 2 if sh is not None else 0)
+        vals[a] = total / 2 + (sh / 2 if sh is not None else 0)
+    if vals:
+        out["implied"] = vals
+        out["league_implied"] = sum(vals.values()) / len(vals)
+    elif rows:
+        out["notes"].append("odds: no totals parsed")
 
 
 def _recent_minutes_and_stocks(c, team_ids, slate_date, season, out):
