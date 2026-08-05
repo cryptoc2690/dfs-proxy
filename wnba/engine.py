@@ -61,20 +61,16 @@ def _weighted_pick(cands, rng):
     return cands[-1]
 
 
-def _build_one(pool, max_per_team, rng, cores=None, min_cores=0, locks=None):
-    # Seed the lineup with locks (always in) + the required number of cores,
-    # then fill the rest with a position-aware greedy that always keeps the
-    # G/G/F/F minimums reachable. (Extra cores can still land in the fill.)
-    picked = list(locks or [])
-    picked_ids = {p.dk_id for p in picked}
+def _build_one(pool, max_per_team, rng, cores=None, min_cores=0):
+    # Seed the lineup with the required number of cores, then fill the rest with
+    # a position-aware greedy that always keeps the G/F minimums reachable.
+    # (Extra cores can still land in the fill — min_cores is a floor.)
+    picked = []
     if cores and min_cores > 0:
-        have = sum(1 for c in cores if c.dk_id in picked_ids)
-        avail = [c for c in cores if c.proj > 0 and c.dk_id not in picked_ids]
-        k = min(max(0, min_cores - have), len(avail))
+        avail = [c for c in cores if c.proj > 0]
+        k = min(min_cores, len(avail))
         if k > 0:
-            picked += list(rng.sample(avail, k))
-    if len(picked) > ROSTER_SIZE:
-        return None
+            picked = list(rng.sample(avail, k))
     used = {p.dk_id for p in picked}
     salary = sum(p.salary for p in picked)
     team_count = {}
@@ -126,13 +122,13 @@ def _has_stack(players, stack):
 
 
 def build_candidates(pool, count, *, stack, max_per_team, seed=0,
-                     cores=None, min_cores=0, locks=None):
+                     cores=None, min_cores=0):
     rng = random.Random(seed)
     out, seen = [], set()
     tries = 0
     while len(out) < count and tries < count * 15:
         tries += 1
-        lu = _build_one(pool, max_per_team, rng, cores, min_cores, locks)
+        lu = _build_one(pool, max_per_team, rng, cores, min_cores)
         if not lu:
             continue
         if stack > 1 and not _has_stack(lu, stack):
@@ -202,19 +198,17 @@ def simulate_and_score(cands, pool, *, sims, leverage, seed=0):
     cands.sort(key=lambda c: -c.metrics["score"])
 
 
-def select_final(cands, n, max_exposure, max_overlap=4, lock_ids=None):
+def select_final(cands, n, max_exposure, max_overlap=4):
     """Pick the final N, best-first, under a per-player exposure cap AND a
     pairwise-overlap cap so the set is genuinely differentiated (WNBA's whole
-    game once everyone shares the same projections). Locked players are ignored
-    when measuring overlap, so intentional locks don't count against uniqueness.
-    Backfills if the constraints starve the set, so we always return N."""
-    lock_ids = lock_ids or set()
+    game once everyone shares the same projections). Backfills if the
+    constraints starve the set, so we always return N."""
     cap = max(1, round(max_exposure * n))
     counts, final, final_sets = {}, [], []
 
     def add(c):
         final.append(c)
-        final_sets.append(set(c.ids()) - lock_ids)
+        final_sets.append(set(c.ids()))
         for i in c.ids():
             counts[i] = counts.get(i, 0) + 1
 
@@ -226,8 +220,7 @@ def select_final(cands, n, max_exposure, max_overlap=4, lock_ids=None):
             break
         if not exposure_ok(c):
             continue
-        free = set(c.ids()) - lock_ids
-        if any(len(free & s) > max_overlap for s in final_sets):
+        if any(len(set(c.ids()) & s) > max_overlap for s in final_sets):
             continue
         add(c)
     for c in cands:  # relax overlap, keep exposure
@@ -246,29 +239,21 @@ def select_final(cands, n, max_exposure, max_overlap=4, lock_ids=None):
 # ---------------- public API ----------------
 def build_gpp(players, *, n=20, pool_size=None, min_stack=2, max_per_team=4,
               max_exposure=0.6, leverage=0.35, n_sims=5000, seed=0,
-              cores=None, min_cores=0, locks=None, fades=None, max_overlap=4):
-    fade_ids = {p.dk_id for p in (fades or [])}
-    pool = [p for p in players if p.proj > 0 and p.dk_id not in fade_ids]
+              cores=None, min_cores=0, max_overlap=4):
+    pool = [p for p in players if p.proj > 0]
     if len(pool) < ROSTER_SIZE:
         return []
     pool = _viable_pool(pool, n)
-    locks = [p for p in (locks or []) if p.proj > 0 and p.dk_id not in fade_ids]
-    lock_ids = {p.dk_id for p in locks}
-    pool_ids = {p.dk_id for p in pool}
-    for lk in locks:  # a lock is intentional — keep it even if anti-punt cut it
-        if lk.dk_id not in pool_ids:
-            pool.append(lk)
-    cores = [c for c in (cores or []) if c.proj > 0 and c.dk_id not in fade_ids]
+    cores = [c for c in (cores or []) if c.proj > 0]
     pool_size = pool_size or max(120, n * 8)
-    kw = dict(max_per_team=max_per_team, seed=seed, cores=cores,
-              min_cores=min_cores, locks=locks)
+    kw = dict(max_per_team=max_per_team, seed=seed, cores=cores, min_cores=min_cores)
     cands = build_candidates(pool, pool_size, stack=min_stack, **kw)
     if not cands:  # relax the stack requirement rather than return nothing
         cands = build_candidates(pool, pool_size, stack=1, **kw)
     if not cands:
         return []
     simulate_and_score(cands, pool, sims=n_sims, leverage=leverage, seed=seed)
-    return select_final(cands, n, max_exposure, max_overlap, lock_ids)
+    return select_final(cands, n, max_exposure, max_overlap)
 
 
 def _viable_pool(pool, n):
@@ -294,7 +279,7 @@ def _viable_pool(pool, n):
 
 
 def _can_field(pool):
-    """Cheapest legal roster (2G/2F + 2 flex) fits under the cap?"""
+    """Cheapest legal roster (2 G + 3 F + 1 flex) fits under the cap?"""
     g = sorted((p.salary for p in pool if p.is_guard))
     f = sorted((p.salary for p in pool if not p.is_guard))
     if len(g) < MIN_GUARDS or len(f) < MIN_FORWARDS:
@@ -302,12 +287,3 @@ def _can_field(pool):
     rest = sorted(g[MIN_GUARDS:] + f[MIN_FORWARDS:])
     need = g[:MIN_GUARDS] + f[:MIN_FORWARDS] + rest[:ROSTER_SIZE - MIN_GUARDS - MIN_FORWARDS]
     return len(need) == ROSTER_SIZE and sum(need) <= SALARY_CAP
-
-
-def build_cash(players):
-    """Simple max-projection valid lineup (kept for completeness)."""
-    pool = [p for p in players if p.proj > 0]
-    best = build_candidates(pool, 300, stack=1, max_per_team=6, seed=1)
-    if not best:
-        return None
-    return max(best, key=lambda l: l.proj)

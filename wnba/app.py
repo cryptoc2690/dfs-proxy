@@ -1,15 +1,10 @@
 """Local WNBA DFS optimizer — a self-contained web app.
 
-Run it, open the browser, drag in your DraftKings CSV, get lineups. No cloud,
-no base44, no Vercel. The balldontlie calls happen here in the server process,
-so there's no CORS problem and your API key never leaves your machine.
+Run it, open the browser, drop in a DFF cheatsheet (and optionally the DK
+salary CSV for player IDs), get lineups. Pure standard library — nothing to
+install, no cloud, no API keys.
 
-    pip install -r requirements.txt
     python app.py                 # opens http://localhost:8000
-
-Set BALLDONTLIE_API_KEY in your environment (or paste it into the GUI once)
-to get live props-based projections; without it the app still works off the
-CSV's own averages.
 """
 
 from __future__ import annotations
@@ -21,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from dk import load_players_from_text, normalize_name
 from engine import build_gpp as optimize_gpp
-from projections import _estimate_ownership, make_projector
+from projections import CsvProjector, _estimate_ownership
 
 
 def _f(v):
@@ -83,11 +78,11 @@ def _dff_range(proj, l5, l10, szn):
 
 
 def _out_of_rotation(d):
-    """0 fantasy over the last 5 games (and ~none over the last 10) means the
-    player isn't in the rotation right now, no matter what a stale season
-    average says. Exclude them — unless the projection itself is high enough
-    (>=15) that the source clearly expects a return-to-role tonight."""
-    return d.get("l5", 0) == 0 and d.get("l10", 0) <= 3 and d.get("proj", 0) < 15
+    """Barely any production over the last 5 games (and little over the last 10)
+    means the player isn't really in the rotation right now, no matter what a
+    stale season average says. Exclude them — unless the projection itself is
+    high enough (>=15) that the source clearly expects a return-to-role."""
+    return d.get("l5", 0) <= 3 and d.get("l10", 0) <= 5 and d.get("proj", 0) < 15
 
 
 def apply_dff(players, text):
@@ -179,64 +174,23 @@ PORT = int(os.environ.get("PORT", "8000"))
 
 def run_optimize(csv_text: str, options: dict) -> dict:
     """Project + build lineups, returning plain dicts for the GUI."""
-    api_key = (options.get("apiKey") or "").strip()
-    if api_key:
-        os.environ["BALLDONTLIE_API_KEY"] = api_key
-    source = options.get("source") or "auto"
-    season = _int(options.get("season"), None)
-
     csv_text = (csv_text or "").strip()
     dff_text = options.get("dff", "") or ""
-    projector = None
     if csv_text:  # DK file is the pool + IDs; DFF (if given) overlays projections
         players = load_players_from_text(csv_text)
         dff_label = apply_dff(players, dff_text) if dff_text.strip() else None
-        if dff_label:
-            source_label_base = dff_label
-        else:
-            projector = make_projector(source, season=season)
-            projector.project(players)
-            source_label_base = None  # computed below from notes
+        source_label = dff_label or "csv-only"
+        if not dff_label:
+            CsvProjector().project(players)
     elif dff_text.strip():  # DFF-only — build the pool from the cheatsheet
         dmap = parse_dff(dff_text)
         if not dmap:
             return {"error": "Couldn't read that DFF cheatsheet."}
         players = build_players_from_dff(dmap)
         has_own = any(d["own"] > 0 for d in dmap.values())
-        source_label_base = ("dff+ownership" if has_own else "dff") + " · names only (no DK IDs)"
+        source_label = ("dff+ownership" if has_own else "dff") + " · names only (no DK IDs)"
     else:
         return {"error": "Upload a DraftKings salary CSV or a DFF cheatsheet."}
-
-    # --- Market lines: sportsbook props price in same-day news (minutes caps,
-    # trades, roles) that season/recent averages miss. Flag players whose market
-    # projection meaningfully differs from the base ("expected"), apply the
-    # market number by default (auto-account), and let the user reject specific
-    # ones to revert that player to expected.
-    adjustments = []
-    if _truthy(options.get("market")) and api_key:
-        try:
-            from bdl import market_projections
-            mkt = market_projections(api_key, players)
-        except Exception:  # noqa: BLE001
-            mkt = {}
-        reject = _parse_names(options.get("rejectMarket"))
-        for p in players:
-            if p.proj <= 0:
-                continue
-            m = mkt.get(normalize_name(p.name))
-            if m is None:
-                continue
-            exp = p.proj
-            delta = round(m - exp, 1)
-            if abs(delta) >= 5 and abs(delta) >= 0.2 * exp:
-                rejected = normalize_name(p.name) in reject
-                adjustments.append({"name": p.name, "expected": round(exp, 1),
-                                    "market": round(m, 1), "delta": delta,
-                                    "rejected": rejected})
-                if not rejected:
-                    ratio = (p.ceil / exp) if exp > 0 else 1.45
-                    p.proj, p.floor, p.ceil = round(m, 1), round(m * 0.7, 1), round(m * ratio, 1)
-                    p.notes.append(f"market {'+' if delta >= 0 else ''}{delta:g}")
 
     # Game-theory pool as an OWNERSHIP signal, never a filter — a sharp play
     # outside his pool is rare but real, so nobody is excluded. Cores read as
@@ -265,8 +219,8 @@ def run_optimize(csv_text: str, options: dict) -> dict:
 
     playable = [p for p in players if p.proj > 0]
     if len(playable) < 6:
-        return {"error": "Not enough playable players (check the CSV, or you "
-                         "faded too many).", "source": source_label_base or "?"}
+        return {"error": "Not enough playable players — check the file.",
+                "source": source_label}
 
     cores = [p for p in playable if p.core]
     lineups = optimize_gpp(
@@ -289,19 +243,8 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         max_overlap=_int(options.get("maxOverlap"), 4),
     )
 
-    if source_label_base:
-        source_label = source_label_base
-    else:
-        csv_fallback = any("csv fallback" in n or "no BALLDONTLIE_API_KEY" in n
-                           for p in players for n in p.notes)
-        props_used = any("market props" in n for p in players for n in p.notes)
-        source_label = ("props-first" if props_used else
-                        "csv-only" if csv_fallback else
-                        getattr(projector, "name", "?"))
-
     return {
         "source": source_label,
-        "adjustments": adjustments,
         "slate": {
             "date": next((p.game_date for p in players if p.game_date), ""),
             "games": sorted({p.game for p in players if p.game}),
@@ -350,14 +293,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, json.dumps({"error": "not found"}))
 
     def do_POST(self):
-        if self.path not in ("/api/optimize", "/api/check"):
+        if self.path != "/api/optimize":
             return self._send(404, json.dumps({"error": "not found"}))
         try:
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length) or b"{}")
-            if self.path == "/api/check":
-                from bdl import check_key
-                return self._send(200, json.dumps(check_key(payload.get("apiKey", ""))))
             opts = payload.get("options", {})
             csv_text = payload.get("csv") or ""
             if not csv_text.strip() and not (opts.get("dff") or "").strip():
@@ -373,9 +313,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     url = f"http://localhost:{PORT}"
-    key = "set" if os.environ.get("BALLDONTLIE_API_KEY") else "not set (CSV-only until you add it)"
     print(f"\n  WNBA DFS optimizer running at  {url}")
-    print(f"  BALLDONTLIE_API_KEY: {key}")
     print("  Press Ctrl+C to stop.\n")
     try:
         webbrowser.open(url)
@@ -399,10 +337,6 @@ def _float(v, default):
         return float(v)
     except (TypeError, ValueError):
         return default
-
-
-def _truthy(v):
-    return str(v).strip().lower() in ("1", "true", "yes", "on")
 
 
 # The GUI is defined in gui.py to keep this file focused on the server.
