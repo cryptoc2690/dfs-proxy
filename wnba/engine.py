@@ -251,15 +251,7 @@ def build_gpp(players, *, n=20, pool_size=None, min_stack=2, max_per_team=4,
     pool = [p for p in players if p.proj > 0 and p.dk_id not in fade_ids]
     if len(pool) < ROSTER_SIZE:
         return []
-    # Anti-punt: drop clear sub-replacement plays so lineups stop wasting a
-    # slot on a projected zero (backtested: best lineup top 31% -> top ~11%).
-    # Floor is relative to the slate (35% of the median playable projection),
-    # but never so aggressive that we can't field a legal, affordable lineup.
-    med = sorted(p.proj for p in pool)[len(pool) // 2]
-    floor = max(5.0, 0.35 * med)
-    strong = [p for p in pool if p.proj >= floor]
-    if len(strong) >= 14 and _can_field(strong):
-        pool = strong
+    pool = _viable_pool(pool, n)
     locks = [p for p in (locks or []) if p.proj > 0 and p.dk_id not in fade_ids]
     lock_ids = {p.dk_id for p in locks}
     pool_ids = {p.dk_id for p in pool}
@@ -277,6 +269,28 @@ def build_gpp(players, *, n=20, pool_size=None, min_stack=2, max_per_team=4,
         return []
     simulate_and_score(cands, pool, sims=n_sims, leverage=leverage, seed=seed)
     return select_final(cands, n, max_exposure, max_overlap, lock_ids)
+
+
+def _viable_pool(pool, n):
+    """Dynamic 'no minutes-punts' filter, fully slate-driven.
+
+    Winning WNBA lineups need every slot to have a real path to a useful score,
+    so we keep players by UPSIDE (ceiling), not median — a cheap starter with a
+    24-ceiling stays; a low-minutes body with a 9-ceiling is cut. The cutoff is
+    dynamic: we keep the top slice of the pool by ceiling, and the slice gets
+    DEEPER on bigger slates (more games -> more players -> the bar naturally
+    rises because the slice is a fraction of a larger pool). On a thin slate the
+    slice is small, so a marginal value play survives only if the slate is
+    genuinely that shallow. Finally we guarantee a legal, affordable lineup
+    still fits — expanding the pool just enough if the top slice can't.
+    """
+    by_ceil = sorted(pool, key=lambda p: -p.ceil)
+    depth = min(len(by_ceil), max(18, round(len(by_ceil) * 0.6)))
+    kept = by_ceil[:depth]
+    while not _can_field(kept) and depth < len(by_ceil):
+        depth += 1
+        kept = by_ceil[:depth]
+    return kept
 
 
 def _can_field(pool):

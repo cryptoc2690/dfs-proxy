@@ -71,14 +71,15 @@ def parse_dff(text):
 
 
 def _dff_range(proj, l5, l10, szn):
-    """Floor/ceiling from a player's demonstrated recent range, not a flat band —
-    so boom players (recent games above projection, e.g. triple-double threats)
-    get the fatter ceiling they deserve, and steady players get a tighter one."""
-    vals = [v for v in (l5, l10, szn, proj) if v > 0] or [proj]
-    hi, lo = max(vals), min(vals)
-    ceil = round(max(proj * 1.4, hi * 1.18), 1)
-    floor = round(min(proj * 0.72, lo * 0.85), 1)
-    return floor, ceil
+    """Floor/ceiling anchored to the PROJECTION (which already reflects current
+    minutes/role), with a modest boom bump for players whose RECENT form is
+    trending above their projection. Deliberately ignores the season average for
+    upside — a stale high season number (role since collapsed) must NOT invent a
+    ceiling, or low-minutes punts sneak in. So ceiling stays ~1.4x-1.6x of a
+    real projection, never divorced from it."""
+    recent = max([v for v in (l5, l10) if v > 0] or [proj])
+    boom = 1.4 + 0.2 * max(0.0, min(1.0, recent / proj - 1)) if proj > 0 else 1.4
+    return round(proj * 0.70, 1), round(proj * boom, 1)
 
 
 def apply_dff(players, text):
