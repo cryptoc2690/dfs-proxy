@@ -224,6 +224,15 @@ def build_gpp(players, *, n=20, pool_size=None, min_stack=2, max_per_team=4,
     pool = [p for p in players if p.proj > 0]
     if len(pool) < ROSTER_SIZE:
         return []
+    # Anti-punt: drop clear sub-replacement plays so lineups stop wasting a
+    # slot on a projected zero (backtested: best lineup top 31% -> top 7%).
+    # Floor is relative to the slate (35% of the median playable projection),
+    # but never so aggressive that we can't field a legal, affordable lineup.
+    med = sorted(p.proj for p in pool)[len(pool) // 2]
+    floor = max(5.0, 0.35 * med)
+    strong = [p for p in pool if p.proj >= floor]
+    if len(strong) >= 14 and _can_field(strong):
+        pool = strong
     cores = [c for c in (cores or []) if c.proj > 0]
     pool_size = pool_size or max(120, n * 8)
     cands = build_candidates(pool, pool_size, stack=min_stack,
@@ -238,6 +247,17 @@ def build_gpp(players, *, n=20, pool_size=None, min_stack=2, max_per_team=4,
         return []
     simulate_and_score(cands, pool, sims=n_sims, leverage=leverage, seed=seed)
     return select_final(cands, n, max_exposure)
+
+
+def _can_field(pool):
+    """Cheapest legal roster (2G/2F + 2 flex) fits under the cap?"""
+    g = sorted((p.salary for p in pool if p.is_guard))
+    f = sorted((p.salary for p in pool if not p.is_guard))
+    if len(g) < MIN_GUARDS or len(f) < MIN_FORWARDS:
+        return False
+    rest = sorted(g[MIN_GUARDS:] + f[MIN_FORWARDS:])
+    need = g[:MIN_GUARDS] + f[:MIN_FORWARDS] + rest[:ROSTER_SIZE - MIN_GUARDS - MIN_FORWARDS]
+    return len(need) == ROSTER_SIZE and sum(need) <= SALARY_CAP
 
 
 def build_cash(players):

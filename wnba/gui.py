@@ -109,6 +109,11 @@ INDEX_HTML = r"""<!doctype html>
         <small>or click to choose a file</small>
         <input id="file" type="file" accept=".csv" hidden>
       </div>
+      <div id="dffdrop" class="drop" style="margin-top:10px;padding:16px">
+        <b>+ DFF cheatsheet</b>
+        <small>optional — best projections (no key needed)</small>
+        <input id="dfffile" type="file" accept=".csv" hidden>
+      </div>
 
       <h2 style="margin-top:22px">2 · Settings</h2>
       <div class="row">
@@ -117,8 +122,8 @@ INDEX_HTML = r"""<!doctype html>
       </div>
       <label>Max exposure — <span id="expv">60</span>%</label>
       <input id="exp" class="slider" type="range" min="10" max="100" value="60">
-      <label>Fade chalk (leverage) — <span id="levv">0.35</span></label>
-      <input id="lev" class="slider" type="range" min="0" max="100" value="35">
+      <label>Fade chalk (leverage) — <span id="levv">0.25</span></label>
+      <input id="lev" class="slider" type="range" min="0" max="100" value="25">
 
       <h2 style="margin-top:22px">3 · balldontlie key <span style="text-transform:none;color:var(--muted)">(optional)</span></h2>
       <input id="key" type="password" placeholder="GOAT API key — stays on your machine">
@@ -163,7 +168,7 @@ INDEX_HTML = r"""<!doctype html>
 </main>
 <script>
 const $ = s => document.querySelector(s);
-let csvText = null, lastResult = null, playerNames = [], selectedCores = [];
+let csvText = null, lastResult = null, playerNames = [], selectedCores = [], dffText = '';
 
 // persist key locally
 $('#key').value = localStorage.getItem('bdlKey') || '';
@@ -214,6 +219,18 @@ function parseNames(text){
 }
 function csvSplit(line){ const out=[]; let cur='',q=false; for(const ch of line){ if(ch==='"')q=!q; else if(ch===','&&!q){out.push(cur);cur='';} else cur+=ch; } out.push(cur); return out; }
 
+// ---- DFF cheatsheet drop ----
+const dffdrop = $('#dffdrop'), dfffile = $('#dfffile');
+dffdrop.addEventListener('click', () => dfffile.click());
+dfffile.addEventListener('change', e => loadDff(e.target.files[0]));
+['dragover','dragenter'].forEach(ev => dffdrop.addEventListener(ev, e => {e.preventDefault();dffdrop.classList.add('over')}));
+['dragleave','drop'].forEach(ev => dffdrop.addEventListener(ev, e => {e.preventDefault();dffdrop.classList.remove('over')}));
+dffdrop.addEventListener('drop', e => loadDff(e.dataTransfer.files[0]));
+function loadDff(f){ if(!f) return; const r=new FileReader();
+  r.onload=()=>{ dffText=r.result; dffdrop.classList.add('loaded');
+    dffdrop.innerHTML='<b>✓ '+f.name+'</b><small>DFF projections loaded</small>'; };
+  r.readAsText(f); }
+
 // ---- core type-ahead ----
 const corein = $('#corein'), coredrop = $('#coredrop'); let activeIdx = -1;
 corein.addEventListener('input', showMatches);
@@ -257,7 +274,7 @@ async function run(){
     n:+$('#n').value, stack:+$('#stack').value,
     maxExposure:(+$('#exp').value)/100, leverage:(+$('#lev').value)/100,
     apiKey:$('#key').value.trim(),
-    cores:selectedCores.join('\n'), pool:$('#poollist').value,
+    cores:selectedCores.join('\n'), pool:$('#poollist').value, dff:dffText,
   };
   try{
     const res = await fetch('/api/optimize', {method:'POST',headers:{'Content-Type':'application/json'},

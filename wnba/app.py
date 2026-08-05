@@ -21,7 +21,78 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from dk import load_players_from_text, normalize_name
 from engine import build_gpp as optimize_gpp
-from projections import make_projector
+from projections import _estimate_ownership, make_projector
+
+
+def _f(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def parse_dff(text):
+    """Parse a DailyFantasyFuel cheatsheet -> {norm_name: {proj, own, inj}}.
+
+    Handles two shapes: a well-formed export (row width == header, read by
+    column name) and the column-shifted export this project was tested against
+    (missing the injury_status field, so everything after position_alt slides
+    left) — detected by row width and read positionally.
+    """
+    import csv as _csv
+    import io
+    rows = list(_csv.reader(io.StringIO((text or "").lstrip("﻿"))))
+    if len(rows) < 2:
+        return {}
+    header = [h.strip() for h in rows[0]]
+    out = {}
+    for r in rows[1:]:
+        if len(r) == len(header) and "ppg_projection" in header:
+            d = dict(zip(header, r))
+            name = f"{d.get('first_name','')} {d.get('last_name','')}"
+            proj, own = _f(d.get("ppg_projection")), _f(d.get("ownership_projection"))
+            inj = (d.get("injury_status") or d.get("position_alt") or "").strip()
+        elif len(r) >= 18:  # column-shifted: fields read by position
+            name, inj = f"{r[0]} {r[1]}", r[3].strip()
+            proj, own = _f(r[16]), 0.0
+        else:
+            continue
+        nm = normalize_name(name)
+        if nm:
+            out[nm] = {"proj": proj, "own": own, "inj": inj}
+    return out
+
+
+def apply_dff(players, text):
+    """Project from a DFF cheatsheet. Returns a source label."""
+    dmap = parse_dff(text)
+    if not dmap:
+        return None
+    real_own = any(d["own"] > 0 for d in dmap.values())
+    for p in players:
+        d = dmap.get(normalize_name(p.name))
+        if not d:
+            p.proj = p.avg_points
+            p.floor, p.ceil = round(p.avg_points * 0.72, 1), round(p.avg_points * 1.4, 1)
+            p.notes.append("no DFF match — DK avg")
+            continue
+        if str(d["inj"]).upper() in ("O", "OUT"):
+            p.status = "OUT"
+            p.proj = p.floor = p.ceil = 0.0
+            p.notes.append("OUT — excluded")
+            continue
+        p.proj = round(d["proj"], 1)
+        p.floor, p.ceil = round(d["proj"] * 0.72, 1), round(d["proj"] * 1.4, 1)
+        p.notes.append("DFF projection")
+        if real_own and d["own"] > 0:
+            p.ownership = d["own"]
+    if real_own:
+        for p in players:
+            if p.proj > 0 and p.ownership == 0:
+                p.ownership = 8.0
+        return "dff+ownership"
+    _estimate_ownership(players)
+    return "dff"
 
 
 def _parse_names(text):
@@ -46,8 +117,14 @@ def run_optimize(csv_text: str, options: dict) -> dict:
     source = options.get("source") or "auto"
     season = _int(options.get("season"), None)
 
-    projector = make_projector(source, season=season)
-    players = projector.project(load_players_from_text(csv_text))
+    players = load_players_from_text(csv_text)
+    dff_label = apply_dff(players, options.get("dff", "")) if options.get("dff") else None
+    if dff_label:
+        source_label_base = dff_label
+    else:
+        projector = make_projector(source, season=season)
+        projector.project(players)
+        source_label_base = None  # computed below from notes
 
     # Game-theory pool as an OWNERSHIP signal, never a filter — a sharp play
     # outside his pool is rare but real, so nobody is excluded. Cores read as
@@ -95,12 +172,15 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         min_cores=0,
     )
 
-    csv_fallback = any("csv fallback" in n or "no BALLDONTLIE_API_KEY" in n
-                       for p in players for n in p.notes)
-    props_used = any("market props" in n for p in players for n in p.notes)
-    source_label = ("props-first" if props_used else
-                    "csv-only" if csv_fallback else
-                    getattr(projector, "name", "?"))
+    if source_label_base:
+        source_label = source_label_base
+    else:
+        csv_fallback = any("csv fallback" in n or "no BALLDONTLIE_API_KEY" in n
+                           for p in players for n in p.notes)
+        props_used = any("market props" in n for p in players for n in p.notes)
+        source_label = ("props-first" if props_used else
+                        "csv-only" if csv_fallback else
+                        getattr(projector, "name", "?"))
 
     return {
         "source": source_label,
