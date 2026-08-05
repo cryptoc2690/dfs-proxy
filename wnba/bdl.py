@@ -1,11 +1,10 @@
 """balldontlie WNBA API client + live projection enrichment.
 
-Endpoints confirmed against the official balldontlie MCP source
-(base https://api.balldontlie.io, prefix /wnba/v1). WNBA has NO odds and
-NO player-props endpoints and NO confirmed-lineups feed, so projections are
-built from box scores + advanced stats + injuries + team pace, and "who
-plays / how many minutes" is inferred from recent minutes and injury status
-rather than read from a lineup card.
+Base https://api.balldontlie.io, prefix /wnba/v1. Projections are props-first
+(player-props points/reb/ast/threes), with game odds for implied totals and
+box scores + advanced stats + injuries + pace as the fallback. There is no
+confirmed-lineups feed, so "who plays / how many minutes" is inferred from
+recent minutes and injury status.
 
 Requires BALLDONTLIE_API_KEY (GOAT tier). If the key is missing or the API
 errors, BalldontlieProjector falls back cleanly to the CSV projection.
@@ -13,8 +12,11 @@ errors, BalldontlieProjector falls back cleanly to the CSV projection.
 
 from __future__ import annotations
 
+import json
 import os
+import ssl
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections import defaultdict
@@ -24,11 +26,23 @@ from dk import Player, fantasy_points, normalize_name
 BASE = "https://api.balldontlie.io/wnba/v1"
 
 
+class BDLError(RuntimeError):
+    pass
+
+
 class BDLClient:
-    def __init__(self, api_key: str, *, timeout: int = 30, max_retries: int = 4):
-        self.api_key = api_key
+    def __init__(self, api_key: str, *, timeout: int = 20, max_retries: int = 3):
+        self.api_key = (api_key or "").strip()
         self.timeout = timeout
         self.max_retries = max_retries
+        # macOS python.org builds often ship without a usable cert store, which
+        # makes urllib fail HTTPS verification. Try a verified context first and
+        # fall back to unverified (local tool, user's own key, known host).
+        try:
+            self._ctx = ssl.create_default_context()
+        except Exception:  # noqa: BLE001
+            self._ctx = None
+        self.insecure = False
 
     def _get(self, path: str, params: dict | None = None) -> dict:
         qs = ""
@@ -44,18 +58,42 @@ class BDLClient:
                     parts.append(f"{urllib.parse.quote(str(k))}={urllib.parse.quote(str(v))}")
             qs = "?" + "&".join(parts)
         url = f"{BASE}{path}{qs}"
-        req = urllib.request.Request(url, headers={"Authorization": self.api_key})
         last_err = None
         for attempt in range(self.max_retries):
             try:
-                with urllib.request.urlopen(req, timeout=self.timeout) as r:
-                    import json
+                req = urllib.request.Request(url, headers={"Authorization": self.api_key})
+                with urllib.request.urlopen(req, timeout=self.timeout, context=self._ctx) as r:
                     return json.loads(r.read().decode())
-            except Exception as e:  # noqa: BLE001 — retry on any transient error
-                last_err = e
-                # 429 / transient: exponential backoff.
-                time.sleep(2 ** attempt)
-        raise RuntimeError(f"BDL request failed: {url}: {last_err}")
+            except urllib.error.HTTPError as e:
+                body = ""
+                try:
+                    body = e.read().decode()[:180]
+                except Exception:  # noqa: BLE001
+                    pass
+                if e.code in (401, 403):
+                    raise BDLError(f"Auth failed (HTTP {e.code}). The API key was "
+                                   f"rejected or your plan doesn't include WNBA. {body}")
+                if e.code == 404:
+                    raise BDLError(f"Endpoint not found (404): {path}")
+                last_err = BDLError(f"HTTP {e.code} {e.reason} {body}".strip())
+                if e.code == 429:  # rate limited — back off and retry
+                    time.sleep(min(2 ** attempt, 5))
+                    continue
+                break
+            except ssl.SSLCertVerificationError:
+                # Retry unverified once (macOS missing certs).
+                if not self.insecure:
+                    self._ctx = ssl._create_unverified_context()
+                    self.insecure = True
+                    continue
+                last_err = BDLError("SSL certificate verification failed even after "
+                                    "fallback.")
+                break
+            except Exception as e:  # noqa: BLE001
+                # Include the type name — some errors (timeouts) have blank str().
+                last_err = BDLError(f"{type(e).__name__}: {e}".strip())
+                time.sleep(min(2 ** attempt, 4))
+        raise last_err or BDLError(f"request failed: {url}")
 
     def paginate(self, path: str, params: dict, *, cap: int = 2000) -> list[dict]:
         """Follow cursor pagination, accumulating up to `cap` rows."""
@@ -506,3 +544,26 @@ def _mode_date(players: list[Player]) -> str:
         from datetime import date
         return date.today().isoformat()
     return max(set(dates), key=dates.count)
+
+
+def check_key(api_key: str) -> dict:
+    """Quick liveness check for the GUI's 'Test key' button. One light call to
+    /wnba/v1/teams. Returns {ok, message, insecure, games_today?}."""
+    api_key = (api_key or "").strip()
+    if not api_key:
+        return {"ok": False, "message": "No API key entered."}
+    try:
+        client = BDLClient(api_key, timeout=15, max_retries=2)
+        teams = client._get("/teams", {"per_page": 1})
+        n = len((teams or {}).get("data", []))
+        if n == 0:
+            return {"ok": False, "message": "Key accepted but no WNBA teams "
+                    "returned — check that your plan includes the WNBA."}
+        msg = "Key works — WNBA access confirmed."
+        if client.insecure:
+            msg += " (Using an unverified HTTPS connection because macOS is " \
+                   "missing certificates — fine for use; run the Python " \
+                   "'Install Certificates.command' to silence this.)"
+        return {"ok": True, "message": msg, "insecure": client.insecure}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "message": str(e)}

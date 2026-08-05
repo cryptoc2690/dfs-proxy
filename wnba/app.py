@@ -109,11 +109,14 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, json.dumps({"error": "not found"}))
 
     def do_POST(self):
-        if self.path != "/api/optimize":
+        if self.path not in ("/api/optimize", "/api/check"):
             return self._send(404, json.dumps({"error": "not found"}))
         try:
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length) or b"{}")
+            if self.path == "/api/check":
+                from bdl import check_key
+                return self._send(200, json.dumps(check_key(payload.get("apiKey", ""))))
             csv_text = payload.get("csv") or ""
             if not csv_text.strip():
                 return self._send(400, json.dumps({"error": "No CSV provided."}))

@@ -44,6 +44,8 @@ INDEX_HTML = r"""<!doctype html>
   .btn:hover{filter:brightness(1.08)}.btn:disabled{opacity:.55;cursor:not-allowed}
   .btn.ghost{background:var(--chip);color:var(--text);border:1px solid var(--line)}
   .hint{color:var(--muted);font-size:12px;margin-top:8px}
+  .keystat{font-size:13px}
+  .keystat.ok{color:var(--good)}.keystat.bad{color:var(--accent)}.keystat.wait{color:var(--muted)}
   .badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:600}
   .badge.props{background:rgba(57,217,138,.15);color:var(--good)}
   .badge.csv{background:rgba(255,90,60,.15);color:var(--accent)}
@@ -106,6 +108,10 @@ INDEX_HTML = r"""<!doctype html>
 
       <h2 style="margin-top:22px">3 · balldontlie key <span style="text-transform:none;color:var(--muted)">(optional)</span></h2>
       <input id="key" type="password" placeholder="GOAT API key — stays on your machine">
+      <div style="display:flex;gap:10px;align-items:center;margin-top:8px">
+        <button id="testkey" class="btn ghost" style="width:auto;margin:0;padding:8px 14px">Test key</button>
+        <span id="keystat" class="keystat"></span>
+      </div>
       <div class="hint">Enables live player-prop projections. Without it, the app
         projects from the CSV's own averages. Saved in this browser only.</div>
 
@@ -135,6 +141,20 @@ let csvText = null, lastResult = null;
 // persist key locally
 $('#key').value = localStorage.getItem('bdlKey') || '';
 $('#key').addEventListener('input', e => localStorage.setItem('bdlKey', e.target.value));
+
+// test the API key -> green light or the real reason
+$('#testkey').addEventListener('click', async () => {
+  const stat = $('#keystat'); const key = $('#key').value.trim();
+  if(!key){ stat.className='keystat bad'; stat.textContent='Enter a key first.'; return; }
+  stat.className='keystat wait'; stat.innerHTML='<span class="spin"></span>Checking…';
+  try{
+    const r = await fetch('/api/check', {method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({apiKey:key})});
+    const d = await r.json();
+    stat.className = 'keystat ' + (d.ok?'ok':'bad');
+    stat.textContent = (d.ok?'✓ ':'✗ ') + d.message;
+  }catch(e){ stat.className='keystat bad'; stat.textContent='✗ '+e.message; }
+});
 
 $('#exp').addEventListener('input', e => $('#expv').textContent = e.target.value);
 $('#lev').addEventListener('input', e => $('#levv').textContent = (e.target.value/100).toFixed(2));
