@@ -6,21 +6,29 @@ DraftKings-ready download. No cloud, no base44, no Vercel — the balldontlie
 calls happen inside the app (server-side), so there's no CORS and your API key
 never leaves your machine.
 
-## Quick start
+## Easiest: double-click (Mac)
+
+1. Download this repo (GitHub → green **Code** button → **Download ZIP**) and
+   unzip it.
+2. **Double-click `WNBA-Optimizer.command`.** The first time, right-click it →
+   **Open** (macOS asks once about running a downloaded script). If Python
+   isn't installed it opens the installer page — install the `.pkg`, then
+   double-click again.
+3. Your browser opens the app. Drop `DKSalaries.csv`, set your number of
+   lineups, hit **Generate lineups**, then **Download DraftKings CSV**.
+
+Paste your balldontlie GOAT key into the field in the app (stored in your
+browser only) to get live props-based projections. There is **nothing to
+`pip install`** — it runs on a stock Python 3.8+.
+
+## Or from a terminal
 
 ```bash
 cd wnba
-pip install -r requirements.txt
-export BALLDONTLIE_API_KEY=your_goat_key   # optional; enables live props
-python app.py                              # opens http://localhost:8000
+python3 app.py            # opens http://localhost:8000
+# headless, no GUI:
+python3 optimizer.py --csv DKSalaries.csv --mode gpp --n 12 --out lineups.csv
 ```
-
-Then: drop `DKSalaries.csv` → tune settings → **Generate lineups** → review →
-**Download DraftKings CSV** → upload to DraftKings. You can also paste the key
-into the GUI instead of the env var (it's stored in your browser only).
-
-Prefer the command line? `python optimizer.py --csv DKSalaries.csv --mode gpp
---n 20 --out lineups.csv` does the same thing headless.
 
 ## The contest, from first principles
 
@@ -50,15 +58,17 @@ tail of outcomes *and* differentiated from the field. So the engine optimizes
 
 ## How GPP mode works
 
-1. **Generate** a large, diverse pool of valid lineups (ILP via PuLP/CBC),
-   each forced to include a **game stack** (≥2 players from one game).
-2. **Simulate** the slate 10k times (`simulate.py`): each player drawn from a
-   skewed Beta-PERT distribution over (floor, median, ceiling), with a shared
-   per-game environment multiplier so teammates/opponents move together —
-   *this is why stacking pays off, and the sim rewards it automatically.*
+1. **Generate** a large, diverse pool of valid lineups (randomized weighted
+   construction under the cap + position rules), each forced to include a
+   **game stack** (≥2 players from one game).
+2. **Simulate** the slate thousands of times: each player drawn from a skewed
+   Beta-PERT distribution over (floor, median, ceiling), with a shared per-game
+   environment multiplier so teammates/opponents move together — *this is why
+   stacking pays off, and the sim rewards it automatically.*
 3. **Rank** by simulated ceiling (p85), then **leverage-adjust** by projected
    ownership — being right where the field is light is worth more.
-4. **Select** the final N under a per-player **exposure cap** + uniqueness.
+4. **Select** the final N (your entry count) under a per-player **exposure
+   cap** + uniqueness, so your 12 lineups are genuinely different.
 
 ## Layout
 
@@ -66,10 +76,11 @@ tail of outcomes *and* differentiated from the field. So the engine optimizes
 |---|---|
 | `dk.py` | DK WNBA ruleset, CSV parsing, DK scoring (incl. DD/TD), name normalization. |
 | `projections.py` | Projection seam + `make_projector()`. `CsvProjector` = offline baseline; `_estimate_ownership` heuristic. |
-| `bdl.py` | balldontlie WNBA client + `BalldontlieProjector` — live recent-form + DvP + pace + injuries. Falls back to CSV if no key. |
-| `simulate.py` | Monte-Carlo engine: Beta-PERT player outcomes + game correlation. |
-| `optimizer.py` | ILP + GPP pipeline + headless CLI. Only reads `player.proj/floor/ceil/ownership`. |
-| `app.py` + `gui.py` | The local web app: a stdlib HTTP server + single-page GUI. No extra deps. |
+| `bdl.py` | balldontlie WNBA client + `BalldontlieProjector` — props-first + recent-form + DvP + pace + injuries. Falls back to CSV if no key. |
+| `engine.py` | Pure-Python GPP engine: randomized lineup construction + Beta-PERT Monte-Carlo sim with game correlation + exposure-capped selection. No deps. |
+| `optimizer.py` | Headless CLI wrapper around the engine. |
+| `app.py` + `gui.py` | The local web app: stdlib HTTP server + single-page GUI. |
+| `../WNBA-Optimizer.command` | Double-click launcher (Mac). |
 
 ## Settings (GUI sliders / CLI flags)
 

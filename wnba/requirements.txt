@@ -1,2 +1,2 @@
-pulp>=2.7
-numpy>=1.24
+# No third-party dependencies — the app runs on a stock Python 3.8+ install.
+# (Pure standard library: http.server, json, random, math, urllib.)

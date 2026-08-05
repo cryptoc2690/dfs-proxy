@@ -20,7 +20,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from dk import load_players_from_text
-from optimizer import optimize_gpp
+from engine import build_gpp as optimize_gpp
 from projections import make_projector
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -50,7 +50,7 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         max_per_team=_int(options.get("maxPerTeam"), 4),
         max_exposure=_float(options.get("maxExposure"), 0.6),
         leverage=_float(options.get("leverage"), 0.35),
-        n_sims=_int(options.get("sims"), 8000),
+        n_sims=_int(options.get("sims"), 5000),
     )
 
     csv_fallback = any("csv fallback" in n or "no BALLDONTLIE_API_KEY" in n
