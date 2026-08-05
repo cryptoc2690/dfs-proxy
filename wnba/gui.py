@@ -46,6 +46,18 @@ INDEX_HTML = r"""<!doctype html>
     font-size:13px;display:flex;align-items:center;gap:7px}
   .chip .x{cursor:pointer;color:var(--muted);font-weight:700}.chip .x:hover{color:var(--accent)}
   input:disabled{opacity:.5}
+  .ckrow{display:flex;align-items:center;gap:8px;margin-top:16px;cursor:pointer;font-size:14px}
+  .ckrow input{width:auto}
+  .adjpanel{background:rgba(255,170,40,.08);border:1px solid #b8860b;border-radius:12px;
+    padding:12px 14px;margin-bottom:16px}
+  .adjhead{font-size:13px;font-weight:600;color:#f5c451;margin-bottom:10px}
+  .adjrow{display:flex;align-items:center;gap:10px;padding:6px 0;border-top:1px solid rgba(255,255,255,.06);flex-wrap:wrap}
+  .adjrow .an{flex:1;min-width:120px}
+  .adjrow .ad{color:var(--muted);font-size:13px}.adjrow .ad b{color:var(--text)}
+  .adjrow.rej .an,.adjrow.rej .ad{opacity:.45;text-decoration:line-through}
+  .rjbtn{background:var(--chip);border:1px solid var(--line);color:var(--text);border-radius:8px;
+    padding:5px 12px;font-size:12px;cursor:pointer}
+  .rjbtn:hover{border-color:var(--accent)}
   .row{display:flex;gap:12px}.row>*{flex:1}
   .drop{margin-top:4px;border:1.5px dashed var(--line);border-radius:12px;padding:26px 14px;
     text-align:center;cursor:pointer;transition:.15s;background:var(--panel2)}
@@ -124,6 +136,7 @@ INDEX_HTML = r"""<!doctype html>
       <input id="exp" class="slider" type="range" min="10" max="100" value="60">
       <label>Fade chalk (leverage) — <span id="levv">0.15</span></label>
       <input id="lev" class="slider" type="range" min="0" max="100" value="15">
+      <label class="ckrow"><input id="market" type="checkbox" checked> Use market lines (news-aware, needs key)</label>
 
       <h2 style="margin-top:22px">3 · balldontlie key <span style="text-transform:none;color:var(--muted)">(optional)</span></h2>
       <input id="key" type="password" placeholder="GOAT API key — stays on your machine">
@@ -151,22 +164,13 @@ INDEX_HTML = r"""<!doctype html>
         many to use from value + leverage and diversifies them across your lineups.
         The pool is only an ownership signal — off-pool sharp plays still get used.</div>
 
-      <h2 style="margin-top:22px">5 · Fade <span style="text-transform:none;color:var(--muted)">(optional)</span></h2>
-      <label>Injury / minutes risk — type to add</label>
-      <div class="typeahead">
-        <input id="fadein" type="text" autocomplete="off" placeholder="drop a file first, then type…" disabled>
-        <div id="fadedrop" class="drop-menu"></div>
-      </div>
-      <div id="fadechips" class="chips"></div>
-      <div class="hint">For news the projections can't see — a trade, a minutes restriction,
-        a late scratch. Faded players never appear in any lineup.</div>
-
       <button id="go" class="btn" disabled>Generate lineups</button>
     </div>
 
     <!-- results -->
     <div>
       <div id="err" class="err" style="display:none"></div>
+      <div id="adjwrap" class="adjpanel" style="display:none"></div>
       <div id="status" class="status" style="display:none"></div>
       <div id="tools" style="display:none;margin-bottom:14px">
         <button id="dl" class="btn ghost" style="width:auto;margin:0;padding:9px 16px">⬇ Download DraftKings CSV</button>
@@ -186,7 +190,7 @@ INDEX_HTML = r"""<!doctype html>
 </main>
 <script>
 const $ = s => document.querySelector(s);
-let csvText = null, lastResult = null, playerNames = [], dffText = '';
+let csvText = null, lastResult = null, playerNames = [], dffText = '', rejectedMarket = [];
 
 // persist key locally
 $('#key').value = localStorage.getItem('bdlKey') || '';
@@ -294,8 +298,7 @@ function makePicker(prefix, icon){
 document.addEventListener('click', e => { if(!e.target.closest('.typeahead')) document.querySelectorAll('.drop-menu').forEach(d=>d.classList.remove('show')); });
 const corePicker = makePicker('core','★');
 const poolPicker = makePicker('pool','');
-const fadePicker = makePicker('fade','🚫');
-function enablePickers(){ corePicker.enable(); poolPicker.enable(); fadePicker.enable(); }
+function enablePickers(){ corePicker.enable(); poolPicker.enable(); }
 
 $('#go').addEventListener('click', run);
 async function run(){
@@ -307,7 +310,7 @@ async function run(){
     maxExposure:(+$('#exp').value)/100, leverage:(+$('#lev').value)/100,
     apiKey:$('#key').value.trim(),
     cores:corePicker.sel.join('\n'), pool:poolPicker.sel.join('\n'),
-    fades:fadePicker.sel.join('\n'), dff:dffText,
+    dff:dffText, market:$('#market').checked, rejectMarket:rejectedMarket.join('\n'),
   };
   try{
     const res = await fetch('/api/optimize', {method:'POST',headers:{'Content-Type':'application/json'},
@@ -320,8 +323,32 @@ async function run(){
 }
 function showErr(m){ $('#err').style.display='block'; $('#err').textContent = m; }
 
+// Market-vs-expected divergences: news the projections missed. Applied by
+// default; Reject reverts that player to the expected number and rebuilds.
+function renderAdjustments(adj){
+  const wrap=$('#adjwrap');
+  if(!adj.length){ wrap.style.display='none'; wrap.innerHTML=''; return; }
+  wrap.style.display='block';
+  wrap.innerHTML='<div class="adjhead">⚠ Market says different — news the projections missed. '+
+    'Applied automatically; reject any you disagree with.</div>'+
+    adj.map(a=>{
+      const arrow=a.delta<0?'▼':'▲';
+      return '<div class="adjrow'+(a.rejected?' rej':'')+'">'+
+        '<span class="an">'+a.name+'</span>'+
+        '<span class="ad">'+a.expected+' → <b>'+a.market+'</b> '+arrow+Math.abs(a.delta)+'</span>'+
+        '<button class="rjbtn" data-n="'+a.name.replace(/"/g,'&quot;')+'">'+(a.rejected?'Undo':'Reject')+'</button>'+
+      '</div>';
+    }).join('');
+  wrap.querySelectorAll('.rjbtn').forEach(b=>b.onclick=()=>{
+    const nm=b.dataset.n, i=rejectedMarket.findIndex(n=>n.toLowerCase()===nm.toLowerCase());
+    if(i>=0) rejectedMarket.splice(i,1); else rejectedMarket.push(nm);
+    run();                       // re-optimize with the updated rejections
+  });
+}
+
 function render(d){
   $('#welcome').style.display='none';
+  renderAdjustments(d.adjustments||[]);
   const cls = d.source==='props-first'?'props':d.source==='csv-only'?'csv':'season';
   const outTxt = d.out && d.out.length ? ' · OUT: '+d.out.join(', ') : '';
   $('#status').style.display='flex';

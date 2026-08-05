@@ -548,6 +548,75 @@ def _mode_date(players: list[Player]) -> str:
     return max(set(dates), key=dates.count)
 
 
+_MARKET_MAP = {
+    "points": "pts", "player_points": "pts", "pts": "pts",
+    "rebounds": "reb", "player_rebounds": "reb", "reb": "reb",
+    "assists": "ast", "player_assists": "ast", "ast": "ast",
+    "threes": "fg3m", "three_pointers_made": "fg3m", "player_threes": "fg3m", "fg3m": "fg3m",
+}
+
+
+def market_projections(api_key: str, players, season=None) -> dict:
+    """Market-implied DK projection per player from balldontlie player props.
+
+    Returns {normalized_name: dk_points}. The market prices in same-day news
+    (minutes restrictions, trades, roles) that season/recent averages miss, so
+    comparing this to the base projection surfaces exactly those situations.
+    Returns {} on any failure — props are strictly optional.
+    """
+    try:
+        client = BDLClient(api_key)
+        slate_date = _mode_date(players)
+        games = client.paginate("/games", {"dates": [slate_date]})
+        game_ids = [g["id"] for g in games]
+        if not game_ids:
+            return {}
+        name_lines, id_lines, need_ids = {}, {}, set()
+        for gid in game_ids:
+            try:
+                payload = client._get("/odds/player_props", {"game_id": gid})
+            except Exception:  # noqa: BLE001
+                continue
+            rows = payload.get("data", []) if isinstance(payload, dict) else []
+            for r in rows:
+                stat = _MARKET_MAP.get(str(_first(r, "market", "prop_type", "stat_type",
+                                                  "name", "market_key") or "").lower().strip())
+                line = _num(_first(r, "line_value", "line", "threshold", "value", "over_under", "point"))
+                if not stat or line is None:
+                    continue
+                nm = _first(r, "player_name", "player_full_name")
+                if nm:
+                    name_lines.setdefault(normalize_name(nm), {}).setdefault(stat, []).append(line)
+                else:
+                    pid = _first(r, "player_id", "playerId")
+                    if pid is not None:
+                        id_lines.setdefault(pid, {}).setdefault(stat, []).append(line)
+                        need_ids.add(pid)
+        if need_ids:  # resolve player_id -> name for rows that lacked a name
+            ids = list(need_ids)
+            for i in range(0, len(ids), 50):
+                try:
+                    payload = client._get("/players", {"ids": ids[i:i + 50], "per_page": 100})
+                    for p in (payload.get("data", []) if isinstance(payload, dict) else []):
+                        if p.get("id") in id_lines:
+                            key = normalize_name(f"{p.get('first_name','')} {p.get('last_name','')}")
+                            for s, v in id_lines[p["id"]].items():
+                                name_lines.setdefault(key, {}).setdefault(s, []).extend(v)
+                except Exception:  # noqa: BLE001
+                    continue
+        out = {}
+        for key, stats in name_lines.items():
+            med = {s: _median(v) for s, v in stats.items()}
+            if "pts" not in med:      # need at least a points line to trust it
+                continue
+            core = (med.get("pts", 0) + 1.25 * med.get("reb", 0)
+                    + 1.5 * med.get("ast", 0) + 0.5 * med.get("fg3m", 0))
+            out[key] = round(core * 1.12, 1)  # scale core stats up to a full DK line
+        return out
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def check_key(api_key: str) -> dict:
     """Quick liveness check for the GUI's 'Test key' button. One light call to
     /wnba/v1/teams. Returns {ok, message, insecure, games_today?}."""

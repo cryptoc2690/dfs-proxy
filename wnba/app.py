@@ -195,20 +195,46 @@ def run_optimize(csv_text: str, options: dict) -> dict:
     else:
         return {"error": "Upload a DraftKings salary CSV or a DFF cheatsheet."}
 
+    # --- Market lines: sportsbook props price in same-day news (minutes caps,
+    # trades, roles) that season/recent averages miss. Flag players whose market
+    # projection meaningfully differs from the base ("expected"), apply the
+    # market number by default (auto-account), and let the user reject specific
+    # ones to revert that player to expected.
+    adjustments = []
+    if _truthy(options.get("market")) and api_key:
+        try:
+            from bdl import market_projections
+            mkt = market_projections(api_key, players)
+        except Exception:  # noqa: BLE001
+            mkt = {}
+        reject = _parse_names(options.get("rejectMarket"))
+        for p in players:
+            if p.proj <= 0:
+                continue
+            m = mkt.get(normalize_name(p.name))
+            if m is None:
+                continue
+            exp = p.proj
+            delta = round(m - exp, 1)
+            if abs(delta) >= 5 and abs(delta) >= 0.2 * exp:
+                rejected = normalize_name(p.name) in reject
+                adjustments.append({"name": p.name, "expected": round(exp, 1),
+                                    "market": round(m, 1), "delta": delta,
+                                    "rejected": rejected})
+                if not rejected:
+                    ratio = (p.ceil / exp) if exp > 0 else 1.45
+                    p.proj, p.floor, p.ceil = round(m, 1), round(m * 0.7, 1), round(m * ratio, 1)
+                    p.notes.append(f"market {'+' if delta >= 0 else ''}{delta:g}")
+
     # Game-theory pool as an OWNERSHIP signal, never a filter — a sharp play
     # outside his pool is rare but real, so nobody is excluded. Cores read as
     # heavy chalk; in-pool as chalk; off-pool gets a discount so a strong one
     # surfaces as leverage and the optimizer will happily use it.
     core_names = _parse_names(options.get("cores"))
     pool_names = _parse_names(options.get("pool"))
-    fade_names = _parse_names(options.get("fades"))
     for p in players:
         nm = normalize_name(p.name)
         p.core = nm in core_names
-        if nm in fade_names:   # your manual news override — trade, minutes cap, scratch
-            p.proj = p.floor = p.ceil = 0.0
-            p.notes.append("faded — your call")
-            continue
         if p.proj <= 0:
             continue
         if p.core:
@@ -263,6 +289,7 @@ def run_optimize(csv_text: str, options: dict) -> dict:
 
     return {
         "source": source_label,
+        "adjustments": adjustments,
         "slate": {
             "date": next((p.game_date for p in players if p.game_date), ""),
             "games": sorted({p.game for p in players if p.game}),
@@ -360,6 +387,10 @@ def _float(v, default):
         return float(v)
     except (TypeError, ValueError):
         return default
+
+
+def _truthy(v):
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
 
 
 # The GUI is defined in gui.py to keep this file focused on the server.
