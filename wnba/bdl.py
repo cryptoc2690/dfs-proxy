@@ -80,17 +80,19 @@ class BDLClient:
                     time.sleep(min(2 ** attempt, 5))
                     continue
                 break
-            except ssl.SSLCertVerificationError:
-                # Retry unverified once (macOS missing certs).
-                if not self.insecure:
+            except Exception as e:  # noqa: BLE001
+                # macOS SSL cert failures arrive either bare or wrapped in a
+                # URLError — detect both and retry once over an unverified
+                # connection (local tool, user's own key, known host).
+                reason = getattr(e, "reason", None)
+                is_cert = (isinstance(e, ssl.SSLCertVerificationError)
+                           or isinstance(reason, ssl.SSLCertVerificationError)
+                           or "CERTIFICATE_VERIFY_FAILED" in str(e))
+                if is_cert and not self.insecure:
                     self._ctx = ssl._create_unverified_context()
                     self.insecure = True
                     continue
-                last_err = BDLError("SSL certificate verification failed even after "
-                                    "fallback.")
-                break
-            except Exception as e:  # noqa: BLE001
-                # Include the type name — some errors (timeouts) have blank str().
+                # Some errors (timeouts) have a blank str() — include the type.
                 last_err = BDLError(f"{type(e).__name__}: {e}".strip())
                 time.sleep(min(2 ** attempt, 4))
         raise last_err or BDLError(f"request failed: {url}")
