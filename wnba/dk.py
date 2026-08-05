@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 import re
+import unicodedata
 from dataclasses import dataclass, field
 
 # --- DraftKings WNBA Classic ruleset ------------------------------------
@@ -53,6 +54,7 @@ class Player:
     avg_points: float    # DK "AvgPointsPerGame" — the CSV's only projection input
     status: str          # "", "OUT", "Q", ...
     starting: str        # DK "Starting" flag if present
+    game_date: str = ""  # slate date, YYYY-MM-DD, parsed from Game Info
 
     # Filled in by the projection layer (see projections.py). Kept here so a
     # Player is the single object that flows through the whole pipeline.
@@ -87,6 +89,46 @@ def _parse_game(game_info: str) -> str:
     """'SEA@NYL 08/05/2026 07:00PM ET' -> 'SEA@NYL'."""
     m = re.match(r"\s*([A-Z]{2,4}@[A-Z]{2,4})", game_info or "")
     return m.group(1) if m else (game_info or "").strip()
+
+
+def _parse_game_date(game_info: str) -> str:
+    """'SEA@NYL 08/05/2026 07:00PM ET' -> '2026-08-05'."""
+    m = re.search(r"(\d{2})/(\d{2})/(\d{4})", game_info or "")
+    return f"{m.group(3)}-{m.group(1)}-{m.group(2)}" if m else ""
+
+
+def normalize_name(name: str) -> str:
+    """Fold accents/punctuation/case so DK names match balldontlie names.
+
+    'Marine Johannès' -> 'marine johannes', "Flau'Jae Johnson" -> 'flaujae johnson'.
+    """
+    n = unicodedata.normalize("NFKD", name or "")
+    n = "".join(c for c in n if not unicodedata.combining(c))
+    n = re.sub(r"[.'\-]", "", n.lower())
+    n = re.sub(r"\s+", " ", n).strip()
+    # Drop common suffixes that DK/BDL disagree on.
+    return re.sub(r"\b(jr|sr|ii|iii|iv)\b", "", n).strip()
+
+
+def fantasy_points(stat: dict) -> float:
+    """DraftKings fantasy points from a balldontlie box-score row, including
+    the double-double / triple-double bonuses (the piece the NBA proxy omits)."""
+    pts = stat.get("pts") or 0
+    reb = stat.get("reb") or 0
+    ast = stat.get("ast") or 0
+    stl = stat.get("stl") or 0
+    blk = stat.get("blk") or 0
+    to = stat.get("turnover") or 0
+    fg3 = stat.get("fg3m") or 0
+    fp = (pts * SCORING["pts"] + fg3 * SCORING["fg3m"] + reb * SCORING["reb"]
+          + ast * SCORING["ast"] + stl * SCORING["stl"] + blk * SCORING["blk"]
+          + to * SCORING["turnover"])
+    doubles = sum(1 for v in (pts, reb, ast, stl, blk) if v >= 10)
+    if doubles >= 3:
+        fp += TRIPLE_DOUBLE_BONUS
+    elif doubles >= 2:
+        fp += DOUBLE_DOUBLE_BONUS
+    return round(fp, 2)
 
 
 def load_players(csv_path: str) -> list[Player]:
@@ -124,5 +166,6 @@ def load_players(csv_path: str) -> list[Player]:
                 avg_points=avg,
                 status=(row.get("Status") or "").strip(),
                 starting=(row.get("Starting") or "").strip(),
+                game_date=_parse_game_date(row.get("Game Info", "")),
             ))
     return players

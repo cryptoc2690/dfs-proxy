@@ -16,8 +16,25 @@ from dataclasses import dataclass
 from dk import Player
 
 
+def make_projector(source: str = "auto", *, season: int | None = None):
+    """Pick a projection source.
+
+    - "csv" : DK CSV only (offline, always works)
+    - "bdl" : live balldontlie enrichment (needs BALLDONTLIE_API_KEY)
+    - "auto": bdl when a key is present, else csv
+    """
+    import os
+    want_bdl = source == "bdl" or (source == "auto" and os.environ.get("BALLDONTLIE_API_KEY"))
+    if want_bdl:
+        from bdl import BalldontlieProjector
+        return BalldontlieProjector(season=season)
+    return CsvProjector()
+
+
 @dataclass
 class CsvProjector:
+    name: str = "csv"
+
     """Project using only what the DraftKings CSV provides.
 
     AvgPointsPerGame is DK's own season-average fantasy output, so it is a
@@ -68,16 +85,6 @@ def _estimate_ownership(players: list[Player]) -> None:
         p.ownership = round(min(raw, 1.0) * 45, 1)  # scale to ~0..45%
 
 
-# Phase 2 placeholder — documents the intended interface.
-class BalldontlieProjector:
-    """TODO(phase-2): blend market props + recent form + matchup + pace,
-    then redistribute minutes/usage for confirmed inactives. Consumes the
-    wnba-* proxy endpoints. Must expose the same .project(players) contract
-    as CsvProjector so the solver is untouched.
-    """
-
-    def __init__(self, proxy_base_url: str):
-        self.proxy_base_url = proxy_base_url
-
-    def project(self, players: list[Player]) -> list[Player]:  # pragma: no cover
-        raise NotImplementedError("Phase 2: wire wnba-* proxy endpoints")
+# The live projector lives in bdl.py (BalldontlieProjector) and exposes the
+# same .project(players) contract, so the solver never changes. Select it via
+# make_projector("bdl") / make_projector("auto").
