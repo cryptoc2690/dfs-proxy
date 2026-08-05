@@ -171,9 +171,12 @@ def apply_dff(players, text):
     for p in players:
         d = dmap.get(normalize_name(p.name))
         if not d:
-            p.proj = p.avg_points
-            p.floor, p.ceil = round(p.avg_points * 0.72, 1), round(p.avg_points * 1.4, 1)
-            p.notes.append("no DFF match — DK avg")
+            # DFF is the source of truth: it lists everyone expected to play, so
+            # a DK-CSV player DFF omits is a scratch/trade/benching DK just hasn't
+            # flagged yet (Betnijah, Makani, ...). Exclude them — do NOT resurrect
+            # them from DraftKings' stale season average.
+            p.proj = p.floor = p.ceil = 0.0
+            p.notes.append("not in DFF — excluded")
             continue
         if str(d["inj"]).upper() in ("O", "OUT"):
             p.status = "OUT"
