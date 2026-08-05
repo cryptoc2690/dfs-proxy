@@ -132,11 +132,20 @@ def fantasy_points(stat: dict) -> float:
 
 
 def load_players(csv_path: str) -> list[Player]:
-    """Parse a DraftKings WNBA salary export into Player records."""
-    players: list[Player] = []
+    """Parse a DraftKings WNBA salary export (file path) into Player records."""
     with open(csv_path, newline="", encoding="utf-8-sig") as fh:
-        reader = csv.DictReader(fh)
-        for row in reader:
+        return _parse_rows(csv.DictReader(fh))
+
+
+def load_players_from_text(text: str) -> list[Player]:
+    """Parse a DraftKings WNBA salary export (raw CSV text) into Player records."""
+    import io
+    return _parse_rows(csv.DictReader(io.StringIO(text.lstrip("﻿"))))
+
+
+def _parse_rows(reader) -> list[Player]:
+    players: list[Player] = []
+    for row in reader:
             roster_pos = (row.get("Roster Position") or "").upper()
             # "G/UTIL" -> guard, "F/UTIL" -> forward. Fall back to Position.
             is_guard = "G" in roster_pos.split("/")[0] if "/" in roster_pos \

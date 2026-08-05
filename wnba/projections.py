@@ -33,7 +33,7 @@ def make_projector(source: str = "auto", *, season: int | None = None):
 
 @dataclass
 class CsvProjector:
-    name: str = "csv"
+    name: str = "csv-only"
 
     """Project using only what the DraftKings CSV provides.
 

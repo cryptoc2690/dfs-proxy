@@ -1,8 +1,26 @@
 # WNBA DraftKings Optimizer
 
-A **GPP-first** lineup generator/optimizer for **DraftKings WNBA Classic**,
-sibling to the NBA `dfs-proxy`. This directory is the *optimizer*; the
-browser-facing *data proxy* is the new `api/wnba-*.js` endpoints one level up.
+A **GPP-first** lineup generator/optimizer for **DraftKings WNBA Classic** with
+a local web GUI: run one command, drag in your DraftKings CSV, get lineups and a
+DraftKings-ready download. No cloud, no base44, no Vercel — the balldontlie
+calls happen inside the app (server-side), so there's no CORS and your API key
+never leaves your machine.
+
+## Quick start
+
+```bash
+cd wnba
+pip install -r requirements.txt
+export BALLDONTLIE_API_KEY=your_goat_key   # optional; enables live props
+python app.py                              # opens http://localhost:8000
+```
+
+Then: drop `DKSalaries.csv` → tune settings → **Generate lineups** → review →
+**Download DraftKings CSV** → upload to DraftKings. You can also paste the key
+into the GUI instead of the env var (it's stored in your browser only).
+
+Prefer the command line? `python optimizer.py --csv DKSalaries.csv --mode gpp
+--n 20 --out lineups.csv` does the same thing headless.
 
 ## The contest, from first principles
 
@@ -50,63 +68,51 @@ tail of outcomes *and* differentiated from the field. So the engine optimizes
 | `projections.py` | Projection seam + `make_projector()`. `CsvProjector` = offline baseline; `_estimate_ownership` heuristic. |
 | `bdl.py` | balldontlie WNBA client + `BalldontlieProjector` — live recent-form + DvP + pace + injuries. Falls back to CSV if no key. |
 | `simulate.py` | Monte-Carlo engine: Beta-PERT player outcomes + game correlation. |
-| `optimizer.py` | ILP + GPP pipeline + CLI. Only reads `player.proj/floor/ceil/ownership`. |
+| `optimizer.py` | ILP + GPP pipeline + headless CLI. Only reads `player.proj/floor/ceil/ownership`. |
+| `app.py` + `gui.py` | The local web app: a stdlib HTTP server + single-page GUI. No extra deps. |
 
-## Usage
+## Settings (GUI sliders / CLI flags)
 
-```bash
-pip install -r requirements.txt
-export BALLDONTLIE_API_KEY=your_goat_key      # enables live projections
-
-# GPP: 20 lineups, live data, min 2-player game stacks, 60% max exposure
-python optimizer.py --csv DKSalaries.csv --mode gpp --n 20 --out lineups.csv
-
-# Offline (CSV only), or force a source:
-python optimizer.py --csv DKSalaries.csv --source csv --mode gpp --n 20
-```
-
-Key flags: `--source csv|bdl|auto` (auto = bdl if key set), `--stack N`
-(min game-stack size), `--max-exposure 0.0..1.0`, `--leverage` (0 = pure
-ceiling, higher = fade chalk harder), `--pool`, `--sims`, `--season`.
-The `--out` CSV uploads straight to DraftKings (`G,G,F,F,UTIL,UTIL` header,
-`Name (ID)` cells).
+- **Lineups** (`--n`) — how many to build.
+- **Min game stack** (`--stack`) — force ≥N players from one game per lineup.
+- **Max exposure** (`--max-exposure`) — cap the share of lineups any one player
+  can appear in (diversity across your entries).
+- **Fade chalk / leverage** (`--leverage`) — 0 = pure ceiling, higher = punish
+  high projected ownership harder.
+- CLI-only: `--source csv|bdl|auto`, `--pool`, `--sims`, `--season`, `--out`.
 
 ## Projection sources
 
-- **`csv`** — DK `AvgPointsPerGame` as the median, fixed variance band. Always
-  works, no key. Good for a dry run.
-- **`bdl`** (recommended) — **props-first**: builds DK points from market prop
-  lines (pts/reb/ast/3pm), filling steals/blocks/TO from recent form. Because
-  the market already prices minutes, matchup, pace and injuries, props-based
-  projections are *not* re-scaled by DvP/pace (no double-count). Players with
-  no props fall back to a recent-form projection (weighted last-5 DK output
-  blended with season avg), scaled by defense-vs-position (G/F), pace, and
-  implied-total environment. OUT dropped, questionable haircut, via
-  `player_injuries`.
+- **`csv-only`** — DK `AvgPointsPerGame` as the median, fixed variance band.
+  Always works, no key. What you get if the app can't reach balldontlie.
+- **`props-first`** (with a GOAT key) — builds DK points from market prop lines
+  (pts/reb/ast/3pm), filling steals/blocks/TO from recent form. Because the
+  market already prices minutes, matchup, pace and injuries, props-based
+  projections are *not* re-scaled by DvP/pace (no double-count). Players with no
+  props fall back to recent-form (weighted last-5 DK output blended with season
+  avg), scaled by defense-vs-position (G/F), pace, and implied-total
+  environment. OUT dropped, questionable haircut, via `player_injuries`.
 
 Still heuristic (documented in code): **projected ownership** — real ownership
 needs a feed WNBA doesn't expose, so it's a value+salary proxy, good enough to
 *rank* leverage, not to trust as a number.
 
-## The WNBA data proxy (`../api/wnba-*.js`)
+## Data source
 
-Vercel functions mirroring the NBA proxy, for a future base44-style frontend:
-`wnba-slate` (games + pace/ratings), `wnba-odds` (implied team totals),
-`wnba-props` (market stat lines per player), `wnba-injuries`,
-`wnba-recent-stats` (minutes/usage trend + absent-teammate detector),
-`wnba-dvp` (G/F defense vs position). Base path `api.balldontlie.io/wnba/v1`,
-key via `BALLDONTLIE_API_KEY`.
+The app talks to the balldontlie WNBA API directly (base
+`api.balldontlie.io/wnba/v1`) from the local server process — no proxy needed,
+because a server (not a browser) makes the calls. Endpoints used: `games`,
+`odds`, `odds/player_props`, `player_injuries`, `player_season_stats`,
+`team_season_advanced_stats`.
 
-> The odds/props JSON field names are read defensively (a `_first()` over
-> likely keys) because this sandbox's network policy blocks balldontlie, so
-> the exact live shape couldn't be confirmed here. One real `player_props` and
-> one `odds` record will let us pin them exactly.
+> The odds/props JSON field names are read defensively (a `_first()` over likely
+> keys) because the dev sandbox couldn't reach balldontlie to confirm the exact
+> live shape. If projections show `source: csv-only` or `season-stats` when
+> props should exist, one real `player_props` record pins the mapping exactly.
 
-## Notes carried from the NBA proxy (fix on its next upgrade)
+## Hosting it later (optional)
 
-- `getSlateDate()` hard-codes ET as `-5` (EST). WNBA plays in **summer = EDT
-  (-4)** — the WNBA endpoints here use `-4`. The NBA proxy should switch to a
-  DST-aware offset.
-- `nba-dvp.js` fallback table is frozen static data; `season=2025` hard-coded
-  in pace; NBA fantasy formula omits the DD/TD bonus (WNBA code includes it);
-  no response caching (rate-limit risk on repeated calls).
+`app.py` is a standard web server, so if you ever want a URL instead of
+localhost, it runs as-is on any host that runs Python (Render, Railway, Fly, a
+VPS) — set `BALLDONTLIE_API_KEY` in that host's env and point it at `app.py`.
+No Vercel required.
