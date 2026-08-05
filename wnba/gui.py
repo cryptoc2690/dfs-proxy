@@ -106,12 +106,12 @@ INDEX_HTML = r"""<!doctype html>
       <h2>1 · Your slate</h2>
       <div id="drop" class="drop">
         <b>Drop DKSalaries.csv</b>
-        <small>or click to choose a file</small>
+        <small>for DK player IDs — optional if you use DFF</small>
         <input id="file" type="file" accept=".csv" hidden>
       </div>
       <div id="dffdrop" class="drop" style="margin-top:10px;padding:16px">
         <b>+ DFF cheatsheet</b>
-        <small>optional — best projections (no key needed)</small>
+        <small>best projections, no key — works on its own too</small>
         <input id="dfffile" type="file" accept=".csv" hidden>
       </div>
 
@@ -228,8 +228,16 @@ dfffile.addEventListener('change', e => loadDff(e.target.files[0]));
 dffdrop.addEventListener('drop', e => loadDff(e.dataTransfer.files[0]));
 function loadDff(f){ if(!f) return; const r=new FileReader();
   r.onload=()=>{ dffText=r.result; dffdrop.classList.add('loaded');
-    dffdrop.innerHTML='<b>✓ '+f.name+'</b><small>DFF projections loaded</small>'; };
+    dffdrop.innerHTML='<b>✓ '+f.name+'</b><small>DFF projections loaded</small>';
+    $('#go').disabled=false;                       // DFF alone is enough to run
+    if(!playerNames.length){ playerNames=parseDffNames(dffText);
+      const ci=$('#corein'); ci.disabled=false; ci.placeholder='type a player…'; } };
   r.readAsText(f); }
+function parseDffNames(text){
+  const lines=text.replace(/\r/g,'').split('\n').filter(l=>l.trim()); const out=[];
+  for(let i=1;i<lines.length;i++){ const c=csvSplit(lines[i]);
+    const nm=((c[0]||'')+' '+(c[1]||'')).trim(); if(nm.length>1) out.push(nm); }
+  return [...new Set(out)]; }
 
 // ---- core type-ahead ----
 const corein = $('#corein'), coredrop = $('#coredrop'); let activeIdx = -1;
@@ -267,7 +275,7 @@ function renderChips(){
 
 $('#go').addEventListener('click', run);
 async function run(){
-  if(!csvText) return;
+  if(!csvText && !dffText) return;
   const btn = $('#go'); btn.disabled = true; btn.innerHTML = '<span class="spin"></span>Crunching…';
   $('#err').style.display='none';
   const options = {
@@ -278,7 +286,7 @@ async function run(){
   };
   try{
     const res = await fetch('/api/optimize', {method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({csv:csvText, options})});
+      body:JSON.stringify({csv:csvText||'', options})});
     const data = await res.json();
     if(data.error){ showErr(data.error); }
     else { lastResult = data; render(data); }

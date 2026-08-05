@@ -52,15 +52,33 @@ def parse_dff(text):
             name = f"{d.get('first_name','')} {d.get('last_name','')}"
             proj, own = _f(d.get("ppg_projection")), _f(d.get("ownership_projection"))
             inj = (d.get("injury_status") or d.get("position_alt") or "").strip()
-        elif len(r) >= 18:  # column-shifted: fields read by position
+            sal, pos, team = int(_f(d.get("salary"))), d.get("position", ""), d.get("team", "")
+            opp = d.get("opp", "")
+            l5, l10, szn = _f(d.get("L5_fppg_avg")), _f(d.get("L10_fppg_avg")), _f(d.get("szn_fppg_avg"))
+        elif len(r) >= 18:  # column-shifted export: read by position
             name, inj = f"{r[0]} {r[1]}", r[3].strip()
             proj, own = _f(r[16]), 0.0
+            sal, pos, team, opp = int(_f(r[11])), r[2].strip(), r[6].strip(), r[7].strip()
+            l5, l10, szn = _f(r[13]), _f(r[14]), _f(r[15])
         else:
             continue
         nm = normalize_name(name)
         if nm:
-            out[nm] = {"proj": proj, "own": own, "inj": inj}
+            out[nm] = {"name": name.strip(), "proj": proj, "own": own, "inj": inj,
+                       "sal": sal, "pos": pos, "team": team, "opp": opp,
+                       "l5": l5, "l10": l10, "szn": szn}
     return out
+
+
+def _dff_range(proj, l5, l10, szn):
+    """Floor/ceiling from a player's demonstrated recent range, not a flat band —
+    so boom players (recent games above projection, e.g. triple-double threats)
+    get the fatter ceiling they deserve, and steady players get a tighter one."""
+    vals = [v for v in (l5, l10, szn, proj) if v > 0] or [proj]
+    hi, lo = max(vals), min(vals)
+    ceil = round(max(proj * 1.4, hi * 1.18), 1)
+    floor = round(min(proj * 0.72, lo * 0.85), 1)
+    return floor, ceil
 
 
 def apply_dff(players, text):
@@ -82,7 +100,7 @@ def apply_dff(players, text):
             p.notes.append("OUT — excluded")
             continue
         p.proj = round(d["proj"], 1)
-        p.floor, p.ceil = round(d["proj"] * 0.72, 1), round(d["proj"] * 1.4, 1)
+        p.floor, p.ceil = _dff_range(d["proj"], d["l5"], d["l10"], d["szn"])
         p.notes.append("DFF projection")
         if real_own and d["own"] > 0:
             p.ownership = d["own"]
@@ -93,6 +111,43 @@ def apply_dff(players, text):
         return "dff+ownership"
     _estimate_ownership(players)
     return "dff"
+
+
+def build_players_from_dff(dmap):
+    """Build the player pool from a DFF cheatsheet alone (no DK file). No DK
+    IDs are available, so lineups export by name for manual entry."""
+    from dk import Player
+    players = []
+    for i, (nm, d) in enumerate(dmap.items()):
+        if d["sal"] < 3000:
+            continue
+        out = str(d["inj"]).upper() in ("O", "OUT")
+        p = Player(name=d["name"], dk_id=f"dff-{i}", salary=d["sal"], team=d["team"],
+                   opponent=d["opp"], game=f"{d['team']}@{d['opp']}",
+                   is_guard=d["pos"].strip().upper().startswith("G"),
+                   avg_points=d["proj"], status=("OUT" if out else ""),
+                   starting="", game_date="")
+        if out:
+            p.proj = p.floor = p.ceil = 0.0
+        else:
+            p.proj = round(d["proj"], 1)
+            p.floor, p.ceil = _dff_range(d["proj"], d["l5"], d["l10"], d["szn"])
+            if d["own"] > 0:
+                p.ownership = d["own"]
+        players.append(p)
+    if any(d["own"] > 0 for d in dmap.values()):
+        for p in players:
+            if p.proj > 0 and p.ownership == 0:
+                p.ownership = 8.0
+    else:
+        _estimate_ownership(players)
+    return players
+
+
+def _upload_str(p):
+    """DK-import string. Uses the real 'Name (ID)' when a DK file supplied the
+    ID; otherwise just the name (DFF-only run -> manual entry)."""
+    return p.name if (not p.dk_id or p.dk_id.startswith("dff-")) else f"{p.name} ({p.dk_id})"
 
 
 def _parse_names(text):
@@ -117,14 +172,27 @@ def run_optimize(csv_text: str, options: dict) -> dict:
     source = options.get("source") or "auto"
     season = _int(options.get("season"), None)
 
-    players = load_players_from_text(csv_text)
-    dff_label = apply_dff(players, options.get("dff", "")) if options.get("dff") else None
-    if dff_label:
-        source_label_base = dff_label
+    csv_text = (csv_text or "").strip()
+    dff_text = options.get("dff", "") or ""
+    projector = None
+    if csv_text:  # DK file is the pool + IDs; DFF (if given) overlays projections
+        players = load_players_from_text(csv_text)
+        dff_label = apply_dff(players, dff_text) if dff_text.strip() else None
+        if dff_label:
+            source_label_base = dff_label
+        else:
+            projector = make_projector(source, season=season)
+            projector.project(players)
+            source_label_base = None  # computed below from notes
+    elif dff_text.strip():  # DFF-only — build the pool from the cheatsheet
+        dmap = parse_dff(dff_text)
+        if not dmap:
+            return {"error": "Couldn't read that DFF cheatsheet."}
+        players = build_players_from_dff(dmap)
+        has_own = any(d["own"] > 0 for d in dmap.values())
+        source_label_base = ("dff+ownership" if has_own else "dff") + " · names only (no DK IDs)"
     else:
-        projector = make_projector(source, season=season)
-        projector.project(players)
-        source_label_base = None  # computed below from notes
+        return {"error": "Upload a DraftKings salary CSV or a DFF cheatsheet."}
 
     # Game-theory pool as an OWNERSHIP signal, never a filter — a sharp play
     # outside his pool is rare but real, so nobody is excluded. Cores read as
@@ -213,7 +281,7 @@ def run_optimize(csv_text: str, options: dict) -> dict:
                 "slot": slot, "name": p.name, "team": p.team, "pos": p.pos,
                 "salary": p.salary, "proj": round(p.proj, 1), "core": p.core,
             } for slot, p in zip(["G", "G", "F", "F", "UTIL", "UTIL"], lu.dk_slots())],
-            "upload": [p.label() for p in lu.dk_slots()],
+            "upload": [_upload_str(p) for p in lu.dk_slots()],
         } for i, lu in enumerate(lineups)],
     }
 
@@ -245,10 +313,12 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/check":
                 from bdl import check_key
                 return self._send(200, json.dumps(check_key(payload.get("apiKey", ""))))
+            opts = payload.get("options", {})
             csv_text = payload.get("csv") or ""
-            if not csv_text.strip():
-                return self._send(400, json.dumps({"error": "No CSV provided."}))
-            result = run_optimize(csv_text, payload.get("options", {}))
+            if not csv_text.strip() and not (opts.get("dff") or "").strip():
+                return self._send(400, json.dumps(
+                    {"error": "Upload a DraftKings CSV or a DFF cheatsheet."}))
+            result = run_optimize(csv_text, opts)
             code = 400 if result.get("error") else 200
             self._send(code, json.dumps(result))
         except Exception as e:  # noqa: BLE001
