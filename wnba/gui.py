@@ -141,8 +141,12 @@ INDEX_HTML = r"""<!doctype html>
         <div id="coredrop" class="drop-menu"></div>
       </div>
       <div id="corechips" class="chips"></div>
-      <label style="margin-top:14px">His full pool — optional, paste the name column</label>
-      <textarea id="poollist" rows="3" placeholder="optional — paste his player names (one per line), or skip if you're short on time"></textarea>
+      <label style="margin-top:14px">His full pool — type to add (optional)</label>
+      <div class="typeahead">
+        <input id="poolin" type="text" autocomplete="off" placeholder="drop a file first, then type…" disabled>
+        <div id="pooldrop" class="drop-menu"></div>
+      </div>
+      <div id="poolchips" class="chips"></div>
       <div class="hint">Cores (★) are treated as the field's chalk; the app decides how
         many to use from value + leverage and diversifies them across your lineups.
         The pool is only an ownership signal — off-pool sharp plays still get used.</div>
@@ -172,7 +176,7 @@ INDEX_HTML = r"""<!doctype html>
 </main>
 <script>
 const $ = s => document.querySelector(s);
-let csvText = null, lastResult = null, playerNames = [], selectedCores = [], dffText = '';
+let csvText = null, lastResult = null, playerNames = [], dffText = '';
 
 // persist key locally
 $('#key').value = localStorage.getItem('bdlKey') || '';
@@ -208,8 +212,7 @@ function loadFile(f){
   r.onload = () => { csvText = r.result; drop.classList.add('loaded');
     drop.innerHTML = '<b>✓ '+f.name+'</b><small>ready — change file anytime</small>';
     $('#go').disabled = false;
-    playerNames = parseNames(csvText);
-    const ci = $('#corein'); ci.disabled = false; ci.placeholder = 'type a player…';
+    playerNames = parseNames(csvText); enablePickers();
   };
   r.readAsText(f);
 }
@@ -234,8 +237,7 @@ function loadDff(f){ if(!f) return; const r=new FileReader();
   r.onload=()=>{ dffText=r.result; dffdrop.classList.add('loaded');
     dffdrop.innerHTML='<b>✓ '+f.name+'</b><small>DFF projections loaded</small>';
     $('#go').disabled=false;                       // DFF alone is enough to run
-    if(!playerNames.length){ playerNames=parseDffNames(dffText);
-      const ci=$('#corein'); ci.disabled=false; ci.placeholder='type a player…'; } };
+    if(!playerNames.length){ playerNames=parseDffNames(dffText); enablePickers(); } };
   r.readAsText(f); }
 function parseDffNames(text){
   const lines=text.replace(/\r/g,'').split('\n').filter(l=>l.trim()); const out=[];
@@ -243,39 +245,46 @@ function parseDffNames(text){
     const nm=((c[0]||'')+' '+(c[1]||'')).trim(); if(nm.length>1) out.push(nm); }
   return [...new Set(out)]; }
 
-// ---- core type-ahead ----
-const corein = $('#corein'), coredrop = $('#coredrop'); let activeIdx = -1;
-corein.addEventListener('input', showMatches);
-corein.addEventListener('focus', showMatches);
-corein.addEventListener('keydown', e => {
-  const items = coredrop.querySelectorAll('div'); if(!items.length) return;
-  if(e.key==='ArrowDown'){ activeIdx=Math.min(activeIdx+1,items.length-1); paintActive(items); e.preventDefault(); }
-  else if(e.key==='ArrowUp'){ activeIdx=Math.max(activeIdx-1,0); paintActive(items); e.preventDefault(); }
-  else if(e.key==='Enter'){ if(activeIdx>=0){ addCore(items[activeIdx].textContent); e.preventDefault(); } }
-  else if(e.key==='Escape'){ hideDrop(); }
-});
-document.addEventListener('click', e => { if(!e.target.closest('.typeahead')) hideDrop(); });
-function showMatches(){
-  const q = corein.value.trim().toLowerCase();
-  const chosen = new Set(selectedCores.map(s=>s.toLowerCase()));
-  let matches = playerNames.filter(n => !chosen.has(n.toLowerCase()));
-  if(q) matches = matches.filter(n => n.toLowerCase().includes(q));
-  matches = matches.slice(0,8);
-  if(!matches.length){ hideDrop(); return; }
-  activeIdx = -1;
-  coredrop.innerHTML = matches.map(n=>'<div>'+n+'</div>').join('');
-  coredrop.querySelectorAll('div').forEach(d=>d.onclick=()=>addCore(d.textContent));
-  coredrop.classList.add('show');
+// ---- reusable type-ahead picker (used for cores and the full pool) ----
+function makePicker(prefix, icon){
+  const input=$('#'+prefix+'in'), drop=$('#'+prefix+'drop'), chips=$('#'+prefix+'chips');
+  const sel=[]; let active=-1;
+  function show(){
+    const q=input.value.trim().toLowerCase();
+    const chosen=new Set(sel.map(s=>s.toLowerCase()));
+    let m=playerNames.filter(n=>!chosen.has(n.toLowerCase()));
+    if(q) m=m.filter(n=>n.toLowerCase().includes(q));
+    m=m.slice(0,8);
+    if(!m.length){ hide(); return; }
+    active=-1;
+    drop.innerHTML=m.map(n=>'<div>'+n+'</div>').join('');
+    drop.querySelectorAll('div').forEach(d=>d.onclick=()=>add(d.textContent));
+    drop.classList.add('show');
+  }
+  function hide(){ drop.classList.remove('show'); active=-1; }
+  function paint(items){ items.forEach((it,i)=>it.classList.toggle('active',i===active)); }
+  function add(n){ if(!sel.includes(n)) sel.push(n); input.value=''; hide(); render(); input.focus(); }
+  function remove(n){ const i=sel.indexOf(n); if(i>=0) sel.splice(i,1); render(); }
+  function render(){
+    chips.innerHTML=sel.map(n=>'<span class="chip">'+(icon?'<span class="core-star">'+icon+'</span>':'')+n+
+      '<span class="x" data-n="'+n.replace(/"/g,'&quot;')+'">✕</span></span>').join('');
+    chips.querySelectorAll('.x').forEach(x=>x.onclick=()=>remove(x.dataset.n));
+  }
+  input.addEventListener('input', show);
+  input.addEventListener('focus', show);
+  input.addEventListener('keydown', e => {
+    const items=drop.querySelectorAll('div'); if(!items.length) return;
+    if(e.key==='ArrowDown'){ active=Math.min(active+1,items.length-1); paint(items); e.preventDefault(); }
+    else if(e.key==='ArrowUp'){ active=Math.max(active-1,0); paint(items); e.preventDefault(); }
+    else if(e.key==='Enter'){ if(active>=0){ add(items[active].textContent); e.preventDefault(); } }
+    else if(e.key==='Escape'){ hide(); }
+  });
+  return { sel, enable(){ input.disabled=false; input.placeholder='type a player…'; } };
 }
-function paintActive(items){ items.forEach((it,i)=>it.classList.toggle('active',i===activeIdx)); }
-function hideDrop(){ coredrop.classList.remove('show'); activeIdx=-1; }
-function addCore(name){ if(!selectedCores.includes(name)) selectedCores.push(name); corein.value=''; hideDrop(); renderChips(); corein.focus(); }
-function removeCore(name){ selectedCores = selectedCores.filter(n=>n!==name); renderChips(); }
-function renderChips(){
-  $('#corechips').innerHTML = selectedCores.map(n=>
-    '<span class="chip"><span class="core-star">★</span>'+n+'<span class="x" data-n="'+n.replace(/"/g,'&quot;')+'">✕</span></span>').join('');
-  $('#corechips').querySelectorAll('.x').forEach(x=>x.onclick=()=>removeCore(x.dataset.n));
-}
+document.addEventListener('click', e => { if(!e.target.closest('.typeahead')) document.querySelectorAll('.drop-menu').forEach(d=>d.classList.remove('show')); });
+const corePicker = makePicker('core','★');
+const poolPicker = makePicker('pool','');
+function enablePickers(){ corePicker.enable(); poolPicker.enable(); }
 
 $('#go').addEventListener('click', run);
 async function run(){
@@ -286,7 +295,7 @@ async function run(){
     n:+$('#n').value, stack:+$('#stack').value,
     maxExposure:(+$('#exp').value)/100, leverage:(+$('#lev').value)/100,
     apiKey:$('#key').value.trim(),
-    cores:selectedCores.join('\n'), pool:$('#poollist').value, dff:dffText,
+    cores:corePicker.sel.join('\n'), pool:poolPicker.sel.join('\n'), dff:dffText,
   };
   try{
     const res = await fetch('/api/optimize', {method:'POST',headers:{'Content-Type':'application/json'},
