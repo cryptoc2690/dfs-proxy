@@ -52,7 +52,13 @@ class Lineup:
 
 # ---------------- lineup construction ----------------
 def _weighted_pick(cands, rng):
-    weights = [max(p.proj, 0.1) ** 3 * (0.6 + 0.8 * rng.random()) for p in cands]
+    # Small lean toward confirmed starters: in the WNBA a starter's minutes are
+    # the most reliable scoring on any given night, so when two plays project
+    # alike the starter should come up more often. A ~15% weight bump is a
+    # tiebreak, not a takeover — a clearly better-projected bench play still wins
+    # (proj^3 dominates).
+    weights = [max(p.proj, 0.1) ** 3 * (1.15 if p.starter else 1.0) * (0.6 + 0.8 * rng.random())
+               for p in cands]
     total = sum(weights)
     x = rng.random() * total
     for p, w in zip(cands, weights):

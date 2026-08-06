@@ -104,7 +104,7 @@ INDEX_HTML = r"""<!doctype html>
 <header>
   <div class="ball"></div>
   <h1>WNBA DFS Optimizer</h1>
-  <span class="sub">DraftKings · GPP · props-first</span>
+  <span class="sub">DraftKings · GPP · LineStar</span>
 </header>
 <main>
   <div class="grid">
@@ -112,14 +112,9 @@ INDEX_HTML = r"""<!doctype html>
     <div class="panel">
       <h2>1 · Your slate</h2>
       <div id="drop" class="drop">
-        <b>Drop DKSalaries.csv</b>
-        <small>for DK player IDs — optional if you use DFF</small>
+        <b>Drop your LineStar CSV</b>
+        <small>projections, floor/ceiling, ownership, starters — all in one file</small>
         <input id="file" type="file" accept=".csv" hidden>
-      </div>
-      <div id="dffdrop" class="drop" style="margin-top:10px;padding:16px">
-        <b>+ DFF cheatsheet</b>
-        <small>best projections, no key — works on its own too</small>
-        <input id="dfffile" type="file" accept=".csv" hidden>
       </div>
 
       <h2 style="margin-top:22px">2 · Settings</h2>
@@ -131,10 +126,6 @@ INDEX_HTML = r"""<!doctype html>
       <input id="exp" class="slider" type="range" min="10" max="100" value="60">
       <label>Fade chalk (leverage) — <span id="levv">0.15</span></label>
       <input id="lev" class="slider" type="range" min="0" max="100" value="15">
-      <label style="margin-top:14px">balldontlie key <span style="text-transform:none;color:var(--muted)">— optional, adds market data</span></label>
-      <input id="key" type="password" placeholder="paste to enable real minutes, Vegas totals, props">
-      <div class="hint">When set: real recent minutes (rotation), Vegas implied totals,
-        market-vs-projection news, and the PRA-under haircut. Stored in this browser only.</div>
 
       <h2 style="margin-top:22px">3 · Game-theory cores <span style="text-transform:none;color:var(--muted)">(optional)</span></h2>
       <label>Core plays — type a name to add</label>
@@ -178,10 +169,10 @@ INDEX_HTML = r"""<!doctype html>
       <div id="err" class="err" style="display:none"></div>
       <div id="status" class="status" style="display:none"></div>
       <div id="tools" style="display:none;margin-bottom:14px">
-        <button id="dl" class="btn ghost" style="width:auto;margin:0;padding:9px 16px">⬇ Download DraftKings CSV</button>
+        <button id="dl" class="btn ghost" style="width:auto;margin:0;padding:9px 16px">⬇ Download lineups CSV</button>
       </div>
       <div id="cards" class="cards"></div>
-      <div id="welcome" class="empty">Drop your DraftKings CSV and hit generate.</div>
+      <div id="welcome" class="empty">Drop your LineStar CSV and hit generate.</div>
       <details id="expwrap" style="display:none">
         <summary>Exposure — how spread your lineups are</summary>
         <table class="ptable" id="exptable"></table>
@@ -195,10 +186,8 @@ INDEX_HTML = r"""<!doctype html>
 </main>
 <script>
 const $ = s => document.querySelector(s);
-let csvText = null, lastResult = null, playerNames = [], dffText = '';
+let csvText = null, lastResult = null, playerNames = [];
 
-$('#key').value = localStorage.getItem('bdlKey') || '';
-$('#key').addEventListener('input', e => localStorage.setItem('bdlKey', e.target.value));
 $('#exp').addEventListener('input', e => $('#expv').textContent = e.target.value);
 $('#lev').addEventListener('input', e => $('#levv').textContent = (e.target.value/100).toFixed(2));
 
@@ -228,25 +217,6 @@ function parseNames(text){
   return [...new Set(out)];
 }
 function csvSplit(line){ const out=[]; let cur='',q=false; for(const ch of line){ if(ch==='"')q=!q; else if(ch===','&&!q){out.push(cur);cur='';} else cur+=ch; } out.push(cur); return out; }
-
-// ---- DFF cheatsheet drop ----
-const dffdrop = $('#dffdrop'), dfffile = $('#dfffile');
-dffdrop.addEventListener('click', () => dfffile.click());
-dfffile.addEventListener('change', e => loadDff(e.target.files[0]));
-['dragover','dragenter'].forEach(ev => dffdrop.addEventListener(ev, e => {e.preventDefault();dffdrop.classList.add('over')}));
-['dragleave','drop'].forEach(ev => dffdrop.addEventListener(ev, e => {e.preventDefault();dffdrop.classList.remove('over')}));
-dffdrop.addEventListener('drop', e => loadDff(e.dataTransfer.files[0]));
-function loadDff(f){ if(!f) return; const r=new FileReader();
-  r.onload=()=>{ dffText=r.result; dffdrop.classList.add('loaded');
-    dffdrop.innerHTML='<b>✓ '+f.name+'</b><small>DFF projections loaded</small>';
-    $('#go').disabled=false;                       // DFF alone is enough to run
-    if(!playerNames.length){ playerNames=parseDffNames(dffText); enablePickers(); } };
-  r.readAsText(f); }
-function parseDffNames(text){
-  const lines=text.replace(/\r/g,'').split('\n').filter(l=>l.trim()); const out=[];
-  for(let i=1;i<lines.length;i++){ const c=csvSplit(lines[i]);
-    const nm=((c[0]||'')+' '+(c[1]||'')).trim(); if(nm.length>1) out.push(nm); }
-  return [...new Set(out)]; }
 
 // ---- reusable type-ahead picker (used for cores and the full pool) ----
 function makePicker(prefix, icon){
@@ -292,15 +262,14 @@ function enablePickers(){ corePicker.enable(); poolPicker.enable(); removePicker
 
 $('#go').addEventListener('click', run);
 async function run(){
-  if(!csvText && !dffText) return;
+  if(!csvText) return;
   const btn = $('#go'); btn.disabled = true; btn.innerHTML = '<span class="spin"></span>Crunching…';
   $('#err').style.display='none';
   const options = {
     n:+$('#n').value, stack:+$('#stack').value,
     maxExposure:(+$('#exp').value)/100, leverage:(+$('#lev').value)/100,
     cores:corePicker.sel.join('\n'), pool:poolPicker.sel.join('\n'),
-    remove:removePicker.sel.join('\n'), maxOffPool:+$('#offpool').value, dff:dffText,
-    apiKey:$('#key').value.trim(),
+    remove:removePicker.sel.join('\n'), maxOffPool:+$('#offpool').value,
   };
   try{
     const res = await fetch('/api/optimize', {method:'POST',headers:{'Content-Type':'application/json'},
@@ -315,7 +284,7 @@ function showErr(m){ $('#err').style.display='block'; $('#err').textContent = m;
 
 function render(d){
   $('#welcome').style.display='none';
-  const cls = d.source && d.source.indexOf('dff')===0 ? 'props' : d.source==='csv-only' ? 'csv' : 'season';
+  const cls = 'props';
   const outTxt = d.out && d.out.length ? ' · OUT: '+d.out.join(', ') : '';
   const rmTxt = d.removed && d.removed.length ? ' · removed: '+d.removed.join(', ') : '';
   const slateBadge = d.slateType ?

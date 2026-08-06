@@ -1,8 +1,8 @@
 # WNBA DraftKings Optimizer
 
 A local, GPP-first lineup optimizer for **DraftKings WNBA Classic**. Run one
-command, drop in a projection file, get differentiated tournament lineups.
-Pure Python standard library — nothing to install, no cloud, no API keys.
+command, drop in a LineStar projections CSV, get differentiated tournament
+lineups. Pure Python standard library — nothing to install, no cloud, no keys.
 
 ## Run it (Mac)
 
@@ -13,18 +13,24 @@ Or from a terminal:
 cd wnba && python3 app.py     # opens http://localhost:8000
 ```
 
-Drop your files → set lineup count → **Generate** → **Download DraftKings CSV**.
+Drop your LineStar CSV → set lineup count → **Generate** → **Download**.
 
-## Sources of truth
+## Source of truth — LineStar
 
-| File | Provides | Required? |
-|---|---|---|
-| **DFF cheatsheet** (DailyFantasyFuel) | projections, recent form (L5/L10/season), salary, positions, injury status, ownership (if present) | this **or** the DK CSV |
-| **DK salary CSV** | DraftKings player **IDs** (for one-click bulk upload), salary, positions | optional — add it for uploadable lineups |
+One file carries everything the optimizer needs, so there's nothing to
+reconcile and no external API:
 
-Run on the **DFF alone** and lineups export by name (manual entry). Add the DK
-CSV to get the `Name (ID)` format DraftKings needs for bulk upload. If you drop
-both, DK is the pool/IDs and DFF overlays its (better) projections.
+| LineStar column | Used for |
+|---|---|
+| `Projected` | projection |
+| `Floor` / `Ceiling` | outcome band (sanity-checked; falls back to a projection-anchored band if a value looks wrong) |
+| `ProjOwn` | real projected ownership → GPP leverage |
+| `StartingStatus` | starter (1) gets a small construction lean; 0-proj / inactive is excluded |
+| `Position` | G/F mapping (PG/SG → G, SF/PF → F) |
+| `Salary`, `Team`, `VersusStr` | cap, stacking game keys, home/away |
+
+LineStar's own player IDs are **not** DraftKings IDs, so lineups export **by
+name** for manual entry.
 
 ## The ruleset
 
@@ -34,43 +40,45 @@ triple-double +3.
 
 ## How it builds lineups
 
-1. **Clean the pool** — drop OUT players, players with ~0 recent minutes
-   (out of rotation, no matter the season average), and, dynamically, the
-   minutes-punts: keep players by *upside*, with the cutoff scaling to slate
-   depth (deep slate → higher floor; thin slate → reaches down only if forced).
-2. **Build** a large pool of valid, salary-legal, game-stacked lineups.
-3. **Simulate** thousands of slates (Beta-PERT player outcomes + a shared
-   per-game multiplier, so stacking pays off) and rank by ceiling.
-4. **Leverage-adjust** by projected ownership (value-based, ~0.63 rank
-   correlation with real %Drafted), so the set fades the obvious chalk.
+1. **Clean the pool** — drop 0-projection players (out / inactive) and,
+   dynamically, the minutes-punts: keep players by *upside* (ceiling), with the
+   cutoff scaling to slate depth.
+2. **Build** a large pool of valid, salary-legal, game-stacked lineups, with a
+   small lean toward confirmed starters and a salary-reserve that adapts to
+   whether the slate is stars-and-scrubs or balanced.
+3. **Simulate** thousands of slates (Beta-PERT outcomes + a shared per-game
+   multiplier, so stacking pays off) and rank by ceiling.
+4. **Leverage-adjust** on *over-ownership* (ownership per point of ceiling)
+   using LineStar's projected ownership, so the set fades unbacked chalk without
+   fading good chalk.
 5. **Select** N under a per-player exposure cap **and** a pairwise-overlap cap,
-   so your lineups are genuinely different — the whole game in WNBA, where
-   everyone runs the same projections. The A'ja-type on/off split emerges here.
+   so the lineups are genuinely different.
 
 ## Settings & inputs (all optional except the file)
 
 - **Lineups**, **min game stack**, **max exposure**, **fade chalk (leverage)**.
-- **Game-theory cores** (type-ahead): flag a sharp's core plays — the app
-  gives them a small edge, treats them as chalk for leverage, and diversifies
-  them across your set (no forced count — the data decides).
-- **His full pool** (type-ahead): an ownership *signal*, never a filter —
-  in-pool reads as chalk, off-pool gets a leverage discount, nobody is excluded.
+- **Game-theory cores** (type-ahead): flag a sharp's core plays — small edge,
+  treated as chalk for leverage, diversified across the set, counted in-pool.
+- **His full pool** (type-ahead) + **off-pool allowed per lineup** (0 / 1 / 2):
+  a hard build constraint. At 0 every player comes from the pool; at 1–2 the app
+  may spend a slot off-pool, but only when it makes a genuinely better lineup.
+  Off-pool lineups show a pool-legal alternative you can reveal and swap in.
+- **Remove player** (type-ahead): zero someone out (late scratch, missed
+  shootaround) and redistribute their minutes/usage to teammates.
 
 ## Files
 
 | File | Role |
 |---|---|
-| `app.py` | Local web server + the projection/pool logic (DFF + CSV). |
-| `gui.py` | The single-page UI (drag-drop, pickers, results, exposure, download). |
-| `engine.py` | Pure-Python GPP engine: pool filter, construction, Monte-Carlo sim, selection. |
-| `dk.py` | DK ruleset, CSV parsing, scoring, name normalization. |
-| `projections.py` | CSV-only projector + value-based ownership model. |
+| `app.py` | Local web server + LineStar parsing / pool logic. |
+| `gui.py` | The single-page UI (drop, pickers, results, exposure, download). |
+| `engine.py` | Pure-Python GPP engine: pool filter, construction, Monte-Carlo sim, selection, pool-legal alternatives. |
+| `dk.py` | DK ruleset, scoring, name normalization, the Player record. |
 | `../WNBA-Optimizer.command` | Double-click launcher (Mac). |
 
 ## Building your own ownership model (later)
 
-Ownership can't be computed from math alone — it's *learnable* from your past
-contests. Each `(DFF cheatsheet + contest standings)` pair from a day you
-played is one training slate; ~10–15 pairs are enough for a fitted model to
-beat the value-only default. Until then, value-based ownership + your sharp's
-cores are the read.
+LineStar already gives projected ownership. If you ever want a model fitted to
+*your* contests, each `(projections + contest standings)` pair from a day you
+played is one training slate; ~10–15 pairs are enough to beat a generic number.
+Until then, LineStar's `ProjOwn` is the read.
