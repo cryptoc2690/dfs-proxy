@@ -93,10 +93,17 @@ def parse_linestar(text):
             players.append(p)
             continue
         ceil, floor = _f(d.get("Ceiling")), _f(d.get("Floor"))
-        if ceil < proj * 1.15:          # missing / too-low ceiling
-            ceil = proj * 1.4
-        if floor <= 0 or floor > proj * 0.95:  # missing / implausible floor
-            floor = proj * 0.6
+        # Trust LineStar's own variance model; override ONLY genuinely broken
+        # values. A ceiling at/below the projection is impossible for the sim; a
+        # floor that's <=0, absurdly low (< 0.35x proj), or >= projection is a
+        # bad row (LineStar ships the odd 0 or token floor). Otherwise keep them
+        # — a legitimately modest ceiling should fade a low-upside play, not get
+        # inflated into false upside (which was over-rewarding Boston-type
+        # plays and under-fading chalk like Sabally).
+        if ceil <= proj:
+            ceil = round(proj * 1.3, 1)
+        if floor <= 0 or floor < proj * 0.35 or floor >= proj:
+            floor = round(proj * 0.6, 1)
         p.proj = round(proj, 1)
         p.ceil = round(ceil, 1)
         p.floor = round(floor, 1)
