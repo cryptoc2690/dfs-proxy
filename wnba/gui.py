@@ -74,6 +74,13 @@ INDEX_HTML = r"""<!doctype html>
   .card .stat{font-size:12px;color:var(--muted)}
   .card .stat b{color:var(--text)}
   .stacks{padding:6px 14px;font-size:12px;color:var(--accent2)}
+  .offbadge{cursor:pointer;color:var(--accent);font-weight:600}
+  .offbadge:hover{text-decoration:underline}
+  .altwrap{border-top:1px dashed var(--line);background:var(--panel2)}
+  .althead{padding:8px 14px;font-size:12px;color:var(--muted)}
+  .altwrap .use{margin:6px 14px 12px;background:var(--chip);color:var(--text);border:1px solid var(--line);
+    border-radius:8px;padding:7px 12px;font-size:13px;cursor:pointer}
+  .altwrap .use:hover{border-color:var(--accent);color:#fff}
   table{width:100%;border-collapse:collapse}
   .card td{padding:6px 14px;font-size:13px;border-top:1px solid var(--line)}
   .card td.slot{color:var(--muted);width:46px}
@@ -319,21 +326,8 @@ function render(d){
   $('#tools').style.display = d.lineups.length ? 'block':'none';
 
   const poolOn = d.poolActive;
-  $('#cards').innerHTML = d.lineups.map(l => {
-    const rows = l.players.map(p => {
-      const off = poolOn && p.pool===false;
-      const mark = p.core ? '<span class="core-star">★</span> '
-        : (off ? '<span class="offpool" title="off your pool">◇</span> ' : '');
-      return '<tr><td class="slot">'+p.slot+'</td><td>'+mark+p.name+'</td><td class="stat">'+p.team+'</td>'+
-      '<td class="sal">$'+p.salary.toLocaleString()+'</td><td class="pr">'+p.proj+'</td></tr>';
-    }).join('');
-    const coreTxt = l.cores ? ' · <span class="core-star">★</span>'+l.cores : '';
-    const offTxt = (poolOn && l.offPool) ? ' · <span class="offpool">◇</span>'+l.offPool+' off-pool' : '';
-    return '<div class="card"><div class="top"><span class="rank">#'+l.rank+coreTxt+offTxt+'</span>'+
-      '<span class="stat"><b>'+l.proj+'</b> proj · <b>'+l.ceiling+'</b> ceil · $'+l.salary.toLocaleString()+' · '+l.totalOwn+'% own</span></div>'+
-      (l.stacks.length?'<div class="stacks">stacks: '+l.stacks.join(', ')+'</div>':'')+
-      '<table>'+rows+'</table></div>';
-  }).join('');
+  $('#cards').innerHTML = d.lineups.map((l,i)=>card(l,i,poolOn)).join('');
+  wireCards();
 
   // exposure — spot over-concentration at a glance
   const N=d.lineups.length, ec={};
@@ -351,6 +345,54 @@ function render(d){
     $('#projwrap').style.display='block';
     renderProj(d.players, 'proj');
   }
+}
+
+function lineupRows(players, poolOn){
+  return players.map(p => {
+    const off = poolOn && p.pool===false;
+    const mark = p.core ? '<span class="core-star">★</span> '
+      : (off ? '<span class="offpool" title="off your pool">◇</span> ' : '');
+    return '<tr><td class="slot">'+p.slot+'</td><td>'+mark+p.name+'</td><td class="stat">'+p.team+'</td>'+
+      '<td class="sal">$'+p.salary.toLocaleString()+'</td><td class="pr">'+p.proj+'</td></tr>';
+  }).join('');
+}
+function card(l,i,poolOn){
+  const coreTxt = l.cores ? ' · <span class="core-star">★</span>'+l.cores : '';
+  let badge = '';
+  if(poolOn && l.offPool){
+    badge = l.alt
+      ? ' · <span class="offbadge" data-i="'+i+'">◇ '+l.offPool+' off-pool · show pool-only ▾</span>'
+      : ' · <span class="offpool">◇ '+l.offPool+' off-pool (no pool-only fit)</span>';
+  }
+  const head = '<div class="top"><span class="rank">#'+l.rank+coreTxt+badge+'</span>'+
+    '<span class="stat"><b>'+l.proj+'</b> proj · <b>'+l.ceiling+'</b> ceil · $'+l.salary.toLocaleString()+' · '+l.totalOwn+'% own</span></div>';
+  const stacks = l.stacks.length ? '<div class="stacks">stacks: '+l.stacks.join(', ')+'</div>' : '';
+  const main = '<table>'+lineupRows(l.players,poolOn)+'</table>';
+  let alt = '';
+  if(poolOn && l.offPool && l.alt){
+    const a = l.alt;
+    alt = '<div class="altwrap" id="alt-'+i+'" style="display:none">'+
+      '<div class="althead">Pool-only alternative — <b>'+a.proj+'</b> proj · <b>'+a.ceiling+'</b> ceil · $'+a.salary.toLocaleString()+' · '+a.totalOwn+'% own</div>'+
+      '<table>'+lineupRows(a.players,poolOn)+'</table>'+
+      '<button class="use" data-i="'+i+'">Use this pool-only lineup</button></div>';
+  }
+  return '<div class="card">'+head+stacks+main+alt+'</div>';
+}
+function wireCards(){
+  document.querySelectorAll('.offbadge').forEach(b=>b.onclick=()=>{
+    const i=b.dataset.i, panel=$('#alt-'+i), show = panel.style.display==='none';
+    panel.style.display = show?'block':'none';
+    b.innerHTML = '◇ '+lastResult.lineups[i].offPool+' off-pool · '+(show?'hide pool-only ▴':'show pool-only ▾');
+  });
+  document.querySelectorAll('.use').forEach(btn=>btn.onclick=()=>useAlt(+btn.dataset.i));
+}
+function useAlt(i){
+  const l=lastResult.lineups[i], a=l.alt;
+  if(!a) return;
+  l.players=a.players; l.upload=a.upload; l.salary=a.salary; l.proj=a.proj;
+  l.ceiling=a.ceiling; l.totalOwn=a.totalOwn; l.cores=a.cores; l.stacks=a.stacks;
+  l.offPool=0; l.alt=null;
+  render(lastResult);
 }
 
 let projSort = 'proj', projDir = -1;

@@ -239,6 +239,37 @@ def _upload_str(p):
     return p.name if (not p.dk_id or p.dk_id.startswith("dff-")) else f"{p.name} ({p.dk_id})"
 
 
+_SLOTS = ["F", "F", "F", "G", "G", "UTIL"]
+
+
+def _slots_payload(slots):
+    return [{"slot": s, "name": p.name, "team": p.team, "pos": p.pos,
+             "salary": p.salary, "proj": round(p.proj, 1), "core": p.core,
+             "pool": p.in_pool}
+            for s, p in zip(_SLOTS, slots)]
+
+
+def _stacks_payload(lu):
+    return [f"{g}:{sum(1 for p in lu.players if p.game == g)}"
+            for g in lu.games()
+            if sum(1 for p in lu.players if p.game == g) >= 2]
+
+
+def _alt_payload(alt):
+    """Serialize a lineup's pool-legal alternative (P2), or None."""
+    if not alt:
+        return None
+    slots = alt.dk_slots()
+    return {
+        "salary": alt.salary, "proj": alt.proj, "totalOwn": alt.total_own,
+        "ceiling": round(alt.metrics.get("ceiling", 0), 1),
+        "cores": sum(1 for p in alt.players if p.core),
+        "stacks": _stacks_payload(alt),
+        "players": _slots_payload(slots),
+        "upload": [_upload_str(p) for p in slots],
+    }
+
+
 def _parse_names(text):
     """Turn pasted lines (possibly with extra spreadsheet columns) into a set of
     normalized player names. Takes the first tab/comma field of each line."""
@@ -380,16 +411,11 @@ def run_optimize(csv_text: str, options: dict) -> dict:
             "mean": round(lu.metrics.get("mean", 0), 1),
             "totalOwn": lu.total_own,
             "cores": sum(1 for p in lu.players if p.core),
-            "stacks": [f"{g}:{sum(1 for p in lu.players if p.game == g)}"
-                       for g in lu.games()
-                       if sum(1 for p in lu.players if p.game == g) >= 2],
+            "stacks": _stacks_payload(lu),
             "offPool": sum(1 for p in lu.players if not p.in_pool),
-            "players": [{
-                "slot": slot, "name": p.name, "team": p.team, "pos": p.pos,
-                "salary": p.salary, "proj": round(p.proj, 1), "core": p.core,
-                "pool": p.in_pool,
-            } for slot, p in zip(["F", "F", "F", "G", "G", "UTIL"], lu.dk_slots())],
+            "players": _slots_payload(lu.dk_slots()),
             "upload": [_upload_str(p) for p in lu.dk_slots()],
+            "alt": _alt_payload(lu.alt),
         } for i, lu in enumerate(lineups)],
     }
 

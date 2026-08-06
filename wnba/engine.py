@@ -21,6 +21,7 @@ class Lineup:
     def __init__(self, players: list[Player]):
         self.players = players
         self.metrics: dict[str, float] = {}
+        self.alt: "Lineup | None" = None  # pool-legal alternative (P2), if any
 
     @property
     def salary(self) -> int:
@@ -250,6 +251,69 @@ def select_final(cands, n, max_exposure, max_overlap=4):
     return final[:n]
 
 
+# ---------------- pool-legal alternative (P2) ----------------
+def _complete_in_pool(kept, pool, max_per_team):
+    """Hold the in-pool players of an off-pool lineup and re-fill the vacated
+    slots using ONLY in-pool players — a minimal-change, pool-legal version of
+    the same lineup. Greedy by projection, keeping the roster legal and under
+    cap. Returns 6 players or None if no legal all-in-pool repair exists."""
+    picked = list(kept)
+    used = {p.dk_id for p in picked}
+    inpool = sorted((p for p in pool if p.in_pool and p.dk_id not in used),
+                    key=lambda p: -p.proj)
+    while len(picked) < ROSTER_SIZE:
+        remaining = ROSTER_SIZE - len(picked)
+        g = sum(1 for p in picked if p.is_guard)
+        f = len(picked) - g
+        need_g, need_f = max(0, MIN_GUARDS - g), max(0, MIN_FORWARDS - f)
+        must_guard = need_g >= remaining
+        must_forward = need_f >= remaining
+        salary = sum(p.salary for p in picked)
+        budget = SALARY_CAP - salary - MIN_SALARY * (remaining - 1)
+        team_count = {}
+        for p in picked:
+            team_count[p.team] = team_count.get(p.team, 0) + 1
+        pick = None
+        for p in inpool:
+            if p.dk_id in used or p.salary > budget:
+                continue
+            if team_count.get(p.team, 0) >= max_per_team:
+                continue
+            if (must_guard and not p.is_guard) or (must_forward and p.is_guard):
+                continue
+            ng = need_g - (1 if p.is_guard and need_g else 0)
+            nf = need_f - (1 if not p.is_guard and need_f else 0)
+            if max(0, ng) + max(0, nf) > remaining - 1:
+                continue
+            pick = p
+            break
+        if pick is None:
+            return None
+        picked.append(pick)
+        used.add(pick.dk_id)
+    g = sum(1 for p in picked if p.is_guard)
+    if g < MIN_GUARDS or (len(picked) - g) < MIN_FORWARDS or sum(p.salary for p in picked) > SALARY_CAP:
+        return None
+    return picked
+
+
+def _attach_pool_alternatives(lineups, pool, max_per_team, n_sims, leverage, seed):
+    """For every final lineup that spent an off-pool slot, attach the best
+    pool-legal alternative (simulated on the same footing so its ceiling is
+    comparable) for the UI to reveal/swap in."""
+    alts = []
+    for lu in lineups:
+        if all(p.in_pool for p in lu.players):
+            continue
+        repaired = _complete_in_pool([p for p in lu.players if p.in_pool],
+                                     pool, max_per_team)
+        if repaired:
+            lu.alt = Lineup(repaired)
+            alts.append(lu.alt)
+    if alts:
+        simulate_and_score(alts, pool, sims=n_sims, leverage=leverage, seed=seed)
+
+
 # ---------------- public API ----------------
 def build_gpp(players, *, n=20, pool_size=None, min_stack=2, max_per_team=4,
               max_exposure=0.6, leverage=0.35, n_sims=5000, seed=0,
@@ -287,7 +351,10 @@ def build_gpp(players, *, n=20, pool_size=None, min_stack=2, max_per_team=4,
     if not cands:
         return []
     simulate_and_score(cands, pool, sims=n_sims, leverage=leverage, seed=seed)
-    return select_final(cands, n, max_exposure, max_overlap)
+    final = select_final(cands, n, max_exposure, max_overlap)
+    if max_off_pool:  # 0 or None -> every lineup is already all-in-pool
+        _attach_pool_alternatives(final, pool, max_per_team, n_sims, leverage, seed)
+    return final
 
 
 def _viable_pool(pool, n):
