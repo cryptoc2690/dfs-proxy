@@ -61,7 +61,8 @@ def _weighted_pick(cands, rng):
     return cands[-1]
 
 
-def _build_one(pool, max_per_team, rng, cores=None, min_cores=0, reserve=MIN_SALARY):
+def _build_one(pool, max_per_team, rng, cores=None, min_cores=0, reserve=MIN_SALARY,
+               max_off_pool=None):
     # Seed the lineup with the required number of cores, then fill the rest with
     # a position-aware greedy that always keeps the G/F minimums reachable.
     # (Extra cores can still land in the fill — min_cores is a floor.)
@@ -78,6 +79,8 @@ def _build_one(pool, max_per_team, rng, cores=None, min_cores=0, reserve=MIN_SAL
         team_count[p.team] = team_count.get(p.team, 0) + 1
     if salary > SALARY_CAP or any(v > max_per_team for v in team_count.values()):
         return None
+    if max_off_pool is not None and sum(1 for p in picked if not p.in_pool) > max_off_pool:
+        return None
 
     while len(picked) < ROSTER_SIZE:
         remaining = ROSTER_SIZE - len(picked)
@@ -87,11 +90,15 @@ def _build_one(pool, max_per_team, rng, cores=None, min_cores=0, reserve=MIN_SAL
         must_guard = need_g >= remaining
         must_forward = need_f >= remaining
         budget = SALARY_CAP - salary - reserve * (remaining - 1)
+        off_pool_used = (sum(1 for p in picked if not p.in_pool)
+                         if max_off_pool is not None else 0)
         elig = []
         for p in pool:
             if p.dk_id in used or p.salary > budget:
                 continue
             if team_count.get(p.team, 0) >= max_per_team:
+                continue
+            if max_off_pool is not None and not p.in_pool and off_pool_used >= max_off_pool:
                 continue
             if (must_guard and not p.is_guard) or (must_forward and p.is_guard):
                 continue
@@ -122,13 +129,13 @@ def _has_stack(players, stack):
 
 
 def build_candidates(pool, count, *, stack, max_per_team, seed=0,
-                     cores=None, min_cores=0, reserve=MIN_SALARY):
+                     cores=None, min_cores=0, reserve=MIN_SALARY, max_off_pool=None):
     rng = random.Random(seed)
     out, seen = [], set()
     tries = 0
     while len(out) < count and tries < count * 15:
         tries += 1
-        lu = _build_one(pool, max_per_team, rng, cores, min_cores, reserve)
+        lu = _build_one(pool, max_per_team, rng, cores, min_cores, reserve, max_off_pool)
         if not lu:
             continue
         if stack > 1 and not _has_stack(lu, stack):
@@ -246,11 +253,16 @@ def select_final(cands, n, max_exposure, max_overlap=4):
 # ---------------- public API ----------------
 def build_gpp(players, *, n=20, pool_size=None, min_stack=2, max_per_team=4,
               max_exposure=0.6, leverage=0.35, n_sims=5000, seed=0,
-              cores=None, min_cores=0, max_overlap=4):
-    pool = [p for p in players if p.proj > 0]
-    if len(pool) < ROSTER_SIZE:
+              cores=None, min_cores=0, max_overlap=4, max_off_pool=None):
+    playable = [p for p in players if p.proj > 0]
+    if len(playable) < ROSTER_SIZE:
         return []
-    pool = _viable_pool(pool, n)
+    pool = _viable_pool(playable, n)
+    if max_off_pool is not None:
+        # The pool constraint is only meaningful if every pool member is
+        # available to build with, so never let the ceiling filter trim one.
+        seen = {id(p) for p in pool}
+        pool += [p for p in playable if p.in_pool and id(p) not in seen]
     cores = [c for c in (cores or []) if c.proj > 0]
     pool_size = pool_size or max(120, n * 8)
     # Salary-aware construction: stars-and-scrubs is only right when a CHEAP
@@ -260,10 +272,18 @@ def build_gpp(players, *, n=20, pool_size=None, min_stack=2, max_per_team=4,
     cheap_best = max((p.proj for p in pool if p.salary <= 5500), default=0.0)
     reserve = 4200 if cheap_best >= 16 else 6000
     kw = dict(max_per_team=max_per_team, seed=seed, cores=cores,
-              min_cores=min_cores, reserve=reserve)
+              min_cores=min_cores, reserve=reserve, max_off_pool=max_off_pool)
     cands = build_candidates(pool, pool_size, stack=min_stack, **kw)
     if not cands:  # relax the stack requirement rather than return nothing
         cands = build_candidates(pool, pool_size, stack=1, **kw)
+    if not cands and max_off_pool is not None:
+        # Pool too thin to field legal lineups at this cap — loosen it one at a
+        # time (0 -> 1 -> ... -> unconstrained) rather than return nothing.
+        for relaxed in range(max_off_pool + 1, ROSTER_SIZE + 1):
+            kw2 = dict(kw, max_off_pool=(None if relaxed >= ROSTER_SIZE else relaxed))
+            cands = build_candidates(pool, pool_size, stack=1, **kw2)
+            if cands:
+                break
     if not cands:
         return []
     simulate_and_score(cands, pool, sims=n_sims, leverage=leverage, seed=seed)

@@ -63,6 +63,7 @@ class Player:
     ceil: float = 0.0
     ownership: float = 0.0   # projected ownership %, 0..100 (GPP leverage)
     core: bool = False       # flagged as a core play in a game-theory pool
+    in_pool: bool = False    # member of the sharp's pool (build constraint set)
     redis_bump: float = 0.0  # proj added by removal redistribution (excluded
                              # from the ownership model so our own boost can't
                              # inflate a replacement's ownership and re-fade it)

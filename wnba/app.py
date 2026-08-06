@@ -302,15 +302,19 @@ def run_optimize(csv_text: str, options: dict) -> dict:
             if not had_own:       # proj changed -> refresh the value-based ownership
                 _estimate_ownership(players)
 
-    # Game-theory pool as an OWNERSHIP signal, never a filter — a sharp play
-    # outside his pool is rare but real, so nobody is excluded. Cores read as
-    # heavy chalk; in-pool as chalk; off-pool gets a discount so a strong one
-    # surfaces as leverage and the optimizer will happily use it.
+    # Game-theory pool as a BUILD CONSTRAINT (see max_off_pool below), not an
+    # ownership hack. A sharp's pool encodes their whole read — who's starting,
+    # who's on a minutes leash, which cheap value is real — so lineups build
+    # from it, spending an off-pool slot only when the data earns it. Cores count
+    # as in-pool. (The old off-pool ownership discount is gone: under the
+    # over-ownership leverage it was making sub-5% off-pool darts look like edges
+    # and leaking 2-3 of them into lineups, which is exactly what loses.)
     core_names = _parse_names(options.get("cores"))
     pool_names = _parse_names(options.get("pool"))
     for p in players:
         nm = normalize_name(p.name)
         p.core = nm in core_names
+        p.in_pool = p.core or (nm in pool_names)
         if p.proj <= 0:
             continue
         if p.core:
@@ -321,11 +325,8 @@ def run_optimize(csv_text: str, options: dict) -> dict:
             p.ceil = round(p.ceil * 1.06, 1)
             p.ownership = min(p.ownership + 4, 65)
             p.notes.append("GT core")
-        elif pool_names and nm in pool_names:
-            p.ownership = min(p.ownership + 5, 65)
-        elif pool_names:  # off his pool -> contrarian leverage
-            p.ownership = max(p.ownership * 0.6, 0.5)
-            p.notes.append("off-pool leverage")
+        elif pool_names and not p.in_pool:
+            p.notes.append("off-pool")
 
     playable = [p for p in players if p.proj > 0]
     if len(playable) < 6:
@@ -333,6 +334,9 @@ def run_optimize(csv_text: str, options: dict) -> dict:
                 "source": source_label}
 
     cores = [p for p in playable if p.core]
+    # Only enforce the pool cap when a pool was actually given; otherwise the
+    # whole slate is fair game (max_off_pool=None => unconstrained).
+    max_off_pool = _int(options.get("maxOffPool"), 0) if pool_names else None
     lineups = optimize_gpp(
         players,
         n=_int(options.get("n"), 20),
@@ -343,6 +347,7 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         leverage=_float(options.get("leverage"), 0.15),
         n_sims=_int(options.get("sims"), 5000),
         cores=cores,
+        max_off_pool=max_off_pool,
         # No forced count — the data (projection vs. leverage) decides how many
         # cores land in each lineup; exposure caps keep them diversified.
         min_cores=0,
@@ -356,6 +361,7 @@ def run_optimize(csv_text: str, options: dict) -> dict:
     return {
         "source": source_label,
         "slateType": _slate_type(players),
+        "poolActive": bool(pool_names),
         "removed": removed,
         "slate": {
             "date": next((p.game_date for p in players if p.game_date), ""),
@@ -377,9 +383,11 @@ def run_optimize(csv_text: str, options: dict) -> dict:
             "stacks": [f"{g}:{sum(1 for p in lu.players if p.game == g)}"
                        for g in lu.games()
                        if sum(1 for p in lu.players if p.game == g) >= 2],
+            "offPool": sum(1 for p in lu.players if not p.in_pool),
             "players": [{
                 "slot": slot, "name": p.name, "team": p.team, "pos": p.pos,
                 "salary": p.salary, "proj": round(p.proj, 1), "core": p.core,
+                "pool": p.in_pool,
             } for slot, p in zip(["F", "F", "F", "G", "G", "UTIL"], lu.dk_slots())],
             "upload": [_upload_str(p) for p in lu.dk_slots()],
         } for i, lu in enumerate(lineups)],

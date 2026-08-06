@@ -29,12 +29,14 @@ INDEX_HTML = r"""<!doctype html>
   .panel h2{font-size:13px;text-transform:uppercase;letter-spacing:.6px;
     color:var(--muted);margin:0 0 14px}
   label{display:block;font-size:13px;color:var(--muted);margin:12px 0 5px}
-  input[type=text],input[type=number],input[type=password],textarea{width:100%;background:var(--panel2);
+  input[type=text],input[type=number],input[type=password],textarea,select{width:100%;background:var(--panel2);
     border:1px solid var(--line);color:var(--text);border-radius:9px;padding:9px 11px;font-size:14px;
     font-family:inherit}
   textarea{resize:vertical;min-height:58px;line-height:1.35}
-  input:focus,textarea:focus{outline:none;border-color:var(--accent2)}
+  select{cursor:pointer;-webkit-appearance:none;appearance:none}
+  input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent2)}
   .core-star{color:var(--accent2);font-weight:700}
+  .offpool{color:var(--accent);font-weight:700}
   .typeahead{position:relative}
   .drop-menu{position:absolute;left:0;right:0;top:100%;z-index:30;background:var(--panel2);
     border:1px solid var(--line);border-radius:9px;margin-top:4px;max-height:220px;overflow:auto;display:none}
@@ -140,9 +142,16 @@ INDEX_HTML = r"""<!doctype html>
         <div id="pooldrop" class="drop-menu"></div>
       </div>
       <div id="poolchips" class="chips"></div>
-      <div class="hint">Cores (★) are treated as the field's chalk; the app decides how
-        many to use from value + leverage and diversifies them across your lineups.
-        The pool is only an ownership signal — off-pool sharp plays still get used.</div>
+      <label style="margin-top:12px">Off-pool players allowed per lineup</label>
+      <select id="offpool">
+        <option value="0" selected>0 — build only from the pool</option>
+        <option value="1">1 — allow one, only if the data earns it</option>
+        <option value="2">2 — allow up to two</option>
+      </select>
+      <div class="hint">The pool is a hard build constraint, not an ownership nudge.
+        At 0, every player comes from your pool. At 1–2 the app may spend a slot off-pool,
+        but only when that player makes a genuinely better lineup — never a forced
+        contrarian dart. Cores (★) count as in-pool. No pool set → no constraint.</div>
 
       <label style="margin-top:14px">Remove player — out / traded / benched / missed shootaround</label>
       <div class="typeahead">
@@ -283,7 +292,7 @@ async function run(){
     n:+$('#n').value, stack:+$('#stack').value,
     maxExposure:(+$('#exp').value)/100, leverage:(+$('#lev').value)/100,
     cores:corePicker.sel.join('\n'), pool:poolPicker.sel.join('\n'),
-    remove:removePicker.sel.join('\n'), dff:dffText,
+    remove:removePicker.sel.join('\n'), maxOffPool:+$('#offpool').value, dff:dffText,
     apiKey:$('#key').value.trim(),
   };
   try{
@@ -309,12 +318,18 @@ function render(d){
     '<span class="meta">'+(d.slate.date||'')+' · '+(d.slate.games||[]).join('  ')+outTxt+rmTxt+'</span>';
   $('#tools').style.display = d.lineups.length ? 'block':'none';
 
+  const poolOn = d.poolActive;
   $('#cards').innerHTML = d.lineups.map(l => {
-    const rows = l.players.map(p =>
-      '<tr><td class="slot">'+p.slot+'</td><td>'+(p.core?'<span class="core-star">★</span> ':'')+p.name+'</td><td class="stat">'+p.team+'</td>'+
-      '<td class="sal">$'+p.salary.toLocaleString()+'</td><td class="pr">'+p.proj+'</td></tr>').join('');
+    const rows = l.players.map(p => {
+      const off = poolOn && p.pool===false;
+      const mark = p.core ? '<span class="core-star">★</span> '
+        : (off ? '<span class="offpool" title="off your pool">◇</span> ' : '');
+      return '<tr><td class="slot">'+p.slot+'</td><td>'+mark+p.name+'</td><td class="stat">'+p.team+'</td>'+
+      '<td class="sal">$'+p.salary.toLocaleString()+'</td><td class="pr">'+p.proj+'</td></tr>';
+    }).join('');
     const coreTxt = l.cores ? ' · <span class="core-star">★</span>'+l.cores : '';
-    return '<div class="card"><div class="top"><span class="rank">#'+l.rank+coreTxt+'</span>'+
+    const offTxt = (poolOn && l.offPool) ? ' · <span class="offpool">◇</span>'+l.offPool+' off-pool' : '';
+    return '<div class="card"><div class="top"><span class="rank">#'+l.rank+coreTxt+offTxt+'</span>'+
       '<span class="stat"><b>'+l.proj+'</b> proj · <b>'+l.ceiling+'</b> ceil · $'+l.salary.toLocaleString()+' · '+l.totalOwn+'% own</span></div>'+
       (l.stacks.length?'<div class="stacks">stacks: '+l.stacks.join(', ')+'</div>':'')+
       '<table>'+rows+'</table></div>';
