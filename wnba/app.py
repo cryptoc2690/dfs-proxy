@@ -100,7 +100,12 @@ def parse_linestar(text):
         p.proj = round(proj, 1)
         p.ceil = round(ceil, 1)
         p.floor = round(floor, 1)
-        p.ownership = _f(d.get("ProjOwn"))
+        # Floor a playable player's ownership at 1%: leverage keys on ownership
+        # per point of ceiling, so a blank/0 ProjOwn would otherwise read as the
+        # most contrarian play on the board (free leverage) purely from missing
+        # data, not from being genuinely under-owned.
+        own = _f(d.get("ProjOwn"))
+        p.ownership = own if own > 0 else 1.0
         p.notes.append("LineStar" if p.starter else "LineStar · bench")
         players.append(p)
     return players
@@ -240,6 +245,10 @@ def run_optimize(csv_text: str, options: dict) -> dict:
 
     cores = [p for p in playable if p.core]
     max_off_pool = _int(options.get("maxOffPool"), 0) if pool_names else None
+    # Decide the slate read ONCE, so the engine's salary reserve and the UI badge
+    # are the same determination (not two independent computations on different
+    # player sets).
+    slate_type = _slate_type(players)
     lineups = optimize_gpp(
         players,
         n=_int(options.get("n"), 20),
@@ -253,11 +262,12 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         min_cores=0,
         max_overlap=_int(options.get("maxOverlap"), 4),
         max_off_pool=max_off_pool,
+        stars_and_scrubs=(slate_type == "stars-and-scrubs"),
     )
 
     return {
         "source": source_label,
-        "slateType": _slate_type(players),
+        "slateType": slate_type,
         "poolActive": bool(pool_names),
         "removed": removed,
         "slate": {

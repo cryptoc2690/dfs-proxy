@@ -65,9 +65,6 @@ class Player:
     core: bool = False       # flagged as a core play in a game-theory pool
     in_pool: bool = False    # member of the sharp's pool (build constraint set)
     starter: bool = False    # LineStar StartingStatus == 1 (confirmed starter)
-    redis_bump: float = 0.0  # proj added by removal redistribution (excluded
-                             # from the ownership model so our own boost can't
-                             # inflate a replacement's ownership and re-fade it)
     notes: list[str] = field(default_factory=list)
 
     @property

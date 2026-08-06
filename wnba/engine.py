@@ -323,7 +323,8 @@ def _attach_pool_alternatives(lineups, pool, max_per_team, n_sims, leverage, see
 # ---------------- public API ----------------
 def build_gpp(players, *, n=20, pool_size=None, min_stack=2, max_per_team=4,
               max_exposure=0.6, leverage=0.35, n_sims=5000, seed=0,
-              cores=None, min_cores=0, max_overlap=4, max_off_pool=None):
+              cores=None, min_cores=0, max_overlap=4, max_off_pool=None,
+              stars_and_scrubs=None):
     playable = [p for p in players if p.proj > 0]
     if len(playable) < ROSTER_SIZE:
         return []
@@ -338,9 +339,13 @@ def build_gpp(players, *, n=20, pool_size=None, min_stack=2, max_per_team=4,
     # Salary-aware construction: stars-and-scrubs is only right when a CHEAP
     # player actually projects. If cheap value exists, reserve less per slot so
     # the build can pay up + use it; if not, reserve more so it spreads into
-    # mid-range instead of punting two slots into 9-point dead weight.
-    cheap_best = max((p.proj for p in pool if p.salary <= 5500), default=0.0)
-    reserve = 4200 if cheap_best >= 16 else 6000
+    # mid-range instead of punting two slots into 9-point dead weight. The caller
+    # passes the slate read so the engine's reserve and the UI's badge are the
+    # SAME determination; None -> decide it here (direct/standalone calls).
+    if stars_and_scrubs is None:
+        cheap_best = max((p.proj for p in pool if p.salary <= 5500), default=0.0)
+        stars_and_scrubs = cheap_best >= 16
+    reserve = 4200 if stars_and_scrubs else 6000
     kw = dict(max_per_team=max_per_team, seed=seed, cores=cores,
               min_cores=min_cores, reserve=reserve, max_off_pool=max_off_pool)
     cands = build_candidates(pool, pool_size, stack=min_stack, **kw)
