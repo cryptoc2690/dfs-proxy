@@ -186,6 +186,33 @@ def apply_daily_projections(players, text):
     return True
 
 
+# ---------------- recency / ownership nudge ----------------
+# The field over-owns players trending up — today's projection well above their
+# season baseline (a recent big game, a new role). Projected ownership under-
+# rates them, so leverage would wrongly read them as contrarian. We nudge their
+# ownership toward reality: gentle and capped, because proj-vs-season is a
+# directional proxy, not exact. This never benches anyone — it only makes the
+# leverage math honest, so a trending play gets played the right amount and the
+# real differentiation lands elsewhere.
+RECENCY_TREND_MIN = 1.20    # proj this many x above season PPG => trending
+RECENCY_NUDGE = 0.8         # ownership bump per unit of trend above 1.0
+RECENCY_NUDGE_CAP = 1.8     # never more than this x on one player's ownership
+
+
+def apply_recency_nudge(players):
+    for p in players:
+        if p.proj <= 0 or p.avg_points <= 0:
+            continue
+        trend = p.proj / p.avg_points
+        if trend < RECENCY_TREND_MIN:
+            continue
+        before = p.ownership
+        mult = min(1 + RECENCY_NUDGE * (trend - 1), RECENCY_NUDGE_CAP)
+        p.ownership = round(min(p.ownership * mult, 75.0), 1)
+        p.trending = True
+        p.notes.append(f"🔥 trending {trend:.1f}x season · own {before:.0f}→{p.ownership:.0f}")
+
+
 # ---------------- slate helpers ----------------
 def _slate_date(players):
     from datetime import datetime, timedelta
@@ -299,6 +326,11 @@ def run_optimize(csv_text: str, options: dict) -> dict:
     if had_minutes:
         source_label += " + minutes"
 
+    # Recency: bump the ownership of trending-up plays toward reality so leverage
+    # reads them as the chalk they'll become (not as contrarian). Uses today's
+    # proj vs season PPG — both already in the LineStar file, no API.
+    apply_recency_nudge(players)
+
     # Manual removals (late scratch / missed shootaround the projection hasn't
     # caught). Zero them and flow their minutes/usage to teammates.
     removed = _apply_removals(players, _parse_names(options.get("remove")))
@@ -376,7 +408,8 @@ def run_optimize(csv_text: str, options: dict) -> dict:
             "game": p.game, "proj": round(p.proj, 1), "floor": round(p.floor, 1),
             "ceil": round(p.ceil, 1), "own": round(p.ownership, 1),
             "min": round(p.minutes, 0), "stuffer": round(p.stuffer, 1), "risk": p.risk,
-            "core": p.core, "starter": p.starter, "notes": "; ".join(p.notes),
+            "trending": p.trending, "core": p.core, "starter": p.starter,
+            "notes": "; ".join(p.notes),
         } for p in sorted(playable, key=lambda p: -p.proj)],
         "lineups": [{
             "rank": i + 1, "salary": lu.salary, "proj": lu.proj,

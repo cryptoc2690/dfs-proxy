@@ -68,6 +68,7 @@ class Player:
     minutes: float = 0.0     # projected minutes (from the daily-projections file)
     stuffer: float = 0.0     # DK pts from NON-scoring cats (reb/ast/stl/blk) = floor
     risk: bool = False       # bust-prone: low minutes OR scoring-dependent
+    trending: bool = False   # projection well above season baseline -> field hype
     notes: list[str] = field(default_factory=list)
 
     @property

@@ -409,7 +409,8 @@ function renderProj(players, key){
     const num = ['salary','proj','min','stuffer','ceil','own'].includes(c[0]);
     let v = p[c[0]]; if(c[0]==='salary') v='$'+v.toLocaleString();
     if(c[0]==='name'){ if(p.core) v='<span class="core-star">★</span> '+v;
-      if(p.risk) v='<span class="riskdot" title="risk body: low minutes or scoring-dependent">⚠</span> '+v; }
+      if(p.risk) v='<span class="riskdot" title="risk body: low minutes or scoring-dependent">⚠</span> '+v;
+      if(p.trending) v='🔥 '+v; }
     return '<td class="'+(num?'num':'')+'">'+(v===undefined?'':v)+'</td>';
   }).join('')+'</tr>').join('');
   const t = $('#ptable'); t.innerHTML = head+body;
