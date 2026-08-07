@@ -238,9 +238,13 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         if p.proj <= 0:
             continue
         if p.core:
+            # Cores are the ANCHOR plays — the sharp's picks that keep landing in
+            # winners. Small projection edge, and NO ownership penalty: fading
+            # them for being chalk fought their inclusion (A'ja stranded at
+            # 8-17%). Differentiation comes from the other five spots; the
+            # per-lineup minimum (min_cores) makes every lineup build around them.
             p.proj = round(p.proj * 1.06, 1)
             p.ceil = round(p.ceil * 1.06, 1)
-            p.ownership = min(p.ownership + 4, 65)
             p.notes.append("GT core")
         elif pool_names and not p.in_pool:
             p.notes.append("off-pool")
@@ -266,7 +270,10 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         leverage=_float(options.get("leverage"), 0.15),
         n_sims=_int(options.get("sims"), 5000),
         cores=cores,
-        min_cores=0,
+        # Anchor rule: every lineup built around at least this many cores (which
+        # ones vary across the set). Default 1 when cores are set — the sharp's
+        # cores keep landing in winners, so guarantee the build is around them.
+        min_cores=(_int(options.get("minCores"), 1) if cores else 0),
         max_overlap=_int(options.get("maxOverlap"), 4),
         max_off_pool=max_off_pool,
         stars_and_scrubs=(slate_type == "stars-and-scrubs"),

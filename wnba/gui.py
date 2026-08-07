@@ -134,6 +134,15 @@ INDEX_HTML = r"""<!doctype html>
         <div id="coredrop" class="drop-menu"></div>
       </div>
       <div id="corechips" class="chips"></div>
+      <label style="margin-top:12px">Minimum cores per lineup</label>
+      <select id="mincores">
+        <option value="0">0 — no requirement</option>
+        <option value="1" selected>1 — every lineup built around ≥1 core</option>
+        <option value="2">2 — every lineup built around ≥2</option>
+      </select>
+      <div class="hint">Cores are your anchor plays — the sharp's picks that keep landing
+        in winning lineups. This guarantees every lineup is built around at least this many;
+        which ones vary across your set. No cores set → no requirement.</div>
       <label style="margin-top:14px">His full pool — type to add (optional)</label>
       <div class="typeahead">
         <input id="poolin" type="text" autocomplete="off" placeholder="drop a file first, then type…" disabled>
@@ -270,6 +279,7 @@ async function run(){
     maxExposure:(+$('#exp').value)/100, leverage:(+$('#lev').value)/100,
     cores:corePicker.sel.join('\n'), pool:poolPicker.sel.join('\n'),
     remove:removePicker.sel.join('\n'), maxOffPool:+$('#offpool').value,
+    minCores:+$('#mincores').value,
   };
   try{
     const res = await fetch('/api/optimize', {method:'POST',headers:{'Content-Type':'application/json'},
