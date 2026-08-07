@@ -37,6 +37,8 @@ INDEX_HTML = r"""<!doctype html>
   input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent2)}
   .core-star{color:var(--accent2);font-weight:700}
   .offpool{color:var(--accent);font-weight:700}
+  .riskdot{color:#e0a030}
+  .riskrow td{color:var(--muted)}
   .typeahead{position:relative}
   .drop-menu{position:absolute;left:0;right:0;top:100%;z-index:30;background:var(--panel2);
     border:1px solid var(--line);border-radius:9px;margin-top:4px;max-height:220px;overflow:auto;display:none}
@@ -115,6 +117,11 @@ INDEX_HTML = r"""<!doctype html>
         <b>Drop your LineStar CSV</b>
         <small>projections, floor/ceiling, ownership, starters — all in one file</small>
         <input id="file" type="file" accept=".csv" hidden>
+      </div>
+      <div id="mindrop" class="drop" style="margin-top:10px;padding:16px">
+        <b>+ daily projections CSV</b>
+        <small>adds minutes + stat-stuffer floor — rations bust-prone plays</small>
+        <input id="minfile" type="file" accept=".csv" hidden>
       </div>
 
       <h2 style="margin-top:22px">2 · Settings</h2>
@@ -195,7 +202,7 @@ INDEX_HTML = r"""<!doctype html>
 </main>
 <script>
 const $ = s => document.querySelector(s);
-let csvText = null, lastResult = null, playerNames = [];
+let csvText = null, lastResult = null, playerNames = [], minText = '';
 
 $('#exp').addEventListener('input', e => $('#expv').textContent = e.target.value);
 $('#lev').addEventListener('input', e => $('#levv').textContent = (e.target.value/100).toFixed(2));
@@ -226,6 +233,18 @@ function parseNames(text){
   return [...new Set(out)];
 }
 function csvSplit(line){ const out=[]; let cur='',q=false; for(const ch of line){ if(ch==='"')q=!q; else if(ch===','&&!q){out.push(cur);cur='';} else cur+=ch; } out.push(cur); return out; }
+
+// ---- daily projections (minutes) drop ----
+const mindrop = $('#mindrop'), minfile = $('#minfile');
+mindrop.addEventListener('click', () => minfile.click());
+minfile.addEventListener('change', e => loadMin(e.target.files[0]));
+['dragover','dragenter'].forEach(ev => mindrop.addEventListener(ev, e => {e.preventDefault();mindrop.classList.add('over')}));
+['dragleave','drop'].forEach(ev => mindrop.addEventListener(ev, e => {e.preventDefault();mindrop.classList.remove('over')}));
+mindrop.addEventListener('drop', e => loadMin(e.dataTransfer.files[0]));
+function loadMin(f){ if(!f) return; const r=new FileReader();
+  r.onload=()=>{ minText=r.result; mindrop.classList.add('loaded');
+    mindrop.innerHTML='<b>✓ '+f.name+'</b><small>minutes + stat-stuffer floor loaded</small>'; };
+  r.readAsText(f); }
 
 // ---- reusable type-ahead picker (used for cores and the full pool) ----
 function makePicker(prefix, icon){
@@ -279,7 +298,7 @@ async function run(){
     maxExposure:(+$('#exp').value)/100, leverage:(+$('#lev').value)/100,
     cores:corePicker.sel.join('\n'), pool:poolPicker.sel.join('\n'),
     remove:removePicker.sel.join('\n'), maxOffPool:+$('#offpool').value,
-    minCores:+$('#mincores').value,
+    minCores:+$('#mincores').value, minutes:minText,
   };
   try{
     const res = await fetch('/api/optimize', {method:'POST',headers:{'Content-Type':'application/json'},
@@ -330,7 +349,8 @@ function lineupRows(players, poolOn){
   return players.map(p => {
     const off = poolOn && p.pool===false;
     const mark = p.core ? '<span class="core-star">★</span> '
-      : (off ? '<span class="offpool" title="off your pool">◇</span> ' : '');
+      : (p.risk ? '<span class="riskdot" title="risk body: low minutes or scoring-dependent">⚠</span> '
+      : (off ? '<span class="offpool" title="off your pool">◇</span> ' : ''));
     return '<tr><td class="slot">'+p.slot+'</td><td>'+mark+p.name+'</td><td class="stat">'+p.team+'</td>'+
       '<td class="sal">$'+p.salary.toLocaleString()+'</td><td class="pr">'+p.proj+'</td></tr>';
   }).join('');
@@ -380,14 +400,17 @@ function renderProj(players, key){
     const av=a[key], bv=b[key];
     return (typeof av==='number') ? (av-bv)*projDir : String(av).localeCompare(String(bv))*projDir;
   });
-  const cols = [['name','Player'],['team','Tm'],['pos','Pos'],['salary','Sal'],
-    ['proj','Proj'],['floor','Floor'],['ceil','Ceil'],['own','Own%'],['notes','Notes']];
+  const hasMin = players.some(p=>p.min>0);
+  const cols = [['name','Player'],['team','Tm'],['pos','Pos'],['salary','Sal'],['proj','Proj']]
+    .concat(hasMin?[['min','Min'],['stuffer','Stuff']]:[['floor','Floor']])
+    .concat([['ceil','Ceil'],['own','Own%'],['notes','Notes']]);
   const head = '<tr>'+cols.map(c=>'<th data-k="'+c[0]+'">'+c[1]+'</th>').join('')+'</tr>';
-  const body = sorted.map(p=>'<tr>'+cols.map(c=>{
-    const num = ['salary','proj','floor','ceil','own'].includes(c[0]);
+  const body = sorted.map(p=>'<tr'+(p.risk?' class="riskrow"':'')+'>'+cols.map(c=>{
+    const num = ['salary','proj','min','stuffer','ceil','own'].includes(c[0]);
     let v = p[c[0]]; if(c[0]==='salary') v='$'+v.toLocaleString();
-    if(c[0]==='name' && p.core) v='<span class="core-star">★</span> '+v;
-    return '<td class="'+(num?'num':'')+'">'+v+'</td>';
+    if(c[0]==='name'){ if(p.core) v='<span class="core-star">★</span> '+v;
+      if(p.risk) v='<span class="riskdot" title="risk body: low minutes or scoring-dependent">⚠</span> '+v; }
+    return '<td class="'+(num?'num':'')+'">'+(v===undefined?'':v)+'</td>';
   }).join('')+'</tr>').join('');
   const t = $('#ptable'); t.innerHTML = head+body;
   t.querySelectorAll('th').forEach(th=>th.onclick=()=>{

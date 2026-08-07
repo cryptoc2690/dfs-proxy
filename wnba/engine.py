@@ -52,13 +52,10 @@ class Lineup:
 
 # ---------------- lineup construction ----------------
 def _weighted_pick(cands, rng):
-    # Small lean toward confirmed starters: in the WNBA a starter's minutes are
-    # the most reliable scoring on any given night, so when two plays project
-    # alike the starter should come up more often. A ~15% weight bump is a
-    # tiebreak, not a takeover — a clearly better-projected bench play still wins
-    # (proj^3 dominates).
-    weights = [max(p.proj, 0.1) ** 3 * (1.15 if p.starter else 1.0) * (0.6 + 0.8 * rng.random())
-               for p in cands]
+    # Weight by projection; reliability is handled structurally by the risk-body
+    # cap (see _build_one), not by nudging weights here — a weight nudge always
+    # loses to a real projection gap, so keep this clean.
+    weights = [max(p.proj, 0.1) ** 3 * (0.6 + 0.8 * rng.random()) for p in cands]
     total = sum(weights)
     x = rng.random() * total
     for p, w in zip(cands, weights):
@@ -69,7 +66,7 @@ def _weighted_pick(cands, rng):
 
 
 def _build_one(pool, max_per_team, rng, cores=None, min_cores=0, reserve=MIN_SALARY,
-               max_off_pool=None):
+               max_off_pool=None, max_risk=None):
     # Seed the lineup with the required number of cores, then fill the rest with
     # a position-aware greedy that always keeps the G/F minimums reachable.
     # (Extra cores can still land in the fill — min_cores is a floor.)
@@ -89,6 +86,9 @@ def _build_one(pool, max_per_team, rng, cores=None, min_cores=0, reserve=MIN_SAL
     if max_off_pool is not None and sum(1 for p in picked if not p.in_pool) > max_off_pool:
         return None
 
+    def _risk(p):  # a bust-prone body; cores are anchors, never counted
+        return p.risk and not p.core
+
     while len(picked) < ROSTER_SIZE:
         remaining = ROSTER_SIZE - len(picked)
         g = sum(1 for p in picked if p.is_guard)
@@ -99,6 +99,8 @@ def _build_one(pool, max_per_team, rng, cores=None, min_cores=0, reserve=MIN_SAL
         budget = SALARY_CAP - salary - reserve * (remaining - 1)
         off_pool_used = (sum(1 for p in picked if not p.in_pool)
                          if max_off_pool is not None else 0)
+        risk_used = (sum(1 for p in picked if _risk(p))
+                     if max_risk is not None else 0)
         elig = []
         for p in pool:
             if p.dk_id in used or p.salary > budget:
@@ -106,6 +108,8 @@ def _build_one(pool, max_per_team, rng, cores=None, min_cores=0, reserve=MIN_SAL
             if team_count.get(p.team, 0) >= max_per_team:
                 continue
             if max_off_pool is not None and not p.in_pool and off_pool_used >= max_off_pool:
+                continue
+            if max_risk is not None and _risk(p) and risk_used >= max_risk:
                 continue
             if (must_guard and not p.is_guard) or (must_forward and p.is_guard):
                 continue
@@ -136,13 +140,15 @@ def _has_stack(players, stack):
 
 
 def build_candidates(pool, count, *, stack, max_per_team, seed=0,
-                     cores=None, min_cores=0, reserve=MIN_SALARY, max_off_pool=None):
+                     cores=None, min_cores=0, reserve=MIN_SALARY, max_off_pool=None,
+                     max_risk=None):
     rng = random.Random(seed)
     out, seen = [], set()
     tries = 0
     while len(out) < count and tries < count * 15:
         tries += 1
-        lu = _build_one(pool, max_per_team, rng, cores, min_cores, reserve, max_off_pool)
+        lu = _build_one(pool, max_per_team, rng, cores, min_cores, reserve,
+                        max_off_pool, max_risk)
         if not lu:
             continue
         if stack > 1 and not _has_stack(lu, stack):
@@ -324,7 +330,7 @@ def _attach_pool_alternatives(lineups, pool, max_per_team, n_sims, leverage, see
 def build_gpp(players, *, n=20, pool_size=None, min_stack=2, max_per_team=4,
               max_exposure=0.6, leverage=0.35, n_sims=5000, seed=0,
               cores=None, min_cores=0, max_overlap=4, max_off_pool=None,
-              stars_and_scrubs=None):
+              stars_and_scrubs=None, max_risk=None):
     playable = [p for p in players if p.proj > 0]
     if len(playable) < ROSTER_SIZE:
         return []
@@ -347,15 +353,24 @@ def build_gpp(players, *, n=20, pool_size=None, min_stack=2, max_per_team=4,
         stars_and_scrubs = cheap_best >= 16
     reserve = 4200 if stars_and_scrubs else 6000
     kw = dict(max_per_team=max_per_team, seed=seed, cores=cores,
-              min_cores=min_cores, reserve=reserve, max_off_pool=max_off_pool)
+              min_cores=min_cores, reserve=reserve, max_off_pool=max_off_pool,
+              max_risk=max_risk)
     cands = build_candidates(pool, pool_size, stack=min_stack, **kw)
     if not cands:  # relax the stack requirement rather than return nothing
         cands = build_candidates(pool, pool_size, stack=1, **kw)
+    if not cands and max_risk is not None:
+        # Not enough reliable bodies to fill under this cap (thin slate) — loosen
+        # the risk allowance one at a time before giving up.
+        for r in range(max_risk + 1, ROSTER_SIZE + 1):
+            cands = build_candidates(pool, pool_size, stack=1, **dict(kw, max_risk=r))
+            if cands:
+                break
     if not cands and max_off_pool is not None:
         # Pool too thin to field legal lineups at this cap — loosen it one at a
         # time (0 -> 1 -> ... -> unconstrained) rather than return nothing.
         for relaxed in range(max_off_pool + 1, ROSTER_SIZE + 1):
-            kw2 = dict(kw, max_off_pool=(None if relaxed >= ROSTER_SIZE else relaxed))
+            kw2 = dict(kw, max_off_pool=(None if relaxed >= ROSTER_SIZE else relaxed),
+                       max_risk=None)
             cands = build_candidates(pool, pool_size, stack=1, **kw2)
             if cands:
                 break

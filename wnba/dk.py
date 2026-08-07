@@ -65,6 +65,9 @@ class Player:
     core: bool = False       # flagged as a core play in a game-theory pool
     in_pool: bool = False    # member of the sharp's pool (build constraint set)
     starter: bool = False    # LineStar StartingStatus == 1 (confirmed starter)
+    minutes: float = 0.0     # projected minutes (from the daily-projections file)
+    stuffer: float = 0.0     # DK pts from NON-scoring cats (reb/ast/stl/blk) = floor
+    risk: bool = False       # bust-prone: low minutes OR scoring-dependent
     notes: list[str] = field(default_factory=list)
 
     @property

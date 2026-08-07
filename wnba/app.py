@@ -118,6 +118,74 @@ def parse_linestar(text):
     return players
 
 
+# ---------------- daily projections (minutes + stat-stuffer floor) ----------------
+# Reliability thresholds. A play is trustworthy only if it BOTH plays enough AND
+# stuffs the stat sheet — minutes alone don't cut it (a 28-minute one-category
+# scorer busts to nothing on a cold night). Below either bar => a "risk body",
+# which the engine rations to at most one per lineup.
+RISK_MIN_MINUTES = 18.0
+RISK_MIN_STUFFER = 8.0   # DK pts from reb/ast/stl/blk — production that shows up
+                         # regardless of shooting
+
+
+def parse_daily_projections(text):
+    """Parse a daily category-projections CSV -> {norm_name: {minutes, stuffer,
+    compdk}}. The file has a two-row header (group labels, then real header), so
+    we skip the first line. stuffer = DK points from the non-scoring categories
+    (the reliable floor); compdk = a full DK projection from the stat line, used
+    only to flag where this source and LineStar strongly disagree."""
+    import csv as _csv
+    import io
+    lines = (text or "").lstrip("﻿").splitlines()
+    if len(lines) < 3:
+        return {}
+    out = {}
+    for r in _csv.DictReader(io.StringIO("\n".join(lines[1:]))):
+        name = (r.get("Player") or "").strip()
+        if not name:
+            continue
+        pts, reb, ast = _f(r.get("PTS")), _f(r.get("REB")), _f(r.get("AST"))
+        stl, blk, tpm, to = _f(r.get("STL")), _f(r.get("BLK")), _f(r.get("3PM")), _f(r.get("TO"))
+        stuffer = 1.25 * reb + 1.5 * ast + 2 * stl + 2 * blk
+        compdk = pts + 0.5 * tpm + stuffer - 0.5 * to
+        out[normalize_name(name)] = {
+            "minutes": _f(r.get("Min")), "stuffer": round(stuffer, 1),
+            "compdk": round(compdk, 1),
+        }
+    return out
+
+
+def apply_daily_projections(players, text):
+    """Overlay minutes + stat-stuffer floor from the daily-projections file and
+    classify each playable player as reliable or a risk body. LineStar keeps
+    ownership of the projection; this only adds the reliability read (and a note
+    where the two sources disagree hard — LineStar's number still wins)."""
+    dmap = parse_daily_projections(text)
+    if not dmap:
+        return False  # no reliability read without the file; cap stays off
+    for p in players:
+        if p.proj <= 0:
+            continue
+        d = dmap.get(normalize_name(p.name))
+        if not d:  # unmatched -> fall back to the starter label
+            p.risk = not p.starter
+            continue
+        p.minutes = d["minutes"]
+        p.stuffer = d["stuffer"]
+        p.risk = p.minutes < RISK_MIN_MINUTES or p.stuffer < RISK_MIN_STUFFER
+        why = []
+        if p.minutes < RISK_MIN_MINUTES:
+            why.append(f"{p.minutes:.0f}min")
+        if p.stuffer < RISK_MIN_STUFFER:
+            why.append(f"stuffer {p.stuffer:.0f}")
+        p.notes.append("risk: " + ", ".join(why) if p.risk
+                       else f"reliable ({p.minutes:.0f}min, stuffer {p.stuffer:.0f})")
+        # Cross-source disagreement flag (informational; LineStar's proj is used).
+        if abs(d["compdk"] - p.proj) >= 6 and abs(d["compdk"] - p.proj) >= 0.3 * p.proj:
+            p.notes.append(f"src split: proj-file {d['compdk']:.0f} vs LS {p.proj:.0f}")
+    return True
+
+
 # ---------------- slate helpers ----------------
 def _slate_date(players):
     from datetime import datetime, timedelta
@@ -183,7 +251,7 @@ _SLOTS = ["F", "F", "F", "G", "G", "UTIL"]
 def _slots_payload(slots):
     return [{"slot": s, "name": p.name, "team": p.team, "pos": p.pos,
              "salary": p.salary, "proj": round(p.proj, 1), "core": p.core,
-             "pool": p.in_pool, "starter": p.starter}
+             "pool": p.in_pool, "starter": p.starter, "risk": p.risk and not p.core}
             for s, p in zip(_SLOTS, slots)]
 
 
@@ -222,6 +290,14 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         return {"error": "Couldn't read that file as a LineStar export "
                          "(or it has no projected players)."}
     source_label = "linestar"
+
+    # Reliability read from the daily-projections file (minutes + stat-stuffer
+    # floor). LineStar still owns the projection; this only classifies each play
+    # as reliable vs a risk body, which the engine rations. Optional — falls back
+    # to the starter label if no file is supplied.
+    had_minutes = apply_daily_projections(players, options.get("minutes") or "")
+    if had_minutes:
+        source_label += " + minutes"
 
     # Manual removals (late scratch / missed shootaround the projection hasn't
     # caught). Zero them and flow their minutes/usage to teammates.
@@ -277,6 +353,12 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         max_overlap=_int(options.get("maxOverlap"), 4),
         max_off_pool=max_off_pool,
         stars_and_scrubs=(slate_type == "stars-and-scrubs"),
+        # Ration bust-prone bodies. A "risk body" is low-minute OR scoring-
+        # dependent (thin stat-stuffer floor) — the kind that busts to nothing
+        # (Sophie: 28 min, 5.75 FP). At most this many per lineup; reliable cheap
+        # stuffers (Cotie, Kiah Stokes) are unlimited and fill the rest. Only
+        # enforced when the minutes file gave us a real reliability read.
+        max_risk=(_int(options.get("maxRisk"), 1) if had_minutes else None),
     )
 
     return {
@@ -293,6 +375,7 @@ def run_optimize(csv_text: str, options: dict) -> dict:
             "name": p.name, "team": p.team, "pos": p.pos, "salary": p.salary,
             "game": p.game, "proj": round(p.proj, 1), "floor": round(p.floor, 1),
             "ceil": round(p.ceil, 1), "own": round(p.ownership, 1),
+            "min": round(p.minutes, 0), "stuffer": round(p.stuffer, 1), "risk": p.risk,
             "core": p.core, "starter": p.starter, "notes": "; ".join(p.notes),
         } for p in sorted(playable, key=lambda p: -p.proj)],
         "lineups": [{
@@ -301,6 +384,7 @@ def run_optimize(csv_text: str, options: dict) -> dict:
             "mean": round(lu.metrics.get("mean", 0), 1),
             "totalOwn": lu.total_own,
             "cores": sum(1 for p in lu.players if p.core),
+            "risk": sum(1 for p in lu.players if p.risk and not p.core),
             "stacks": _stacks_payload(lu),
             "offPool": sum(1 for p in lu.players if not p.in_pool),
             "players": _slots_payload(lu.dk_slots()),
