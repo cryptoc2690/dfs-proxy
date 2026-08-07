@@ -391,6 +391,9 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         # stuffers (Cotie, Kiah Stokes) are unlimited and fill the rest. Only
         # enforced when the minutes file gave us a real reliability read.
         max_risk=(_int(options.get("maxRisk"), 1) if had_minutes else None),
+        # Don't leave money on the table — cap unspent salary (a big leftover is
+        # usually a loser). Relaxes only if the slate can't field enough lineups.
+        max_leftover=_int(options.get("maxLeftover"), 1000),
     )
 
     return {

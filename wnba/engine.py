@@ -330,7 +330,7 @@ def _attach_pool_alternatives(lineups, pool, max_per_team, n_sims, leverage, see
 def build_gpp(players, *, n=20, pool_size=None, min_stack=2, max_per_team=4,
               max_exposure=0.6, leverage=0.35, n_sims=5000, seed=0,
               cores=None, min_cores=0, max_overlap=4, max_off_pool=None,
-              stars_and_scrubs=None, max_risk=None):
+              stars_and_scrubs=None, max_risk=None, max_leftover=1000):
     playable = [p for p in players if p.proj > 0]
     if len(playable) < ROSTER_SIZE:
         return []
@@ -376,6 +376,15 @@ def build_gpp(players, *, n=20, pool_size=None, min_stack=2, max_per_team=4,
                 break
     if not cands:
         return []
+    # Salary floor: leaving money on the table usually means points left on it
+    # too. Keep only lineups that spend within max_leftover of the cap — but only
+    # if enough survive to still build a differentiated set (else the slate can't
+    # support it and we take what we've got).
+    if max_leftover is not None:
+        floor = SALARY_CAP - max_leftover
+        spent = [c for c in cands if c.salary >= floor]
+        if len(spent) >= n:
+            cands = spent
     simulate_and_score(cands, pool, sims=n_sims, leverage=leverage, seed=seed)
     final = select_final(cands, n, max_exposure, max_overlap)
     if max_off_pool:  # 0 or None -> every lineup is already all-in-pool
