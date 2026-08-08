@@ -251,7 +251,8 @@ def _apply_removals(players, remove_names):
             q.floor = round(q.floor + bump * 0.7, 1)
             q.ceil = round(q.ceil + bump * 1.1, 1)
             q.notes.append(f"+{bump:.0f} ({p.name} out)")
-    return [p.name for p, _ in removed]
+    return [{"name": p.name, "proj": round(vac, 1), "salary": p.salary, "risk": p.risk}
+            for p, vac in removed]
 
 
 def _parse_names(text):
@@ -303,6 +304,67 @@ def _alt_payload(alt):
     }
 
 
+def _coach(playable, lineups, options, slate_type, had_minutes, removed_info, pool_names):
+    """A read on the build — not edits. Explains what the data supports and flags
+    where the user's settings diverge, so impulse overrides (forcing 2 cores over
+    a misread flag, cutting a play the data liked) happen consciously, not by
+    reflex. Checks against the DATA, never the outcome."""
+    notes = []
+    n = len(lineups) or 1
+    expo = {}
+    for lu in lineups:
+        for p in lu.players:
+            expo[p.name] = expo.get(p.name, 0) + 1
+
+    rel = ("on — risk bodies capped at 1 per lineup"
+           if had_minutes else "OFF — add the daily-projections CSV to turn it on")
+    notes.append(("info", f"Baseline: {slate_type} slate, {n} lineups, reliability read {rel}."))
+
+    cores = [p for p in playable if p.core]
+    min_cores = _int(options.get("minCores"), 1) if cores else 0
+    if cores and min_cores >= 2:
+        chalk = max(cores, key=lambda p: p.ownership)
+        pct = round(expo.get(chalk.name, 0) / n * 100)
+        notes.append(("warn",
+            f"You set {min_cores} cores per lineup — the whole set now leans on your cores. "
+            f"{chalk.name} (chalkiest at {round(chalk.ownership)}% owned) is in {pct}% of lineups; if a "
+            f"core busts, most of the set busts with it. The data floor is 1 — go to 2 only when you trust "
+            f"every core. (The ⚠ on the 1-core builds just means a risk body — the tool already caps those "
+            f"at 1 per lineup, so those lineups aren't as shaky as the marker looks.)"))
+
+    if pool_names and _int(options.get("maxOffPool"), 0) >= 1:
+        notes.append(("info",
+            "Off-pool darts are allowed — each of those lineups carries a pool-only alternative to compare."))
+
+    nc = [(nm, c) for nm, c in expo.items()
+          if not any(p.name == nm and p.core for p in playable)]
+    if nc:
+        nm, c = max(nc, key=lambda x: x[1])
+        pct = round(c / n * 100)
+        p = next((q for q in playable if q.name == nm), None)
+        if pct >= 55 and p:
+            if p.risk:
+                notes.append(("warn",
+                    f"{nm} is your heaviest play ({pct}% of lineups) and it's a risk body (low-minute / "
+                    f"scoring-dependent) — real concentration on a bust-prone spot. Consider dialing it back."))
+            elif p.value >= 2.8:
+                notes.append(("good",
+                    f"{nm} is your heaviest play ({pct}% of lineups) — and it's earned: ${p.salary:,}, "
+                    f"proj {round(p.proj, 1)}, reliable value. The tool's confident; don't cut it on a hunch."))
+            else:
+                notes.append(("info",
+                    f"{nm} is your heaviest play ({pct}% of lineups) — reliable but modest value. Fine, just "
+                    f"know your set leans on that one spot."))
+
+    for r in removed_info:
+        tag = "" if r["risk"] else f" (projected {r['proj']} at ${r['salary']:,})"
+        notes.append(("info",
+            f"You removed {r['name']}{tag}. Right call if it's a confirmed scratch — but if it's a hunch, "
+            f"the data itself liked this play; the tool only misses late news you can see."))
+
+    return [{"type": t, "text": x} for t, x in notes]
+
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("PORT", "8000"))
 
@@ -333,7 +395,8 @@ def run_optimize(csv_text: str, options: dict) -> dict:
 
     # Manual removals (late scratch / missed shootaround the projection hasn't
     # caught). Zero them and flow their minutes/usage to teammates.
-    removed = _apply_removals(players, _parse_names(options.get("remove")))
+    removed_info = _apply_removals(players, _parse_names(options.get("remove")))
+    removed = [r["name"] for r in removed_info]
 
     # Cores + pool. Cores get a small projection edge and count as in-pool; the
     # pool itself is a build constraint enforced in the engine (max_off_pool).
@@ -401,6 +464,8 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         "slateType": slate_type,
         "poolActive": bool(pool_names),
         "removed": removed,
+        "coach": _coach(playable, lineups, options, slate_type, had_minutes,
+                        removed_info, pool_names),
         "slate": {
             "date": _slate_date(players),
             "games": sorted({p.game for p in players if p.game}),

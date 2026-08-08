@@ -66,6 +66,14 @@ INDEX_HTML = r"""<!doctype html>
   .badge.props{background:rgba(57,217,138,.15);color:var(--good)}
   .badge.csv{background:rgba(255,90,60,.15);color:var(--accent)}
   .badge.season{background:rgba(60,160,255,.15);color:var(--accent2)}
+  .coach{margin-bottom:16px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .coach-h{font-size:13px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:10px}
+  .coach-note{font-size:13.5px;line-height:1.5;padding:8px 12px;border-radius:8px;margin-bottom:8px;
+    border-left:3px solid var(--line);background:var(--panel2)}
+  .coach-note.info{border-color:var(--accent2)}
+  .coach-note.warn{border-color:#e0a030}
+  .coach-note.good{border-color:var(--good)}
+  .coach-legend{font-size:12px;color:var(--muted);margin-top:4px;padding-top:8px;border-top:1px solid var(--line)}
   .status{margin-bottom:16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
   .status .meta{color:var(--muted);font-size:13px}
   .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px}
@@ -184,6 +192,7 @@ INDEX_HTML = r"""<!doctype html>
     <div>
       <div id="err" class="err" style="display:none"></div>
       <div id="status" class="status" style="display:none"></div>
+      <div id="coach" class="coach" style="display:none"></div>
       <div id="tools" style="display:none;margin-bottom:14px">
         <button id="dl" class="btn ghost" style="width:auto;margin:0;padding:9px 16px">⬇ Download lineups CSV</button>
       </div>
@@ -322,6 +331,16 @@ function render(d){
   $('#status').innerHTML = '<span class="badge '+cls+'">'+d.source+'</span>'+slateBadge+
     '<span class="meta">'+(d.slate.date||'')+' · '+(d.slate.games||[]).join('  ')+outTxt+rmTxt+'</span>';
   $('#tools').style.display = d.lineups.length ? 'block':'none';
+
+  // coach — a read on the build (no edits), plus the flag legend
+  const cx = $('#coach');
+  if(d.coach && d.coach.length){
+    cx.style.display='block';
+    const legend = '<div class="coach-legend">★ core · ⚠ risk body (low minutes or scoring-dependent, capped 1/lineup)'+
+      ' · 🔥 trending (over-owned, ownership nudged up) · ◇ off-pool</div>';
+    cx.innerHTML = '<div class="coach-h">📋 Read on your build — you decide, this is just the data’s take</div>'+
+      d.coach.map(c=>'<div class="coach-note '+c.type+'">'+c.text+'</div>').join('')+legend;
+  } else cx.style.display='none';
 
   const poolOn = d.poolActive;
   $('#cards').innerHTML = d.lineups.map((l,i)=>card(l,i,poolOn)).join('');
