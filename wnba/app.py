@@ -87,6 +87,8 @@ def parse_linestar(text):
             avg_points=_f(d.get("PPG")), status="", starting="",
         )
         p.starter = str(d.get("StartingStatus") or "").strip() == "1"
+        p.implied = _f(d.get("VegasImplied"))
+        p.spread = _f(d.get("Vegas"))
         if proj <= 0:  # StartingStatus 4 / deep bench -> not playing
             p.proj = p.floor = p.ceil = 0.0
             p.status = "OUT"
@@ -321,6 +323,40 @@ def _coach(playable, lineups, options, slate_type, had_minutes, removed_info, po
     notes.append(("info", f"Baseline: {slate_type} slate, {n} lineups, reliability read {rel}."))
 
     cores = [p for p in playable if p.core]
+
+    # Core report card — grade each core on ceiling + Vegas environment + ownership.
+    # This checks the DATA, not the outcome, and never overrides the sharp who set
+    # the cores; it's a second opinion so a weak anchor is a conscious choice.
+    if cores:
+        impls = [p.implied for p in playable if p.implied > 0]
+        league = (sum(impls) / len(impls)) if impls else 0.0
+        for c in sorted(cores, key=lambda p: -p.ownership):
+            own = f"{round(c.ownership)}% owned"
+            spot_bad = c.spread >= 8 or (league and c.implied and c.implied < league - 5)
+            spot = (f"{'+' if c.spread > 0 else ''}{c.spread:g} dog, {round(c.implied)} implied"
+                    if c.implied else "")
+            if c.risk or c.ceil < 25:
+                why = "a risk body" if c.risk else f"a thin {round(c.ceil)} ceiling"
+                extra = f" in a rough spot ({spot})" if spot_bad and spot else ""
+                notes.append(("warn",
+                    f"Core check — {c.name}: {why}{extra}, {own}. That's mandatory-exposure territory, "
+                    f"not a build-around — the data would lean lighter here."))
+            elif spot_bad:
+                notes.append(("warn",
+                    f"Core check — {c.name}: {round(c.ceil)} ceiling but a rough spot ({spot}), {own}. "
+                    f"Upside's capped by the game environment — anchor if you must, but the ceiling is limited."))
+            else:
+                notes.append(("good",
+                    f"Core check — {c.name}: {round(c.ceil)} ceiling, {own}, decent spot. Solid anchor."))
+        gc = {}
+        for c in cores:
+            gc[c.game] = gc.get(c.game, 0) + 1
+        g, cnt = max(gc.items(), key=lambda kv: kv[1])
+        if cnt >= 2:
+            notes.append(("info",
+                f"Note: {cnt} of your {len(cores)} cores are in {g} — they rise and fall together, so one "
+                f"bad game sinks the group. Spread anchors across games when you can."))
+
     min_cores = _int(options.get("minCores"), 1) if cores else 0
     if cores and min_cores >= 2:
         chalk = max(cores, key=lambda p: p.ownership)

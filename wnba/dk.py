@@ -69,6 +69,8 @@ class Player:
     stuffer: float = 0.0     # DK pts from NON-scoring cats (reb/ast/stl/blk) = floor
     risk: bool = False       # bust-prone: low minutes OR scoring-dependent
     trending: bool = False   # projection well above season baseline -> field hype
+    implied: float = 0.0     # team's Vegas implied total (game environment)
+    spread: float = 0.0      # team's Vegas spread (+ = underdog)
     notes: list[str] = field(default_factory=list)
 
     @property
