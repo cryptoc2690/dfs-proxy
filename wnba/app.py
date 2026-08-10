@@ -376,6 +376,20 @@ def _coach(playable, lineups, options, slate_type, had_minutes, removed_info, po
             else:
                 notes.append(("good", "Strong-cores anchoring ON — all your cores grade strong. Anchor away."))
 
+    # Pool gaps — strong, low-owned plays the sharp's pool is missing. Advisory:
+    # the tool never adds them, it just surfaces the miss. The list recomputes
+    # every build, so once you add one to the pool it drops off on its own.
+    if pool_names:
+        gaps = [p for p in playable
+                if not p.in_pool and not p.risk and p.ceil >= 28 and p.ownership <= 15]
+        gaps.sort(key=lambda p: -p.ceil)
+        if gaps:
+            lst = "; ".join(f"{p.name} ({round(p.ceil)} ceil, {round(p.ownership)}% own, ${p.salary:,})"
+                            for p in gaps[:3])
+            notes.append(("good",
+                f"Pool gaps — strong low-owned plays NOT in your pool: {lst}. Your sharp may have passed "
+                f"on purpose; if not, add them. (Each drops off here once you add it.)"))
+
     min_cores = _int(options.get("minCores"), 1) if cores else 0
     if cores and min_cores >= 2:
         chalk = max(cores, key=lambda p: p.ownership)
