@@ -514,6 +514,16 @@ def run_optimize(csv_text: str, options: dict) -> dict:
                  "anchored": [c.name for c in anchor_cores],
                  "demoted": [c.name for c in cores if c not in anchor_cores]}
     max_off_pool = _int(options.get("maxOffPool"), 0) if pool_names else None
+    # Per-player exposure caps — rein in a specific heavy play without lowering
+    # the global cap (which on a short slate would needlessly hobble the studs).
+    n_lu = _int(options.get("n"), 20)
+    cap_names = _parse_names(options.get("capPlayers"))
+    player_caps = {}
+    if cap_names:
+        cap_ct = max(1, round(_float(options.get("capPct"), 30) / 100.0 * n_lu))
+        for p in players:
+            if normalize_name(p.name) in cap_names:
+                player_caps[p.dk_id] = cap_ct
     # Decide the slate read ONCE, so the engine's salary reserve and the UI badge
     # are the same determination (not two independent computations on different
     # player sets).
@@ -544,6 +554,7 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         # Don't leave money on the table — cap unspent salary (a big leftover is
         # usually a loser). Relaxes only if the slate can't field enough lineups.
         max_leftover=_int(options.get("maxLeftover"), 1000),
+        player_caps=player_caps,
     )
 
     return {

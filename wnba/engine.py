@@ -225,12 +225,15 @@ def simulate_and_score(cands, pool, *, sims, leverage, seed=0):
     cands.sort(key=lambda c: -c.metrics["score"])
 
 
-def select_final(cands, n, max_exposure, max_overlap=4):
+def select_final(cands, n, max_exposure, max_overlap=4, player_caps=None):
     """Pick the final N, best-first, under a per-player exposure cap AND a
     pairwise-overlap cap so the set is genuinely differentiated (WNBA's whole
     game once everyone shares the same projections). Backfills if the
-    constraints starve the set, so we always return N."""
+    constraints starve the set, so we always return N. player_caps overrides the
+    global cap for specific dk_ids (rein in one heavy play without touching the
+    rest — matters on short slates where a global cap would hobble the studs)."""
     cap = max(1, round(max_exposure * n))
+    player_caps = player_caps or {}
     counts, final, final_sets = {}, [], []
 
     def add(c):
@@ -240,7 +243,7 @@ def select_final(cands, n, max_exposure, max_overlap=4):
             counts[i] = counts.get(i, 0) + 1
 
     def exposure_ok(c):
-        return not any(counts.get(i, 0) >= cap for i in c.ids())
+        return not any(counts.get(i, 0) >= player_caps.get(i, cap) for i in c.ids())
 
     for c in cands:
         if len(final) >= n:
@@ -330,7 +333,7 @@ def _attach_pool_alternatives(lineups, pool, max_per_team, n_sims, leverage, see
 def build_gpp(players, *, n=20, pool_size=None, min_stack=2, max_per_team=4,
               max_exposure=0.6, leverage=0.35, n_sims=5000, seed=0,
               cores=None, min_cores=0, max_overlap=4, max_off_pool=None,
-              stars_and_scrubs=None, max_risk=None, max_leftover=1000):
+              stars_and_scrubs=None, max_risk=None, max_leftover=1000, player_caps=None):
     playable = [p for p in players if p.proj > 0]
     if len(playable) < ROSTER_SIZE:
         return []
@@ -386,7 +389,7 @@ def build_gpp(players, *, n=20, pool_size=None, min_stack=2, max_per_team=4,
         if len(spent) >= n:
             cands = spent
     simulate_and_score(cands, pool, sims=n_sims, leverage=leverage, seed=seed)
-    final = select_final(cands, n, max_exposure, max_overlap)
+    final = select_final(cands, n, max_exposure, max_overlap, player_caps)
     if max_off_pool:  # 0 or None -> every lineup is already all-in-pool
         _attach_pool_alternatives(final, pool, max_per_team, n_sims, leverage, seed)
     return final

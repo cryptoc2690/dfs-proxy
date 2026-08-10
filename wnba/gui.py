@@ -193,6 +193,18 @@ INDEX_HTML = r"""<!doctype html>
         onto teammates (weighted to same-position replacements), so the rest of the
         roster's projections rise the way they actually would.</div>
 
+      <label style="margin-top:14px">Cap a player's exposure — type to add</label>
+      <div class="typeahead">
+        <input id="capin" type="text" autocomplete="off" placeholder="drop a file first, then type…" disabled>
+        <div id="capdrop" class="drop-menu"></div>
+      </div>
+      <div id="capchips" class="chips"></div>
+      <label style="margin-top:8px">Cap those players at <span id="capv">30</span>%</label>
+      <input id="cappct" class="slider" type="range" min="5" max="60" value="30">
+      <div class="hint">Limits <em>only</em> the listed players — everyone else stays at your
+        max exposure. Use it to rein in one heavy play (like a cheap risk body) without capping
+        the whole board on a short slate.</div>
+
       <button id="go" class="btn" disabled>Generate lineups</button>
     </div>
 
@@ -303,7 +315,9 @@ document.addEventListener('click', e => { if(!e.target.closest('.typeahead')) do
 const corePicker = makePicker('core','★');
 const poolPicker = makePicker('pool','');
 const removePicker = makePicker('remove','🚫');
-function enablePickers(){ corePicker.enable(); poolPicker.enable(); removePicker.enable(); }
+const capPicker = makePicker('cap','🔒');
+function enablePickers(){ corePicker.enable(); poolPicker.enable(); removePicker.enable(); capPicker.enable(); }
+$('#cappct').addEventListener('input', e => $('#capv').textContent = e.target.value);
 
 $('#go').addEventListener('click', run);
 async function run(){
@@ -315,7 +329,8 @@ async function run(){
     maxExposure:(+$('#exp').value)/100, leverage:(+$('#lev').value)/100,
     cores:corePicker.sel.join('\n'), pool:poolPicker.sel.join('\n'),
     remove:removePicker.sel.join('\n'), maxOffPool:+$('#offpool').value,
-    minCores:+$('#mincores').value, strongCoresOnly:$('#strongcores').checked, minutes:minText,
+    minCores:+$('#mincores').value, strongCoresOnly:$('#strongcores').checked,
+    capPlayers:capPicker.sel.join('\n'), capPct:+$('#cappct').value, minutes:minText,
   };
   try{
     const res = await fetch('/api/optimize', {method:'POST',headers:{'Content-Type':'application/json'},
