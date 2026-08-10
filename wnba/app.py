@@ -306,7 +306,8 @@ def _alt_payload(alt):
     }
 
 
-def _coach(playable, lineups, options, slate_type, had_minutes, removed_info, pool_names):
+def _coach(playable, lineups, options, slate_type, had_minutes, removed_info, pool_names,
+           anchoring=None):
     """A read on the build — not edits. Explains what the data supports and flags
     where the user's settings diverge, so impulse overrides (forcing 2 cores over
     a misread flag, cutting a play the data liked) happen consciously, not by
@@ -356,6 +357,24 @@ def _coach(playable, lineups, options, slate_type, had_minutes, removed_info, po
             notes.append(("info",
                 f"Note: {cnt} of your {len(cores)} cores are in {g} — they rise and fall together, so one "
                 f"bad game sinks the group. Spread anchors across games when you can."))
+
+        # Strong-cores anchoring (B): what the tool actually anchored on.
+        if anchoring and anchoring.get("on"):
+            anc, dem = anchoring["anchored"], anchoring["demoted"]
+            if dem:
+                notes.append(("info",
+                    f"Strong-cores anchoring ON — building around {', '.join(anc)}; demoted to regular "
+                    f"plays (used on merit, not force-anchored): {', '.join(dem)}."))
+                if len(anc) == 1:
+                    notes.append(("warn",
+                        f"Only {anc[0]} grades as a clean anchor, so it carries heavy exposure. Lower "
+                        f"min-cores or widen your cores if that's too concentrated."))
+            elif all((c.risk or c.ceil < 25) for c in cores):
+                notes.append(("warn",
+                    "Strong-cores anchoring ON, but NONE of your cores grade as clean anchors tonight — "
+                    "kept them all rather than drop everything. Rough core group; tread light."))
+            else:
+                notes.append(("good", "Strong-cores anchoring ON — all your cores grade strong. Anchor away."))
 
     min_cores = _int(options.get("minCores"), 1) if cores else 0
     if cores and min_cores >= 2:
@@ -462,6 +481,17 @@ def run_optimize(csv_text: str, options: dict) -> dict:
                 "source": source_label}
 
     cores = [p for p in playable if p.core]
+    # Strong-cores anchoring (opt-in): anchor min-cores only on cores that grade
+    # "strong" (real ceiling, not a risk body). Iffy cores keep their edge + pool
+    # eligibility but aren't force-anchored. Falls back to all cores if none grade
+    # strong (can't drop everyone).
+    anchor_cores = cores
+    if bool(options.get("strongCoresOnly")) and cores:
+        strong = [c for c in cores if not c.risk and c.ceil >= 25]
+        anchor_cores = strong or cores
+    anchoring = {"on": bool(options.get("strongCoresOnly")),
+                 "anchored": [c.name for c in anchor_cores],
+                 "demoted": [c.name for c in cores if c not in anchor_cores]}
     max_off_pool = _int(options.get("maxOffPool"), 0) if pool_names else None
     # Decide the slate read ONCE, so the engine's salary reserve and the UI badge
     # are the same determination (not two independent computations on different
@@ -476,11 +506,11 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         max_exposure=_float(options.get("maxExposure"), 0.6),
         leverage=_float(options.get("leverage"), 0.15),
         n_sims=_int(options.get("sims"), 5000),
-        cores=cores,
+        cores=anchor_cores,
         # Anchor rule: every lineup built around at least this many cores (which
         # ones vary across the set). Default 1 when cores are set — the sharp's
         # cores keep landing in winners, so guarantee the build is around them.
-        min_cores=(_int(options.get("minCores"), 1) if cores else 0),
+        min_cores=(_int(options.get("minCores"), 1) if anchor_cores else 0),
         max_overlap=_int(options.get("maxOverlap"), 4),
         max_off_pool=max_off_pool,
         stars_and_scrubs=(slate_type == "stars-and-scrubs"),
@@ -501,7 +531,7 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         "poolActive": bool(pool_names),
         "removed": removed,
         "coach": _coach(playable, lineups, options, slate_type, had_minutes,
-                        removed_info, pool_names),
+                        removed_info, pool_names, anchoring),
         "slate": {
             "date": _slate_date(players),
             "games": sorted({p.game for p in players if p.game}),
