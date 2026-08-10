@@ -104,6 +104,13 @@ def parse_linestar(text):
         # plays and under-fading chalk like Sabally).
         if ceil <= proj:
             ceil = round(proj * 1.3, 1)
+        elif ceil > proj * 2.5:
+            # Broken high ceiling: LineStar inflates the ceiling on some low-minute
+            # bench players (Okot: 5.48 proj / 5 min, but a 22 ceiling). A ceiling
+            # that's a wild multiple of the projection isn't real upside, it's a
+            # data artifact — and it would make a 5-minute punt look like the best
+            # cheap play on the board. Cap it to a sane band around the projection.
+            ceil = round(proj * 2.5, 1)
         if floor <= 0 or floor < proj * 0.35 or floor >= proj:
             floor = round(proj * 0.6, 1)
         p.proj = round(proj, 1)
