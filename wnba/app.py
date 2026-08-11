@@ -128,13 +128,14 @@ def parse_linestar(text):
 
 
 # ---------------- daily projections (minutes + stat-stuffer floor) ----------------
-# Reliability thresholds. A play is trustworthy only if it BOTH plays enough AND
-# stuffs the stat sheet — minutes alone don't cut it (a 28-minute one-category
-# scorer busts to nothing on a cold night). Below either bar => a "risk body",
-# which the engine rations to at most one per lineup.
-RISK_MIN_MINUTES = 18.0
-RISK_MIN_STUFFER = 8.0   # DK pts from reb/ast/stl/blk — production that shows up
-                         # regardless of shooting
+# Reliability GATE (not a grade). Back-testing 5 slates of results killed the
+# graded version: minutes and stat-stuffer had ~zero correlation with bust rate
+# (busts ran 50-62% at every minute level), so rationing "risk bodies" bought
+# nothing. The one thing minutes cleanly flag is genuine non-rotation — a body
+# projected under this floor is a lottery ticket, not a play — so we GATE those
+# out of the auto-build (cores exempt) and stop grading everyone else. Minutes +
+# stuffer stay on screen as info; they just no longer push players around.
+GATE_MINUTES = 14.0
 
 
 def parse_daily_projections(text):
@@ -166,29 +167,25 @@ def parse_daily_projections(text):
 
 def apply_daily_projections(players, text):
     """Overlay minutes + stat-stuffer floor from the daily-projections file and
-    classify each playable player as reliable or a risk body. LineStar keeps
-    ownership of the projection; this only adds the reliability read (and a note
-    where the two sources disagree hard — LineStar's number still wins)."""
+    gate out genuine non-rotation bodies (projected minutes under GATE_MINUTES).
+    This is a gate, not a grade — we no longer classify the rest as reliable vs
+    risky, because the data says that split doesn't predict busts. Unmatched
+    players are left in (we can't gate what we can't measure). LineStar still owns
+    the projection; a note flags where the two sources disagree hard."""
     dmap = parse_daily_projections(text)
     if not dmap:
-        return False  # no reliability read without the file; cap stays off
+        return False  # no minutes read without the file; gate stays off
     for p in players:
         if p.proj <= 0:
             continue
         d = dmap.get(normalize_name(p.name))
-        if not d:  # unmatched -> fall back to the starter label
-            p.risk = not p.starter
+        if not d:  # unmatched -> can't measure minutes, so don't gate it
             continue
         p.minutes = d["minutes"]
         p.stuffer = d["stuffer"]
-        p.risk = p.minutes < RISK_MIN_MINUTES or p.stuffer < RISK_MIN_STUFFER
-        why = []
-        if p.minutes < RISK_MIN_MINUTES:
-            why.append(f"{p.minutes:.0f}min")
-        if p.stuffer < RISK_MIN_STUFFER:
-            why.append(f"stuffer {p.stuffer:.0f}")
-        p.notes.append("risk: " + ", ".join(why) if p.risk
-                       else f"reliable ({p.minutes:.0f}min, stuffer {p.stuffer:.0f})")
+        p.risk = p.minutes < GATE_MINUTES  # gate flag: genuine non-rotation only
+        p.notes.append(f"gated: {p.minutes:.0f} proj min (non-rotation)" if p.risk
+                       else f"{p.minutes:.0f} min, stuffer {p.stuffer:.0f}")
         # Cross-source disagreement flag (informational; LineStar's proj is used).
         if abs(d["compdk"] - p.proj) >= 6 and abs(d["compdk"] - p.proj) >= 0.3 * p.proj:
             p.notes.append(f"src split: proj-file {d['compdk']:.0f} vs LS {p.proj:.0f}")
@@ -325,9 +322,9 @@ def _coach(playable, lineups, options, slate_type, had_minutes, removed_info, po
         for p in lu.players:
             expo[p.name] = expo.get(p.name, 0) + 1
 
-    rel = ("on — risk bodies capped at 1 per lineup"
+    rel = ("on — sub-14-min non-rotation bodies gated out of the build"
            if had_minutes else "OFF — add the daily-projections CSV to turn it on")
-    notes.append(("info", f"Baseline: {slate_type} slate, {n} lineups, reliability read {rel}."))
+    notes.append(("info", f"Baseline: {slate_type} slate, {n} lineups, minutes gate {rel}."))
 
     cores = [p for p in playable if p.core]
 
@@ -343,7 +340,8 @@ def _coach(playable, lineups, options, slate_type, had_minutes, removed_info, po
             spot = (f"{'+' if c.spread > 0 else ''}{c.spread:g} dog, {round(c.implied)} implied"
                     if c.implied else "")
             if c.risk or c.ceil < 25:
-                why = "a risk body" if c.risk else f"a thin {round(c.ceil)} ceiling"
+                why = ("a sub-14-min non-rotation body (gated for everyone but you)" if c.risk
+                       else f"a thin {round(c.ceil)} ceiling")
                 extra = f" in a rough spot ({spot})" if spot_bad and spot else ""
                 notes.append(("warn",
                     f"Core check — {c.name}: {why}{extra}, {own}. That's mandatory-exposure territory, "
@@ -398,8 +396,7 @@ def _coach(playable, lineups, options, slate_type, had_minutes, removed_info, po
             f"You set {min_cores} cores per lineup — the whole set now leans on your cores. "
             f"{chalk.name} (chalkiest at {round(chalk.ownership)}% owned) is in {pct}% of lineups; if a "
             f"core busts, most of the set busts with it. The data floor is 1 — go to 2 only when you trust "
-            f"every core. (The ⚠ on the 1-core builds just means a risk body — the tool already caps those "
-            f"at 1 per lineup, so those lineups aren't as shaky as the marker looks.)"))
+            f"every core."))
 
     if pool_names and _int(options.get("maxOffPool"), 0) >= 1:
         notes.append(("info",
@@ -412,17 +409,13 @@ def _coach(playable, lineups, options, slate_type, had_minutes, removed_info, po
         pct = round(c / n * 100)
         p = next((q for q in playable if q.name == nm), None)
         if pct >= 55 and p:
-            if p.risk:
-                notes.append(("warn",
-                    f"{nm} is your heaviest play ({pct}% of lineups) and it's a risk body (low-minute / "
-                    f"scoring-dependent) — real concentration on a bust-prone spot. Consider dialing it back."))
-            elif p.value >= 2.8:
+            if p.value >= 2.8:
                 notes.append(("good",
                     f"{nm} is your heaviest play ({pct}% of lineups) — and it's earned: ${p.salary:,}, "
-                    f"proj {round(p.proj, 1)}, reliable value. The tool's confident; don't cut it on a hunch."))
+                    f"proj {round(p.proj, 1)}, solid value. The tool's confident; don't cut it on a hunch."))
             else:
                 notes.append(("info",
-                    f"{nm} is your heaviest play ({pct}% of lineups) — reliable but modest value. Fine, just "
+                    f"{nm} is your heaviest play ({pct}% of lineups) — modest value. Fine, just "
                     f"know your set leans on that one spot."))
 
     # Team-concentration read — the TOR lesson. Underowned starters stacked from
@@ -468,10 +461,9 @@ def run_optimize(csv_text: str, options: dict) -> dict:
                          "(or it has no projected players)."}
     source_label = "linestar"
 
-    # Reliability read from the daily-projections file (minutes + stat-stuffer
-    # floor). LineStar still owns the projection; this only classifies each play
-    # as reliable vs a risk body, which the engine rations. Optional — falls back
-    # to the starter label if no file is supplied.
+    # Minutes read from the daily-projections file. LineStar still owns the
+    # projection; this only gates out sub-14-min non-rotation bodies (a gate, not
+    # a grade — the data killed reliability grading). Optional; no file, no gate.
     had_minutes = apply_daily_projections(players, options.get("minutes") or "")
     if had_minutes:
         source_label += " + minutes"
@@ -546,7 +538,11 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         # maxPerTeam only for a deliberate shootout stack.
         max_per_team=_int(options.get("maxPerTeam"), 3),
         max_exposure=_float(options.get("maxExposure"), 0.6),
-        leverage=_float(options.get("leverage"), 0.15),
+        # Ownership tilt, dialed to a light tiebreak. Back-test: projected
+        # ownership had ~zero correlation with actual value and chalk beat
+        # contrarian in 4 of 5 slates, so leverage is a gentle differentiator now,
+        # not a lineup-wide fade.
+        leverage=_float(options.get("leverage"), 0.05),
         n_sims=_int(options.get("sims"), 5000),
         cores=cores,
         # Anchor rule: every lineup built around at least this many cores (which
@@ -556,15 +552,11 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         max_overlap=_int(options.get("maxOverlap"), 4),
         max_off_pool=max_off_pool,
         stars_and_scrubs=(slate_type == "stars-and-scrubs"),
-        # Ration bust-prone bodies. A "risk body" is low-minute OR scoring-
-        # dependent (thin stat-stuffer floor) — the kind that busts to nothing
-        # (Sophie: 28 min, 5.75 FP). At most this many per lineup; reliable cheap
-        # stuffers (Cotie, Kiah Stokes) are unlimited and fill the rest. Only
-        # enforced when the minutes file gave us a real reliability read.
-        max_risk=(_int(options.get("maxRisk"), 1) if had_minutes else None),
-        # Don't leave money on the table — cap unspent salary (a big leftover is
-        # usually a loser). Relaxes only if the slate can't field enough lineups.
-        max_leftover=_int(options.get("maxLeftover"), 1000),
+        # Don't leave money on the table — winners used ~99.5% of the cap, so keep
+        # unspent salary tight. Relaxes only if the slate can't field enough
+        # lineups. (Reliability is now a gate applied at pool build, not a per-
+        # lineup ration, so there's no max_risk knob anymore.)
+        max_leftover=_int(options.get("maxLeftover"), 700),
         player_caps=player_caps,
     )
 

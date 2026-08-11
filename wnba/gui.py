@@ -128,7 +128,7 @@ INDEX_HTML = r"""<!doctype html>
       </div>
       <div id="mindrop" class="drop" style="margin-top:10px;padding:16px">
         <b>+ daily projections CSV</b>
-        <small>adds minutes + stat-stuffer floor — rations bust-prone plays</small>
+        <small>adds projected minutes — gates out sub-14-min non-rotation plays</small>
         <input id="minfile" type="file" accept=".csv" hidden>
       </div>
 
@@ -139,8 +139,8 @@ INDEX_HTML = r"""<!doctype html>
       </div>
       <label>Max exposure — <span id="expv">60</span>%</label>
       <input id="exp" class="slider" type="range" min="10" max="100" value="60">
-      <label>Fade chalk (leverage) — <span id="levv">0.15</span></label>
-      <input id="lev" class="slider" type="range" min="0" max="100" value="15">
+      <label>Fade chalk (leverage) — <span id="levv">0.05</span></label>
+      <input id="lev" class="slider" type="range" min="0" max="100" value="5">
 
       <h2 style="margin-top:22px">3 · Game-theory cores <span style="text-transform:none;color:var(--muted)">(optional)</span></h2>
       <label>Core plays — type a name to add</label>
@@ -197,8 +197,8 @@ INDEX_HTML = r"""<!doctype html>
       <label style="margin-top:8px">Cap those players at <span id="capv">30</span>%</label>
       <input id="cappct" class="slider" type="range" min="5" max="60" value="30">
       <div class="hint">Limits <em>only</em> the listed players — everyone else stays at your
-        max exposure. Use it to rein in one heavy play (like a cheap risk body) without capping
-        the whole board on a short slate.</div>
+        max exposure. Use it to rein in one heavy play without capping the whole board on a
+        short slate.</div>
 
       <button id="go" class="btn" disabled>Generate lineups</button>
     </div>
@@ -354,7 +354,7 @@ function render(d){
   const cx = $('#coach');
   if(d.coach && d.coach.length){
     cx.style.display='block';
-    const legend = '<div class="coach-legend">★ core · ⚠ risk body (low minutes or scoring-dependent, capped 1/lineup)'+
+    const legend = '<div class="coach-legend">★ core · ⚠ gated (sub-14-min non-rotation, excluded unless cored)'+
       ' · 🔥 trending (over-owned, ownership nudged up) · ◇ off-pool</div>';
     cx.innerHTML = '<div class="coach-h">📋 Read on your build — you decide, this is just the data’s take</div>'+
       d.coach.map(c=>'<div class="coach-note '+c.type+'">'+c.text+'</div>').join('')+legend;
@@ -386,7 +386,7 @@ function lineupRows(players, poolOn){
   return players.map(p => {
     const off = poolOn && p.pool===false;
     const mark = p.core ? '<span class="core-star">★</span> '
-      : (p.risk ? '<span class="riskdot" title="risk body: low minutes or scoring-dependent">⚠</span> '
+      : (p.risk ? '<span class="riskdot" title="gated: sub-14-min non-rotation (cored in by you)">⚠</span> '
       : (off ? '<span class="offpool" title="off your pool">◇</span> ' : ''));
     return '<tr><td class="slot">'+p.slot+'</td><td>'+mark+p.name+'</td><td class="stat">'+p.team+'</td>'+
       '<td class="sal">$'+p.salary.toLocaleString()+'</td><td class="pr">'+p.proj+'</td></tr>';
@@ -446,7 +446,7 @@ function renderProj(players, key){
     const num = ['salary','proj','min','stuffer','ceil','own'].includes(c[0]);
     let v = p[c[0]]; if(c[0]==='salary') v='$'+v.toLocaleString();
     if(c[0]==='name'){ if(p.core) v='<span class="core-star">★</span> '+v;
-      if(p.risk) v='<span class="riskdot" title="risk body: low minutes or scoring-dependent">⚠</span> '+v;
+      if(p.risk) v='<span class="riskdot" title="gated: sub-14-min non-rotation (cored in by you)">⚠</span> '+v;
       if(p.trending) v='🔥 '+v; }
     return '<td class="'+(num?'num':'')+'">'+(v===undefined?'':v)+'</td>';
   }).join('')+'</tr>').join('');
