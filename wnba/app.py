@@ -313,8 +313,7 @@ def _alt_payload(alt):
     }
 
 
-def _coach(playable, lineups, options, slate_type, had_minutes, removed_info, pool_names,
-           anchoring=None):
+def _coach(playable, lineups, options, slate_type, had_minutes, removed_info, pool_names):
     """A read on the build — not edits. Explains what the data supports and flags
     where the user's settings diverge, so impulse overrides (forcing 2 cores over
     a misread flag, cutting a play the data liked) happen consciously, not by
@@ -365,23 +364,17 @@ def _coach(playable, lineups, options, slate_type, had_minutes, removed_info, po
                 f"Note: {cnt} of your {len(cores)} cores are in {g} — they rise and fall together, so one "
                 f"bad game sinks the group. Spread anchors across games when you can."))
 
-        # Strong-cores anchoring (B): what the tool actually anchored on.
-        if anchoring and anchoring.get("on"):
-            anc, dem = anchoring["anchored"], anchoring["demoted"]
-            if dem:
-                notes.append(("info",
-                    f"Strong-cores anchoring ON — building around {', '.join(anc)}; demoted to regular "
-                    f"plays (used on merit, not force-anchored): {', '.join(dem)}."))
-                if len(anc) == 1:
-                    notes.append(("warn",
-                        f"Only {anc[0]} grades as a clean anchor, so it carries heavy exposure. Lower "
-                        f"min-cores or widen your cores if that's too concentrated."))
-            elif all((c.risk or c.ceil < 25) for c in cores):
-                notes.append(("warn",
-                    "Strong-cores anchoring ON, but NONE of your cores grade as clean anchors tonight — "
-                    "kept them all rather than drop everything. Rough core group; tread light."))
-            else:
-                notes.append(("good", "Strong-cores anchoring ON — all your cores grade strong. Anchor away."))
+        # Core-exposure floor — every core is guaranteed real presence, so a
+        # conviction play can't get buried at 1-of-N. Floor is data-driven from
+        # the slate shape (more cores -> thinner floor each; more lineups -> more).
+        import math as _math
+        min_cores_set = _int(options.get("minCores"), 1)
+        if min_cores_set > 0:
+            floor_ct = int(_math.ceil(n / (len(cores) + 1)))
+            notes.append(("info",
+                f"Core floor: each of your {len(cores)} core(s) is guaranteed at least {floor_ct} of {n} "
+                f"lineups — a play you believe in can't get squeezed out. Grade above tells you if the data "
+                f"agrees; the call to keep or drop a weak core is yours, not the tool's."))
 
     # Pool gaps — strong, low-owned plays the sharp's pool is missing. Advisory:
     # the tool never adds them, it just surfaces the miss. The list recomputes
@@ -431,6 +424,25 @@ def _coach(playable, lineups, options, slate_type, had_minutes, removed_info, po
                 notes.append(("info",
                     f"{nm} is your heaviest play ({pct}% of lineups) — reliable but modest value. Fine, just "
                     f"know your set leans on that one spot."))
+
+    # Team-concentration read — the TOR lesson. Underowned starters stacked from
+    # one team look independently great but ride a single game script; a blowout
+    # sinks them together. The engine caps this, but surface it so the lean is a
+    # conscious call.
+    if lineups:
+        tslots = {}
+        for lu in lineups:
+            for p in lu.players:
+                tslots[p.team] = tslots.get(p.team, 0) + 1
+        total = sum(tslots.values()) or 1
+        teams_n = len({p.team for p in playable if p.team}) or 1
+        top_team, top_ct = max(tslots.items(), key=lambda kv: kv[1])
+        share, even = top_ct / total, 1 / teams_n
+        if teams_n >= 2 and share >= even * 1.5:
+            notes.append(("info",
+                f"Team lean: {round(share * 100)}% of your roster slots are {top_team}, the pool's heaviest "
+                f"team (an even split would be {round(even * 100)}%). They share one game script — capped so it "
+                f"can't run away, but if {top_team} gets blown out that whole lean goes with it."))
 
     for r in removed_info:
         tag = "" if r["risk"] else f" (projected {r['proj']} at ${r['salary']:,})"
@@ -502,17 +514,12 @@ def run_optimize(csv_text: str, options: dict) -> dict:
                 "source": source_label}
 
     cores = [p for p in playable if p.core]
-    # Strong-cores anchoring (opt-in): anchor min-cores only on cores that grade
-    # "strong" (real ceiling, not a risk body). Iffy cores keep their edge + pool
-    # eligibility but aren't force-anchored. Falls back to all cores if none grade
-    # strong (can't drop everyone).
-    anchor_cores = cores
-    if bool(options.get("strongCoresOnly")) and cores:
-        strong = [c for c in cores if not c.risk and c.ceil >= 25]
-        anchor_cores = strong or cores
-    anchoring = {"on": bool(options.get("strongCoresOnly")),
-                 "anchored": [c.name for c in anchor_cores],
-                 "demoted": [c.name for c in cores if c not in anchor_cores]}
+    # A core is the sharp's conviction play — it only ever gets an UPWARD nudge
+    # (the projection edge above) and a guaranteed exposure floor in the engine.
+    # It's never faded or demoted for grading "weak": the tool grades each core in
+    # the coach report so the call is conscious, but the machine never overrides
+    # the sharp's pick (that's what buried DiJonai at 1-of-N). Everyone else earns
+    # their spot on the data.
     max_off_pool = _int(options.get("maxOffPool"), 0) if pool_names else None
     # Per-player exposure caps — rein in a specific heavy play without lowering
     # the global cap (which on a short slate would needlessly hobble the studs).
@@ -533,15 +540,19 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         n=_int(options.get("n"), 20),
         pool_size=max(120, _int(options.get("n"), 20) * 8),
         min_stack=_int(options.get("stack"), 2),
-        max_per_team=_int(options.get("maxPerTeam"), 4),
+        # Per-lineup team cap of 3 (was 4): no single team can be more than half a
+        # roster. A 4-from-one-team lineup is a pure correlation bet on one game
+        # script (the TOR blow-up), not a game stack — kill it by default; raise
+        # maxPerTeam only for a deliberate shootout stack.
+        max_per_team=_int(options.get("maxPerTeam"), 3),
         max_exposure=_float(options.get("maxExposure"), 0.6),
         leverage=_float(options.get("leverage"), 0.15),
         n_sims=_int(options.get("sims"), 5000),
-        cores=anchor_cores,
+        cores=cores,
         # Anchor rule: every lineup built around at least this many cores (which
         # ones vary across the set). Default 1 when cores are set — the sharp's
         # cores keep landing in winners, so guarantee the build is around them.
-        min_cores=(_int(options.get("minCores"), 1) if anchor_cores else 0),
+        min_cores=(_int(options.get("minCores"), 1) if cores else 0),
         max_overlap=_int(options.get("maxOverlap"), 4),
         max_off_pool=max_off_pool,
         stars_and_scrubs=(slate_type == "stars-and-scrubs"),
@@ -563,7 +574,7 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         "poolActive": bool(pool_names),
         "removed": removed,
         "coach": _coach(playable, lineups, options, slate_type, had_minutes,
-                        removed_info, pool_names, anchoring),
+                        removed_info, pool_names),
         "slate": {
             "date": _slate_date(players),
             "games": sorted({p.game for p in players if p.game}),

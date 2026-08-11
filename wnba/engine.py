@@ -16,6 +16,14 @@ from dk import MIN_FORWARDS, MIN_GUARDS, ROSTER_SIZE, SALARY_CAP, Player
 
 MIN_SALARY = 3000  # DK WNBA min; used so partial lineups stay completable
 
+# Team-correlation control. Four underowned starters on ONE team look
+# independently great but ride a single game script — when that team lays an egg
+# the whole pool sinks together (the TOR wound). Across the pool, a team may hold
+# up to this multiple of its EVEN share of roster slots (even share = 1/#teams).
+# Data-driven: it loosens automatically as the slate adds teams and only bites on
+# small, lopsided slates where the pile-on actually hurts.
+TEAM_SHARE_MULT = 1.6
+
 
 class Lineup:
     def __init__(self, players: list[Player]):
@@ -225,35 +233,56 @@ def simulate_and_score(cands, pool, *, sims, leverage, seed=0):
     cands.sort(key=lambda c: -c.metrics["score"])
 
 
-def select_final(cands, n, max_exposure, max_overlap=4, player_caps=None):
-    """Pick the final N, best-first, under a per-player exposure cap AND a
-    pairwise-overlap cap so the set is genuinely differentiated (WNBA's whole
-    game once everyone shares the same projections). Backfills if the
-    constraints starve the set, so we always return N. player_caps overrides the
-    global cap for specific dk_ids (rein in one heavy play without touching the
-    rest — matters on short slates where a global cap would hobble the studs)."""
+def select_final(cands, n, max_exposure, max_overlap=4, player_caps=None,
+                 max_team_slots=None, core_floors=None):
+    """Pick the final N, best-first, under a per-player exposure cap, a
+    pairwise-overlap cap, and a pool-level team-slot cap so the set is genuinely
+    differentiated AND not quietly piled onto one team (WNBA's whole game once
+    everyone shares the same projections). Backfills if the constraints starve
+    the set, so we always return N. player_caps overrides the global cap for
+    specific dk_ids (rein in one heavy play without touching the rest — matters
+    on short slates where a global cap would hobble the studs). core_floors
+    guarantees each core dk_id a minimum number of lineups — a play the sharp
+    believes in can't get squeezed out (and their conviction outranks the team
+    cap, so a core on a capped team still gets its floor)."""
     cap = max(1, round(max_exposure * n))
     player_caps = player_caps or {}
-    counts, final, final_sets = {}, [], []
+    max_team_slots = max_team_slots or {}
+    counts, team_slots, final, final_sets = {}, {}, [], []
 
     def add(c):
         final.append(c)
         final_sets.append(set(c.ids()))
-        for i in c.ids():
-            counts[i] = counts.get(i, 0) + 1
+        for p in c.players:
+            counts[p.dk_id] = counts.get(p.dk_id, 0) + 1
+            team_slots[p.team] = team_slots.get(p.team, 0) + 1
 
     def exposure_ok(c):
         return not any(counts.get(i, 0) >= player_caps.get(i, cap) for i in c.ids())
 
-    for c in cands:
+    def team_ok(c):
+        if not max_team_slots:
+            return True
+        need = {}
+        for p in c.players:
+            need[p.team] = need.get(p.team, 0) + 1
+        return all(team_slots.get(t, 0) + k <= max_team_slots.get(t, ROSTER_SIZE * len(cands))
+                   for t, k in need.items())
+
+    for c in cands:  # exposure + overlap + team cap
         if len(final) >= n:
             break
-        if not exposure_ok(c):
+        if not exposure_ok(c) or not team_ok(c):
             continue
         if any(len(set(c.ids()) & s) > max_overlap for s in final_sets):
             continue
         add(c)
-    for c in cands:  # relax overlap, keep exposure
+    for c in cands:  # relax overlap, keep exposure + team cap
+        if len(final) >= n:
+            break
+        if c not in final and exposure_ok(c) and team_ok(c):
+            add(c)
+    for c in cands:  # relax team cap, keep exposure
         if len(final) >= n:
             break
         if c not in final and exposure_ok(c):
@@ -263,7 +292,47 @@ def select_final(cands, n, max_exposure, max_overlap=4, player_caps=None):
             break
         if c not in final:
             add(c)
-    return final[:n]
+    final = final[:n]
+    if core_floors:  # guarantee each core its minimum presence (overrides team cap)
+        final = _enforce_core_floors(final, cands, core_floors)
+    final.sort(key=lambda c: -c.metrics.get("score", 0))
+    return final
+
+
+def _enforce_core_floors(final, cands, core_floors):
+    """Top up under-exposed cores to their floor. For each core below its target,
+    pull the best-scoring candidate that features it (cands is score-sorted) and
+    drop the weakest chosen lineup that lacks it — but never one whose removal
+    would knock another core back under its own floor. Best-effort: stops when no
+    swap is available rather than looping forever."""
+    final = list(final)
+
+    def count(core_id):
+        return sum(1 for lu in final if core_id in lu.ids())
+
+    for core_id, need in core_floors.items():
+        while count(core_id) < need:
+            cand = next((c for c in cands
+                         if core_id in c.ids() and c not in final), None)
+            if cand is None:
+                break
+            drop = None
+            for lu in reversed(final):  # weakest-last -> reversed hits it first
+                if core_id in lu.ids():
+                    continue
+                safe = True
+                for oid, oneed in core_floors.items():
+                    if oid != core_id and oid in lu.ids() and count(oid) - 1 < oneed:
+                        safe = False
+                        break
+                if safe:
+                    drop = lu
+                    break
+            if drop is None:
+                break
+            final.remove(drop)
+            final.append(cand)
+    return final
 
 
 # ---------------- pool-legal alternative (P2) ----------------
@@ -330,7 +399,7 @@ def _attach_pool_alternatives(lineups, pool, max_per_team, n_sims, leverage, see
 
 
 # ---------------- public API ----------------
-def build_gpp(players, *, n=20, pool_size=None, min_stack=2, max_per_team=4,
+def build_gpp(players, *, n=20, pool_size=None, min_stack=2, max_per_team=3,
               max_exposure=0.6, leverage=0.35, n_sims=5000, seed=0,
               cores=None, min_cores=0, max_overlap=4, max_off_pool=None,
               stars_and_scrubs=None, max_risk=None, max_leftover=1000, player_caps=None):
@@ -389,7 +458,26 @@ def build_gpp(players, *, n=20, pool_size=None, min_stack=2, max_per_team=4,
         if len(spent) >= n:
             cands = spent
     simulate_and_score(cands, pool, sims=n_sims, leverage=leverage, seed=seed)
-    final = select_final(cands, n, max_exposure, max_overlap, player_caps)
+    # Team-correlation cap: a team may hold up to TEAM_SHARE_MULT x its even share
+    # of roster slots across the whole pool (even share = 1/#teams). Scales with
+    # the slate — loose on big boards, firm on small lopsided ones.
+    teams = {p.team for p in pool if p.team}
+    max_team_slots = None
+    if len(teams) >= 2:
+        even = n * ROSTER_SIZE / len(teams)
+        cap_slots = int(math.ceil(even * TEAM_SHARE_MULT))
+        max_team_slots = {t: cap_slots for t in teams}
+    # Core-exposure floor: every core the sharp set is guaranteed at least this
+    # many lineups so a conviction play can't get squeezed to 1 of N. Data-driven
+    # from slate shape — more cores spread the floor thinner, more lineups raise
+    # it — never a hardcoded number.
+    core_floors = None
+    if cores and min_cores > 0:
+        floor_ct = int(math.ceil(n / (len(cores) + 1)))
+        if floor_ct >= 1:
+            core_floors = {c.dk_id: floor_ct for c in cores}
+    final = select_final(cands, n, max_exposure, max_overlap, player_caps,
+                         max_team_slots=max_team_slots, core_floors=core_floors)
     if max_off_pool:  # 0 or None -> every lineup is already all-in-pool
         _attach_pool_alternatives(final, pool, max_per_team, n_sims, leverage, seed)
     return final

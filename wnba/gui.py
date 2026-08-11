@@ -157,15 +157,10 @@ INDEX_HTML = r"""<!doctype html>
       </select>
       <div class="hint">Cores are your anchor plays — the sharp's picks that keep landing
         in winning lineups. This guarantees every lineup is built around at least this many;
-        which ones vary across your set. No cores set → no requirement.</div>
-      <label style="display:flex;align-items:center;gap:8px;margin-top:10px;cursor:pointer;text-transform:none">
-        <input id="strongcores" type="checkbox" style="width:auto">
-        Anchor only on strong-graded cores
-      </label>
-      <div class="hint">Off by default. When on, the tool anchors only on the cores its report
-        card grades strong (real ceiling, not a risk body); iffy cores stay in your pool and get
-        used on merit, just not forced into lineups. The read shows either way — flip this after
-        you see the grades. Falls back to all cores if none grade strong.</div>
+        which ones vary across your set. No cores set → no requirement. Each core is also
+        guaranteed a minimum share of your lineups (data-driven from the slate), so a play you
+        believe in can't get buried — the coach grades whether the data agrees, but the call to
+        keep or drop a weak core stays yours.</div>
       <label style="margin-top:14px">His full pool — type to add (optional)</label>
       <div class="typeahead">
         <input id="poolin" type="text" autocomplete="off" placeholder="drop a file first, then type…" disabled>
@@ -329,7 +324,7 @@ async function run(){
     maxExposure:(+$('#exp').value)/100, leverage:(+$('#lev').value)/100,
     cores:corePicker.sel.join('\n'), pool:poolPicker.sel.join('\n'),
     remove:removePicker.sel.join('\n'), maxOffPool:+$('#offpool').value,
-    minCores:+$('#mincores').value, strongCoresOnly:$('#strongcores').checked,
+    minCores:+$('#mincores').value,
     capPlayers:capPicker.sel.join('\n'), capPct:+$('#cappct').value, minutes:minText,
   };
   try{
