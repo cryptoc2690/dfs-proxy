@@ -39,6 +39,18 @@ INDEX_HTML = r"""<!doctype html>
   .offpool{color:var(--accent);font-weight:700}
   .riskdot{color:#e0a030}
   .riskrow td{color:var(--muted)}
+  .lockchip{display:inline-block;padding:5px 11px;margin:3px 3px 0 0;border-radius:15px;
+    border:1px solid var(--line);cursor:pointer;font-size:13px;background:var(--chip);user-select:none}
+  .lockchip.on{background:#3a2a1e;border-color:#e0a030;color:#f0c070}
+  .swapcard{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;background:var(--panel)}
+  .swapcard.keep{opacity:.55;font-size:13px;padding:7px 12px}
+  .swapcard.err{color:#e08080;font-size:13px}
+  .swaphdr{font-weight:600;margin-bottom:5px}
+  .swaprow{font-size:13px;padding:2px 0}
+  .swaprow.out{color:#e88}
+  .swaprow.in{color:var(--good)}
+  .gain{color:var(--accent);font-weight:700}
+  .muted{color:var(--muted);font-weight:400;font-size:12px}
   .typeahead{position:relative}
   .drop-menu{position:absolute;left:0;right:0;top:100%;z-index:30;background:var(--panel2);
     border:1px solid var(--line);border-radius:9px;margin-top:4px;max-height:220px;overflow:auto;display:none}
@@ -201,6 +213,28 @@ INDEX_HTML = r"""<!doctype html>
         short slate.</div>
 
       <button id="go" class="btn" disabled>Generate lineups</button>
+
+      <details id="swapwrap" style="margin-top:18px">
+        <summary style="cursor:pointer;font-weight:600;color:var(--text)">🔄 Late swap — already entered? adjust for news</summary>
+        <div style="margin-top:10px">
+          <div class="hint">Load the lineups you already submitted. Uses the LineStar file above as the
+            UPDATED projection, keeps your locked games + good plays fixed, and moves only off dead weight —
+            reinvesting the freed salary for the highest projection. Projection only; no ownership guessing
+            (late swap is already leverage-positive — you're pivoting off news-killed chalk).</div>
+          <div id="swapdrop" class="drop" style="margin-top:10px;padding:16px">
+            <b>+ your entered lineups CSV</b>
+            <small>DK export: F,F,F,G,G,UTIL header, one row of names per lineup</small>
+            <input id="swapfile" type="file" accept=".csv" hidden>
+          </div>
+          <label style="margin-top:12px">Games that have started (tap to lock)</label>
+          <div id="lockchips" class="chips"><span class="hint">load a lineups file to see the slate's games</span></div>
+          <label style="margin-top:12px">Only move off players projecting under <span id="relv">13</span></label>
+          <input id="rel" class="slider" type="range" min="8" max="20" value="13">
+          <div class="hint">Your studs and starters stay put — only bodies below this get swapped. Raise it to
+            let it upgrade more marginal plays too.</div>
+          <button id="swapgo" class="btn" disabled style="margin-top:12px">Recommend late swaps</button>
+        </div>
+      </details>
     </div>
 
     <!-- results -->
@@ -211,6 +245,7 @@ INDEX_HTML = r"""<!doctype html>
       <div id="tools" style="display:none;margin-bottom:14px">
         <button id="dl" class="btn ghost" style="width:auto;margin:0;padding:9px 16px">⬇ Download lineups CSV</button>
       </div>
+      <div id="swapresults" style="display:none;margin-bottom:14px"></div>
       <div id="cards" class="cards"></div>
       <div id="welcome" class="empty">Drop your LineStar CSV and hit generate.</div>
       <details id="expwrap" style="display:none">
@@ -269,6 +304,60 @@ function loadMin(f){ if(!f) return; const r=new FileReader();
   r.onload=()=>{ minText=r.result; mindrop.classList.add('loaded');
     mindrop.innerHTML='<b>✓ '+f.name+'</b><small>minutes + stat-stuffer floor loaded</small>'; };
   r.readAsText(f); }
+
+// ---- late swap ----
+let swapText='', swapGames=[], lockedGames=new Set();
+const swapdrop=$('#swapdrop'), swapfile=$('#swapfile');
+swapdrop.addEventListener('click',()=>swapfile.click());
+['dragover','dragenter'].forEach(ev=>swapdrop.addEventListener(ev,e=>{e.preventDefault();swapdrop.classList.add('over')}));
+['dragleave','drop'].forEach(ev=>swapdrop.addEventListener(ev,e=>{e.preventDefault();swapdrop.classList.remove('over')}));
+swapdrop.addEventListener('drop',e=>loadSwap(e.dataTransfer.files[0]));
+swapfile.addEventListener('change',e=>loadSwap(e.target.files[0]));
+function loadSwap(f){ if(!f) return; const r=new FileReader();
+  r.onload=()=>{ swapText=r.result; swapdrop.classList.add('loaded');
+    swapdrop.innerHTML='<b>✓ '+f.name+'</b><small>ready — hit recommend</small>';
+    $('#swapgo').disabled=false; };
+  r.readAsText(f); }
+$('#rel').addEventListener('input',e=>$('#relv').textContent=e.target.value);
+$('#swapgo').addEventListener('click',runSwap);
+async function runSwap(){
+  if(!csvText){ showErr('Drop your LineStar CSV up top first — late swap reuses it.'); return; }
+  if(!swapText) return;
+  const btn=$('#swapgo'); btn.disabled=true; btn.innerHTML='<span class="spin"></span>Checking…';
+  $('#err').style.display='none';
+  try{
+    const res=await fetch('/api/lateswap',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({csv:csvText, lineups:swapText, locked:[...lockedGames], releaseMaxProj:+$('#rel').value})});
+    const data=await res.json();
+    if(data.error){ showErr(data.error); }
+    else { swapGames=data.games; renderLockChips(); renderSwaps(data); }
+  }catch(e){ showErr(e.message); }
+  btn.disabled=false; btn.textContent='Recommend late swaps';
+}
+function renderLockChips(){
+  const box=$('#lockchips');
+  box.innerHTML=swapGames.map(g=>'<span class="lockchip'+(lockedGames.has(g)?' on':'')+'" data-g="'+g+'">'+
+    (lockedGames.has(g)?'🔒 ':'')+g+'</span>').join('');
+  box.querySelectorAll('.lockchip').forEach(c=>c.onclick=()=>{
+    const g=c.dataset.g; lockedGames.has(g)?lockedGames.delete(g):lockedGames.add(g); runSwap(); });
+}
+function renderSwaps(d){
+  const box=$('#swapresults'); box.style.display='block'; $('#welcome').style.display='none';
+  const changed=d.swaps.filter(s=>!s.keep&&!s.error).length;
+  const lockTxt=lockedGames.size?' · locked: '+[...lockedGames].join(', '):' · nothing locked — tap any game above that already tipped';
+  let html='<div class="coach-h">🔄 Late swap — '+changed+' of '+d.swaps.length+' lineups to adjust'+lockTxt+'</div>';
+  html+=d.swaps.map(s=>{
+    if(s.error) return '<div class="swapcard err">L'+s.lineup+': '+s.error+'</div>';
+    if(s.keep) return '<div class="swapcard keep">L'+s.lineup+' · keep as-is <span class="muted">(proj '+s.oldProj+')</span></div>';
+    const row=(p,sign,cls)=>'<div class="swaprow '+cls+'">'+sign+' '+p.name+' <span class="muted">$'+p.salary.toLocaleString()+
+      ' · '+p.proj+' proj · '+p.own+'%'+(p.starter?' · START':'')+'</span></div>';
+    const left=s.leftover>0?' · <span class="muted">$'+s.leftover.toLocaleString()+' left</span>':'';
+    return '<div class="swapcard"><div class="swaphdr">L'+s.lineup+' <span class="gain">+'+s.gain+' proj</span> '+
+      '<span class="muted">→ '+s.newProj+', $'+s.newSalary.toLocaleString()+'</span>'+left+'</div>'+
+      s.out.map(p=>row(p,'−','out')).join('')+s.in.map(p=>row(p,'+','in')).join('')+'</div>';
+  }).join('');
+  box.innerHTML=html;
+}
 
 // ---- reusable type-ahead picker (used for cores and the full pool) ----
 function makePicker(prefix, icon){

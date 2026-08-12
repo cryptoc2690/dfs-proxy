@@ -15,7 +15,7 @@ import os
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from dk import ROSTER_SIZE, Player, normalize_name
+from dk import ROSTER_SIZE, SALARY_CAP, Player, normalize_name
 from engine import build_gpp as optimize_gpp
 
 
@@ -596,6 +596,143 @@ def run_optimize(csv_text: str, options: dict) -> dict:
     }
 
 
+# ---------------- late swap ----------------
+# Re-optimize already-entered lineups against an UPDATED LineStar after news
+# (a scratch, a surprise benching). Keep locked players (games already tipped)
+# and your good plays fixed; move only off dead weight (projecting under a
+# threshold) and reinvest the freed salary for the highest projection. No
+# ownership term on purpose: late swap is inherently leverage-positive (you pivot
+# off news-killed chalk onto news-created value), and the ownership numbers are
+# stale the moment the news drops — so projection is the only honest objective.
+LATE_RELEASE_DEFAULT = 13.0
+_LS_SLOTS = ["F", "F", "F", "G", "G", "UTIL"]
+
+
+def parse_entered_lineups(text):
+    """Parse a DK-style entered-lineups export (header F,F,F,G,G,UTIL then one
+    row of 6 names per lineup) into a list of 6-name lists."""
+    import csv as _csv
+    import io
+    out = []
+    for row in _csv.reader(io.StringIO((text or "").lstrip("﻿"))):
+        cells = [c.strip() for c in row if c and c.strip()]
+        if len(cells) < ROSTER_SIZE:
+            continue
+        if all(c.upper() in ("F", "G", "UTIL", "GUARD", "FORWARD") for c in cells[:ROSTER_SIZE]):
+            continue  # header row
+        out.append(cells[:ROSTER_SIZE])
+    return out
+
+
+def _optimize_swap(lineup, players, locked_games, release_max_proj, ftop=20, gtop=20):
+    """One lineup. Slots follow _LS_SLOTS order. A slot is releasable only if its
+    game is open AND the player is dead weight (proj < release_max_proj); studs
+    and locked players stay. Refill releasable slots to maximize (projection,
+    then salary) under the cap. Returns a dict the GUI renders."""
+    import itertools
+
+    def game_of(p):
+        return p.game or p.team
+
+    open_idx = [i for i in range(ROSTER_SIZE)
+                if game_of(lineup[i]) not in locked_games and lineup[i].proj < release_max_proj]
+    keepers = [lineup[i] for i in range(ROSTER_SIZE) if i not in open_idx]
+    released = [lineup[i] for i in open_idx]
+    keeper_names = {p.name for p in keepers}
+    budget = SALARY_CAP - sum(p.salary for p in keepers)
+    needF = sum(1 for i in open_idx if _LS_SLOTS[i] == "F")
+    needG = sum(1 for i in open_idx if _LS_SLOTS[i] == "G")
+    needU = sum(1 for i in open_idx if _LS_SLOTS[i] == "UTIL")
+
+    cand = [p for p in players if game_of(p) not in locked_games and p.proj >= 12.0
+            and p.name not in keeper_names]
+    cand = list({p.name: p for p in (cand + released)}.values())
+    rel_names = {p.name for p in released}
+
+    def trim(lst, top):  # top-N by proj, but never drop an original keep-option
+        lst = sorted(lst, key=lambda p: -p.proj)
+        return lst[:top] + [p for p in lst[top:] if p.name in rel_names]
+    forwards = trim([p for p in cand if not p.is_guard], ftop)
+    guards = trim([p for p in cand if p.is_guard], gtop)
+
+    best = None  # (proj, salary, chosen)
+    for fs in itertools.combinations(forwards, needF):
+        for gs in itertools.combinations(guards, needG):
+            base = list(fs) + list(gs)
+            sal = sum(p.salary for p in base)
+            if sal > budget:
+                continue
+            if needU:
+                used = {p.name for p in base}
+                for u in cand:
+                    if u.name in used or sal + u.salary > budget:
+                        continue
+                    key = (sum(p.proj for p in base) + u.proj, sal + u.salary)
+                    if best is None or key > (best[0], best[1]):
+                        best = (key[0], key[1], base + [u])
+            else:
+                key = (sum(p.proj for p in base), sal)
+                if best is None or key > (best[0], best[1]):
+                    best = (key[0], key[1], base)
+
+    old_proj = round(sum(p.proj for p in lineup), 1)
+    old_sal = sum(p.salary for p in lineup)
+    if best is None:  # nothing legal to change
+        return {"keep": True, "oldProj": old_proj, "oldSalary": old_sal, "note": "no legal swap"}
+    chosen = best[2]
+    orig = {p.name for p in released}
+    new = {p.name for p in chosen}
+    out_names, in_names = orig - new, new - orig
+    new6 = keepers + chosen
+    new_proj = round(sum(p.proj for p in new6), 1)
+    if not out_names or new_proj - old_proj < 2.0:  # skip trivial churn
+        return {"keep": True, "oldProj": old_proj, "oldSalary": old_sal}
+    info = lambda p: {"name": p.name, "team": p.team, "salary": p.salary,
+                      "proj": round(p.proj, 1), "own": round(p.ownership, 1),
+                      "starter": p.starter}
+    return {
+        "keep": False, "oldProj": old_proj, "newProj": new_proj,
+        "gain": round(new_proj - old_proj, 1),
+        "oldSalary": old_sal, "newSalary": sum(p.salary for p in new6),
+        "leftover": SALARY_CAP - sum(p.salary for p in new6),
+        "out": [info(p) for p in released if p.name in out_names],
+        "in": [info(p) for p in chosen if p.name in in_names],
+    }
+
+
+def late_swap(entered, players, locked_games, release_max_proj):
+    by_norm = {normalize_name(p.name): p for p in players}
+    results = []
+    for idx, names in enumerate(entered, 1):
+        lineup, missing = [], []
+        for nm in names:
+            p = by_norm.get(normalize_name(nm))
+            (lineup if p else missing).append(p if p else nm)
+        if len(lineup) != ROSTER_SIZE:
+            results.append({"lineup": idx, "error": f"couldn't match: {', '.join(missing)}"})
+            continue
+        rec = _optimize_swap(lineup, players, set(locked_games), release_max_proj)
+        rec["lineup"] = idx
+        results.append(rec)
+    return results
+
+
+def run_late_swap(csv_text, lineups_text, locked_games, release_max_proj):
+    players = parse_linestar((csv_text or "").strip())
+    if sum(1 for p in players if p.proj > 0) < ROSTER_SIZE:
+        return {"error": "Drop your updated LineStar CSV first (the same file the "
+                         "optimizer uses)."}
+    entered = parse_entered_lineups(lineups_text)
+    if not entered:
+        return {"error": "Couldn't read that lineups file — expected a DK export "
+                         "with an F,F,F,G,G,UTIL header and one row of 6 names per lineup."}
+    return {
+        "games": sorted({p.game for p in players if p.game}),
+        "locked": list(locked_games),
+        "swaps": late_swap(entered, players, locked_games, float(release_max_proj)),
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):  # quiet
         pass
@@ -615,17 +752,21 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, json.dumps({"error": "not found"}))
 
     def do_POST(self):
-        if self.path != "/api/optimize":
+        if self.path not in ("/api/optimize", "/api/lateswap"):
             return self._send(404, json.dumps({"error": "not found"}))
         try:
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length) or b"{}")
-            opts = payload.get("options", {})
             csv_text = payload.get("csv") or ""
             if not csv_text.strip():
                 return self._send(400, json.dumps(
                     {"error": "Drop your LineStar projections CSV."}))
-            result = run_optimize(csv_text, opts)
+            if self.path == "/api/lateswap":
+                result = run_late_swap(csv_text, payload.get("lineups") or "",
+                                       payload.get("locked") or [],
+                                       payload.get("releaseMaxProj", LATE_RELEASE_DEFAULT))
+            else:
+                result = run_optimize(csv_text, payload.get("options", {}))
             code = 400 if result.get("error") else 200
             self._send(code, json.dumps(result))
         except Exception as e:  # noqa: BLE001
