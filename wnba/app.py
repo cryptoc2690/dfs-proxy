@@ -596,6 +596,151 @@ def run_optimize(csv_text: str, options: dict) -> dict:
     }
 
 
+# ---------------- DK entries file (DKEntries*.csv) ----------------
+# One DK export carries BOTH your contest entries (Entry ID + the 6 filled slots)
+# AND the full player pool with real DK IDs, salaries and game start times. That
+# makes it the best input we have: real IDs mean a re-uploadable export, and the
+# start times mean late swap can work out which games are locked on its own.
+def _dk_game_start(info):
+    """'MIN@PDX 08/12/2026 10:00PM ET' -> ('MIN@PDX', datetime | None)."""
+    import re
+    from datetime import datetime
+    m = re.match(r"\s*(\w+@\w+)\s+(\d{1,2}/\d{1,2}/\d{4})\s+(\d{1,2}:\d{2}\s*[AP]M)",
+                 info or "")
+    if not m:
+        return (info or "").strip().split(" ")[0], None
+    try:
+        dt = datetime.strptime(f"{m.group(2)} {m.group(3).replace(' ', '')}",
+                               "%m/%d/%Y %I:%M%p")
+    except ValueError:
+        dt = None
+    return m.group(1), dt
+
+
+def _dk_name_id(cell):
+    """'Paige Bueckers (43810941)' -> ('Paige Bueckers', '43810941')."""
+    import re
+    m = re.match(r"\s*(.+?)\s*\((\d+)\)\s*$", cell or "")
+    return (m.group(1), m.group(2)) if m else ((cell or "").strip(), "")
+
+
+def parse_dk_entries(text):
+    """Parse a DK entries export into {slots, entries, pool, games}.
+
+    slots   — the roster order DK expects, read from the header (e.g. G,G,F,F,F,UTIL)
+    entries — [{entryId, contest, contestId, fee, names[]}] (names empty = reservation)
+    pool    — {normalized name: {dkId, name, guard, salary, game, start, team}}
+    games   — {game key: ISO start time or None}
+    """
+    import csv as _csv
+    import io
+    rows = list(_csv.reader(io.StringIO((text or "").lstrip("﻿"))))
+    slots, entries, pool, games = [], [], {}, {}
+    pi = None  # column index of 'Name + ID' in the embedded player pool
+    for r in rows:
+        if not r:
+            continue
+        if pi is None:
+            for i, c in enumerate(r):
+                if c.strip() == "Name + ID":
+                    pi = i
+                    break
+            if pi is not None:
+                continue  # this row is the pool header, not data
+        if r[0].strip() == "Entry ID" and len(r) > 9:
+            slots = [c.strip() for c in r[4:10] if c.strip()]
+        elif r[0].strip().isdigit() and len(r) > 9:
+            names = [_dk_name_id(c)[0] for c in r[4:10] if c.strip()]
+            entries.append({"entryId": r[0].strip(), "contest": r[1].strip(),
+                            "contestId": r[2].strip(), "fee": r[3].strip(),
+                            "names": names})
+        if pi is not None and len(r) > pi + 7 and r[pi + 2].strip().isdigit():
+            name = r[pi + 1].strip()
+            game, start = _dk_game_start(r[pi + 5])
+            pool[normalize_name(name)] = {
+                "dkId": r[pi + 2].strip(), "name": name,
+                "guard": r[pi + 3].strip().upper().startswith("G"),
+                "salary": int(_f(r[pi + 4])), "game": game,
+                "start": start.isoformat() if start else None,
+                "team": r[pi + 6].strip(),
+            }
+            if game not in games or (start and not games.get(game)):
+                games[game] = start.isoformat() if start else None
+    return {"slots": slots or ["G", "G", "F", "F", "F", "UTIL"],
+            "entries": entries, "pool": pool, "games": games}
+
+
+def dk_locked_games(games):
+    """Games whose tip-off has already passed (ET), i.e. no longer swappable."""
+    from datetime import datetime, timedelta
+    now = datetime.utcnow() - timedelta(hours=4)  # WNBA season -> EDT
+    out = []
+    for g, iso in games.items():
+        if not iso:
+            continue
+        try:
+            if datetime.fromisoformat(iso) <= now:
+                out.append(g)
+        except ValueError:
+            pass
+    return sorted(out)
+
+
+def build_dk_upload(dk, lineups_names):
+    """Fill our generated lineups into the DK entries file's slot order and return
+    re-uploadable CSV text. Uses the file's REAL DK IDs, so it imports directly
+    instead of needing manual entry."""
+    slots, pool = dk["slots"], dk["pool"]
+    entries = dk["entries"]
+    if not entries:
+        return None, "No contest entries found in that DK file."
+    lines = ["Entry ID,Contest Name,Contest ID,Entry Fee," + ",".join(slots)]
+    missing = set()
+    n = min(len(entries), len(lineups_names))
+    for e, names in zip(entries[:n], lineups_names[:n]):
+        recs = []
+        for nm in names:
+            p = pool.get(normalize_name(nm))
+            if not p:
+                missing.add(nm)
+            recs.append(p or {"name": nm, "dkId": "", "guard": False})
+        guards = [p for p in recs if p.get("guard")]
+        forwards = [p for p in recs if not p.get("guard")]
+        filled, used = [], set()
+        for s in slots:  # G/F slots first, UTIL takes whoever's left
+            src = guards if s.upper().startswith("G") else forwards
+            pick = next((p for p in src if id(p) not in used), None)
+            if s.upper() == "UTIL" or pick is None:
+                pick = next((p for p in recs if id(p) not in used), None)
+            if pick is not None:
+                used.add(id(pick))
+            filled.append(pick)
+        cells = [f'"{p["name"]} ({p["dkId"]})"' if p and p.get("dkId")
+                 else f'"{p["name"]}"' if p else "" for p in filled]
+        contest = e["contest"].replace('"', '""')
+        lines.append(f'{e["entryId"]},"{contest}",{e["contestId"]},{e["fee"]},'
+                     + ",".join(cells))
+    warn = (f"Couldn't match to a DK ID: {', '.join(sorted(missing))}"
+            if missing else "")
+    if len(lineups_names) > len(entries):
+        warn = ((warn + " · ") if warn else "") + \
+            f"{len(lineups_names)} lineups but only {len(entries)} entries — filled the first {n}."
+    return "\n".join(lines) + "\n", warn
+
+
+def run_dk_fill(dk_text, lineups_names):
+    dk = parse_dk_entries(dk_text)
+    if not dk["pool"]:
+        return {"error": "Couldn't read that as a DK entries file (no player pool found)."}
+    if not lineups_names:
+        return {"error": "Generate lineups first, then fill the DK file."}
+    csv_text, warn = build_dk_upload(dk, lineups_names)
+    if csv_text is None:
+        return {"error": warn}
+    return {"csv": csv_text, "warn": warn,
+            "filled": min(len(dk["entries"]), len(lineups_names))}
+
+
 # ---------------- late swap ----------------
 # Re-optimize already-entered lineups against an UPDATED LineStar after news
 # (a scratch, a surprise benching). Keep locked players (games already tipped)
@@ -624,12 +769,15 @@ def parse_entered_lineups(text):
     return out
 
 
-def _optimize_swap(lineup, players, locked_games, release_max_proj, ftop=20, gtop=20):
-    """One lineup. Slots follow _LS_SLOTS order. A slot is releasable only if its
-    game is open AND the player is dead weight (proj < release_max_proj); studs
-    and locked players stay. Refill releasable slots to maximize (projection,
-    then salary) under the cap. Returns a dict the GUI renders."""
+def _optimize_swap(lineup, players, locked_games, release_max_proj, slots=None,
+                   ftop=20, gtop=20):
+    """One lineup, slotted in `slots` order (DK files use G,G,F,F,F,UTIL; our own
+    export uses F,F,F,G,G,UTIL). A slot is releasable only if its game is OPEN and
+    the player is dead weight (proj < release_max_proj); studs and locked players
+    stay. Refill releasable slots to maximize (projection, then salary) under the
+    cap. Returns a dict the GUI renders."""
     import itertools
+    slots = slots or _LS_SLOTS
 
     def game_of(p):
         return p.game or p.team
@@ -640,9 +788,9 @@ def _optimize_swap(lineup, players, locked_games, release_max_proj, ftop=20, gto
     released = [lineup[i] for i in open_idx]
     keeper_names = {p.name for p in keepers}
     budget = SALARY_CAP - sum(p.salary for p in keepers)
-    needF = sum(1 for i in open_idx if _LS_SLOTS[i] == "F")
-    needG = sum(1 for i in open_idx if _LS_SLOTS[i] == "G")
-    needU = sum(1 for i in open_idx if _LS_SLOTS[i] == "UTIL")
+    needF = sum(1 for i in open_idx if slots[i] == "F")
+    needG = sum(1 for i in open_idx if slots[i] == "G")
+    needU = sum(1 for i in open_idx if slots[i] == "UTIL")
 
     cand = [p for p in players if game_of(p) not in locked_games and p.proj >= 12.0
             and p.name not in keeper_names]
@@ -700,36 +848,64 @@ def _optimize_swap(lineup, players, locked_games, release_max_proj, ftop=20, gto
     }
 
 
-def late_swap(entered, players, locked_games, release_max_proj):
+def late_swap(entered, players, locked_games, release_max_proj, slots=None, labels=None):
     by_norm = {normalize_name(p.name): p for p in players}
     results = []
     for idx, names in enumerate(entered, 1):
+        label = (labels[idx - 1] if labels and idx <= len(labels) else None) or f"L{idx}"
         lineup, missing = [], []
         for nm in names:
             p = by_norm.get(normalize_name(nm))
             (lineup if p else missing).append(p if p else nm)
         if len(lineup) != ROSTER_SIZE:
-            results.append({"lineup": idx, "error": f"couldn't match: {', '.join(missing)}"})
+            results.append({"lineup": idx, "label": label,
+                            "error": f"couldn't match: {', '.join(missing)}"})
             continue
-        rec = _optimize_swap(lineup, players, set(locked_games), release_max_proj)
+        rec = _optimize_swap(lineup, players, set(locked_games), release_max_proj, slots)
         rec["lineup"] = idx
+        rec["label"] = label
         results.append(rec)
     return results
 
 
-def run_late_swap(csv_text, lineups_text, locked_games, release_max_proj):
+def run_late_swap(csv_text, lineups_text, locked_games, release_max_proj,
+                  dk_text=None, auto_lock=True):
+    """Late swap from either our own lineups CSV or a DK entries export. The DK
+    file is preferred: it names the slot order and carries game start times, so
+    locked games are detected automatically (the user can still override)."""
     players = parse_linestar((csv_text or "").strip())
     if sum(1 for p in players if p.proj > 0) < ROSTER_SIZE:
         return {"error": "Drop your updated LineStar CSV first (the same file the "
                          "optimizer uses)."}
-    entered = parse_entered_lineups(lineups_text)
-    if not entered:
-        return {"error": "Couldn't read that lineups file — expected a DK export "
-                         "with an F,F,F,G,G,UTIL header and one row of 6 names per lineup."}
+    slots, labels, autodetected = None, None, []
+    slate_games = sorted({p.game for p in players if p.game})
+    if (dk_text or "").strip():
+        dk = parse_dk_entries(dk_text)
+        entered = [e["names"] for e in dk["entries"] if len(e["names"]) == ROSTER_SIZE]
+        labels = [f'#{e["entryId"]}' for e in dk["entries"]
+                  if len(e["names"]) == ROSTER_SIZE]
+        slots = dk["slots"]
+        autodetected = dk_locked_games(dk["games"])
+        if dk["games"]:
+            slate_games = sorted(dk["games"])
+        if not entered:
+            return {"error": "That DK file has no filled-in lineups yet — enter your "
+                             "lineups on DK first, then export."}
+        if auto_lock:
+            locked_games = sorted(set(locked_games) | set(autodetected))
+    else:
+        entered = parse_entered_lineups(lineups_text)
+        if not entered:
+            return {"error": "Couldn't read that lineups file — upload your DK entries "
+                             "export, or a CSV with an F,F,F,G,G,UTIL header and one "
+                             "row of 6 names per lineup."}
     return {
-        "games": sorted({p.game for p in players if p.game}),
-        "locked": list(locked_games),
-        "swaps": late_swap(entered, players, locked_games, float(release_max_proj)),
+        "games": slate_games,
+        "locked": sorted(locked_games),
+        "autoLocked": autodetected,
+        "slots": slots or _LS_SLOTS,
+        "swaps": late_swap(entered, players, locked_games, float(release_max_proj),
+                           slots, labels),
     }
 
 
@@ -752,11 +928,16 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, json.dumps({"error": "not found"}))
 
     def do_POST(self):
-        if self.path not in ("/api/optimize", "/api/lateswap"):
+        if self.path not in ("/api/optimize", "/api/lateswap", "/api/dkfill"):
             return self._send(404, json.dumps({"error": "not found"}))
         try:
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length) or b"{}")
+            if self.path == "/api/dkfill":  # no LineStar needed — pure slotting
+                result = run_dk_fill(payload.get("dk") or "",
+                                     payload.get("lineups") or [])
+                return self._send(400 if result.get("error") else 200,
+                                  json.dumps(result))
             csv_text = payload.get("csv") or ""
             if not csv_text.strip():
                 return self._send(400, json.dumps(
@@ -764,7 +945,9 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/lateswap":
                 result = run_late_swap(csv_text, payload.get("lineups") or "",
                                        payload.get("locked") or [],
-                                       payload.get("releaseMaxProj", LATE_RELEASE_DEFAULT))
+                                       payload.get("releaseMaxProj", LATE_RELEASE_DEFAULT),
+                                       payload.get("dk") or "",
+                                       payload.get("autoLock", True))
             else:
                 result = run_optimize(csv_text, payload.get("options", {}))
             code = 400 if result.get("error") else 200
