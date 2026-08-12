@@ -39,6 +39,8 @@ INDEX_HTML = r"""<!doctype html>
   .offpool{color:var(--accent);font-weight:700}
   .riskdot{color:#e0a030}
   .riskrow td{color:var(--muted)}
+  .note{background:#1e2530;border:1px solid #33506e;color:#a8c4e0;border-radius:10px;
+    padding:10px 13px;margin-bottom:12px;font-size:13.5px}
   .lockchip{display:inline-block;padding:5px 11px;margin:3px 3px 0 0;border-radius:15px;
     border:1px solid var(--line);cursor:pointer;font-size:13px;background:var(--chip);user-select:none}
   .lockchip.on{background:#3a2a1e;border-color:#e0a030;color:#f0c070}
@@ -240,6 +242,7 @@ INDEX_HTML = r"""<!doctype html>
     <!-- results -->
     <div>
       <div id="err" class="err" style="display:none"></div>
+      <div id="note" class="note" style="display:none"></div>
       <div id="status" class="status" style="display:none"></div>
       <div id="coach" class="coach" style="display:none"></div>
       <div id="tools" style="display:none;margin-bottom:14px">
@@ -332,7 +335,7 @@ async function runSwap(){
   if(!csvText){ showErr('Drop your LineStar CSV up top first — late swap reuses it.'); return; }
   if(!swapText) return;
   const btn=$('#swapgo'); btn.disabled=true; btn.innerHTML='<span class="spin"></span>Checking…';
-  $('#err').style.display='none';
+  $('#err').style.display='none'; $('#note').style.display='none';
   try{
     const body={csv:csvText, locked:[...lockedGames], autoLock:autoLock,
                 releaseMaxProj:+$('#rel').value};
@@ -424,7 +427,7 @@ $('#go').addEventListener('click', run);
 async function run(){
   if(!csvText) return;
   const btn = $('#go'); btn.disabled = true; btn.innerHTML = '<span class="spin"></span>Crunching…';
-  $('#err').style.display='none';
+  $('#err').style.display='none'; $('#note').style.display='none';
   const options = {
     n:+$('#n').value, stack:+$('#stack').value,
     maxExposure:(+$('#exp').value)/100, leverage:(+$('#lev').value)/100,
@@ -443,6 +446,7 @@ async function run(){
   btn.disabled=false; btn.textContent='Generate lineups';
 }
 function showErr(m){ $('#err').style.display='block'; $('#err').textContent = m; }
+function showNote(m){ $('#note').style.display='block'; $('#note').textContent = m; }
 
 function render(d){
   $('#welcome').style.display='none';
@@ -589,7 +593,7 @@ $('#dkfile').addEventListener('change', e=>{
         const blob=new Blob([d.csv],{type:'text/csv'});
         const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
         a.download='DKEntries_filled.csv'; a.click();
-        if(d.warn) showErr('Filled '+d.filled+' entries. Note: '+d.warn);
+        showNote('✓ Filled '+d.filled+' entries.'+(d.warn?' '+d.warn:''));
       }
     }catch(err){ showErr(err.message); }
     btn.disabled=false; btn.textContent='⬆ Fill DK entries file';

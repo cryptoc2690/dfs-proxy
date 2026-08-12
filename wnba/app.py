@@ -645,8 +645,11 @@ def parse_dk_entries(text):
                 if c.strip() == "Name + ID":
                     pi = i
                     break
-            if pi is not None:
-                continue  # this row is the pool header, not data
+            # NOTE: no `continue` here. DK embeds the player-pool header partway
+            # down the file, on a row that is ALSO a real contest entry — skipping
+            # it silently dropped one of the user's entries. The pool-data check
+            # below is guarded on the ID column being numeric, so the header row
+            # can't be mistaken for a player anyway.
         if r[0].strip() == "Entry ID" and len(r) > 9:
             slots = [c.strip() for c in r[4:10] if c.strip()]
         elif r[0].strip().isdigit() and len(r) > 9:
@@ -720,12 +723,15 @@ def build_dk_upload(dk, lineups_names):
         contest = e["contest"].replace('"', '""')
         lines.append(f'{e["entryId"]},"{contest}",{e["contestId"]},{e["fee"]},'
                      + ",".join(cells))
-    warn = (f"Couldn't match to a DK ID: {', '.join(sorted(missing))}"
-            if missing else "")
+    notes = []
+    if missing:
+        notes.append(f"no DK ID for: {', '.join(sorted(missing))}")
     if len(lineups_names) > len(entries):
-        warn = ((warn + " · ") if warn else "") + \
-            f"{len(lineups_names)} lineups but only {len(entries)} entries — filled the first {n}."
-    return "\n".join(lines) + "\n", warn
+        notes.append(f"{len(lineups_names)} lineups, {len(entries)} entries — filled {n}.")
+    elif len(entries) > len(lineups_names):
+        notes.append(f"{len(lineups_names)} lineups, {len(entries)} entries — "
+                     f"{len(entries) - len(lineups_names)} left unchanged.")
+    return "\n".join(lines) + "\n", " · ".join(notes)
 
 
 def run_dk_fill(dk_text, lineups_names):
