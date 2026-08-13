@@ -127,6 +127,23 @@ def parse_linestar(text):
     return players
 
 
+def parse_linestar_scored(text):
+    """{normalized name: actual DK points so far} from LineStar's `Scored` column.
+
+    Empty pre-lock; mid-slate it carries live/final scores for players whose games
+    have started. This is what lets late swap know how a lineup already stands.
+    """
+    import csv as _csv
+    import io
+    out = {}
+    for d in _csv.DictReader(io.StringIO((text or "").lstrip("﻿"))):
+        name = (d.get("Name") or "").strip()
+        got = _f(d.get("Scored"))
+        if name and got > 0:
+            out[normalize_name(name)] = got
+    return out
+
+
 # ---------------- daily projections (minutes + stat-stuffer floor) ----------------
 # Reliability GATE (not a grade). Back-testing 5 slates of results killed the
 # graded version: minutes and stat-stuffer had ~zero correlation with bust rate
@@ -766,244 +783,340 @@ def run_dk_fill(dk_text, lineups_names):
 
 
 # ---------------- late swap ----------------
-# Re-optimize already-entered lineups against an UPDATED LineStar after news
-# (a scratch, a surprise benching). Keep locked players (games already tipped)
-# and your good plays fixed; move only off dead weight (projecting under a
-# threshold) and reinvest the freed salary for the highest projection. No
-# ownership term on purpose: late swap is inherently leverage-positive (you pivot
-# off news-killed chalk onto news-created value), and the ownership numbers are
-# stale the moment the news drops — so projection is the only honest objective.
-# Default high, so the panel RE-OPTIMIZES every unlocked slot out of the box.
-# It used to default low ("only drop dead weight"), which meant that once games
-# tipped — when there's rarely any dead weight left — every entry came back
-# "keep as-is" unless you knew to move a slider. Lower it for news-only mode.
-LATE_RELEASE_DEFAULT = 45.0
+# Re-optimize already-entered lineups mid-slate. Locked players are fixed
+# constraints; the open slots plus whatever salary they leave are just a smaller
+# instance of the problem the main engine already solves, so we score candidate
+# rosters with the SAME Monte-Carlo simulator rather than by raw projection —
+# GPP is won on lineup upside, not on the safest median.
+#
+# The one addition over a normal build is position awareness. By late swap, the
+# locked players have already scored (LineStar's `Scored` column carries live
+# actuals), so we know whether a lineup is running ahead of or behind its own
+# projection, and we know from ownership whether the field took the same hit. A
+# lineup that is uniquely behind has to swing for upside to win; one that is
+# uniquely ahead should protect. That becomes ONE dial per lineup — aggression —
+# which tilts its ranking between the median and the ceiling. Nothing else about
+# selection uses ownership: the 5-slate back-test showed projected ownership is
+# noise for picking players, and it is only used here to read our position
+# relative to the field, which is a different job.
 _LS_SLOTS = ["F", "F", "F", "G", "G", "UTIL"]
+SWAP_MIN_GAIN = 2.0        # ignore sub-noise "improvements"
+SWAP_MAX_LEFTOVER = 1500   # preference, not a filter — locks can strand salary
+SWAP_TOP_PER_POS = 14      # candidate breadth per position (keeps combos sane)
 
 
-def parse_entered_lineups(text):
-    """Parse a DK-style entered-lineups export (header F,F,F,G,G,UTIL then one
-    row of 6 names per lineup) into a list of 6-name lists."""
-    import csv as _csv
-    import io
-    out = []
-    for row in _csv.reader(io.StringIO((text or "").lstrip("﻿"))):
-        cells = [c.strip() for c in row if c and c.strip()]
-        if len(cells) < ROSTER_SIZE:
+def _pace_read(locked, scored):
+    """How a lineup stands, from its own locked players.
+
+    Returns (banked, expected, deficit, field_weight). `deficit` is actual minus
+    projected on the players already played — negative means running behind.
+    `field_weight` scales that by ownership: a bust on a highly-owned player hurt
+    the whole field, so it barely moves us; a bust on a play nobody had leaves us
+    uniquely behind and is worth reacting to.
+    """
+    banked = expected = 0.0
+    wsum = wtot = 0.0
+    for p in locked:
+        act = scored.get(normalize_name(p.name))
+        if act is None:
             continue
-        if all(c.upper() in ("F", "G", "UTIL", "GUARD", "FORWARD") for c in cells[:ROSTER_SIZE]):
-            continue  # header row
-        out.append(cells[:ROSTER_SIZE])
-    return out
+        banked += act
+        expected += p.proj
+        own = max(min(p.ownership, 100.0), 1.0) / 100.0
+        # low ownership -> this swing is ours alone -> weight it fully
+        wsum += (act - p.proj) * (1.0 - own)
+        wtot += abs(act - p.proj) * (1.0 - own) or 0.0
+    return banked, expected, banked - expected, wsum
 
 
-def _optimize_swap(lineup, players, locked_games, release_max_proj, slots=None,
-                   locked_names=None, ftop=20, gtop=20):
-    """One lineup, slotted in `slots` order (DK files use G,G,F,F,F,UTIL; our own
-    export uses F,F,F,G,G,UTIL). A slot is releasable only if its game is OPEN and
-    the player is dead weight (proj < release_max_proj); studs and locked players
-    stay. Refill releasable slots to maximize (projection, then salary) under the
-    cap. Returns a dict the GUI renders."""
-    import itertools
-    slots = slots or _LS_SLOTS
-    locked_names = locked_names or set()
+def _aggression(deficit_weighted):
+    """Map a field-adjusted deficit to a 0..1 dial.
 
-    def game_of(p):
-        return p.game or p.team
+    0.5 = neutral (rank on the tool's usual ceiling). Above 0.5 chases upside
+    because we're uniquely behind; below 0.5 protects because we're uniquely
+    ahead. Deliberately gentle and clamped — this is an unvalidated read, so it
+    nudges the ranking rather than overriding it.
+    """
+    return max(0.15, min(0.85, 0.5 - deficit_weighted / 60.0))
 
-    def is_locked(p):  # DK's own per-player lock wins; game locks are the fallback
-        return normalize_name(p.name) in locked_names or game_of(p) in locked_games
 
-    open_idx = [i for i in range(ROSTER_SIZE)
-                if not is_locked(lineup[i]) and lineup[i].proj < release_max_proj]
-    keepers = [lineup[i] for i in range(ROSTER_SIZE) if i not in open_idx]
-    released = [lineup[i] for i in open_idx]
-    keeper_names = {p.name for p in keepers}
-    budget = SALARY_CAP - sum(p.salary for p in keepers)
-    needF = sum(1 for i in open_idx if slots[i] == "F")
-    needG = sum(1 for i in open_idx if slots[i] == "G")
-    needU = sum(1 for i in open_idx if slots[i] == "UTIL")
+def _swap_candidates(players, locked_names, used_names, budget):
+    """Unlocked, projecting players who could still fill an open slot."""
+    out = []
+    for p in players:
+        if p.proj <= 0 or p.salary > budget:
+            continue
+        n = normalize_name(p.name)
+        if n in locked_names or n in used_names:
+            continue
+        out.append(p)
+    out.sort(key=lambda p: -p.proj)
+    g = [p for p in out if p.is_guard][:SWAP_TOP_PER_POS]
+    f = [p for p in out if not p.is_guard][:SWAP_TOP_PER_POS]
+    return g, f
 
-    cand = [p for p in players if not is_locked(p) and p.proj >= 12.0
-            and p.name not in keeper_names]
-    cand = list({p.name: p for p in (cand + released)}.values())
-    rel_names = {p.name for p in released}
 
-    def trim(lst, top):  # top-N by proj, but never drop an original keep-option
-        lst = sorted(lst, key=lambda p: -p.proj)
-        return lst[:top] + [p for p in lst[top:] if p.name in rel_names]
-    forwards = trim([p for p in cand if not p.is_guard], ftop)
-    guards = trim([p for p in cand if p.is_guard], gtop)
-
-    best = None  # (proj, salary, chosen)
-    for fs in itertools.combinations(forwards, needF):
-        for gs in itertools.combinations(guards, needG):
-            base = list(fs) + list(gs)
-            sal = sum(p.salary for p in base)
-            if sal > budget:
-                continue
-            if needU:
-                used = {p.name for p in base}
-                for u in cand:
-                    if u.name in used or sal + u.salary > budget:
-                        continue
-                    key = (sum(p.proj for p in base) + u.proj, sal + u.salary)
-                    if best is None or key > (best[0], best[1]):
-                        best = (key[0], key[1], base + [u])
-            else:
-                key = (sum(p.proj for p in base), sal)
-                if best is None or key > (best[0], best[1]):
-                    best = (key[0], key[1], base)
-
-    old_proj = round(sum(p.proj for p in lineup), 1)
-    old_sal = sum(p.salary for p in lineup)
-    if best is None:  # nothing legal to change
-        return {"keep": True, "oldProj": old_proj, "oldSalary": old_sal,
-                "roster": list(lineup), "note": "no legal swap"}
-    chosen = best[2]
-    orig = {p.name for p in released}
-    new = {p.name for p in chosen}
-    out_names, in_names = orig - new, new - orig
-    # Rebuild the roster IN SLOT ORDER: locked/kept players stay exactly where
-    # they were (DK pins a locked player to its slot), and the chosen players
-    # fill the vacated slots by type. Without this the export could move a
-    # locked player to a different slot and DK would reject the upload.
-    new6 = [None] * ROSTER_SIZE
+def _slot_roster(lineup, open_idx, chosen, slots):
+    """Put `chosen` into the open slots, leaving locked players exactly where DK
+    has them (an upload that moves a locked player is rejected)."""
+    roster = [None] * ROSTER_SIZE
     for i in range(ROSTER_SIZE):
         if i not in open_idx:
-            new6[i] = lineup[i]
+            roster[i] = lineup[i]
     gs = [p for p in chosen if p.is_guard]
     fs = [p for p in chosen if not p.is_guard]
     for i in open_idx:
         if slots[i] == "G" and gs:
-            new6[i] = gs.pop(0)
+            roster[i] = gs.pop(0)
         elif slots[i] == "F" and fs:
-            new6[i] = fs.pop(0)
-    leftover_picks = gs + fs
+            roster[i] = fs.pop(0)
+    rest = gs + fs
     for i in open_idx:
-        if new6[i] is None and leftover_picks:
-            new6[i] = leftover_picks.pop(0)
-    if any(p is None for p in new6):  # couldn't slot legally — leave it alone
-        return {"keep": True, "oldProj": old_proj, "oldSalary": old_sal,
-                "roster": list(lineup)}
-    new_proj = round(sum(p.proj for p in new6), 1)
-    if not out_names or new_proj - old_proj < 2.0:  # skip trivial churn
-        return {"keep": True, "oldProj": old_proj, "oldSalary": old_sal,
-                "roster": list(lineup)}
-    info = lambda p: {"name": p.name, "team": p.team, "salary": p.salary,
-                      "proj": round(p.proj, 1), "own": round(p.ownership, 1),
-                      "starter": p.starter}
-    return {
-        "keep": False, "oldProj": old_proj, "newProj": new_proj,
-        "gain": round(new_proj - old_proj, 1),
-        "oldSalary": old_sal, "newSalary": sum(p.salary for p in new6),
-        "leftover": SALARY_CAP - sum(p.salary for p in new6),
-        "out": [info(p) for p in released if p.name in out_names],
-        "in": [info(p) for p in chosen if p.name in in_names],
-        "roster": new6,
-    }
+        if roster[i] is None and rest:
+            roster[i] = rest.pop(0)
+    return None if any(r is None for r in roster) else roster
 
 
-def late_swap(entered, players, locked_games, release_max_proj, slots=None, labels=None,
-              locked_names=None):
-    by_norm = {normalize_name(p.name): p for p in players}
-    results = []
-    for idx, names in enumerate(entered, 1):
-        label = (labels[idx - 1] if labels and idx <= len(labels) else None) or f"L{idx}"
-        lineup, missing = [], []
-        for nm in names:
-            p = by_norm.get(normalize_name(nm))
-            (lineup if p else missing).append(p if p else nm)
-        if len(lineup) != ROSTER_SIZE:
-            results.append({"lineup": idx, "label": label,
-                            "error": f"couldn't match: {', '.join(missing)}"})
+def _enumerate_rosters(lineup, players, locked_names, open_idx, slots, cap=400):
+    """Legal rosters reachable from this lineup, best-projection combos first.
+
+    We only need a strong shortlist, not the whole space — the simulator ranks
+    them afterwards, and it's the ranking that decides.
+    """
+    import itertools
+    keepers = [lineup[i] for i in range(ROSTER_SIZE) if i not in open_idx]
+    budget = SALARY_CAP - sum(p.salary for p in keepers)
+    used = {normalize_name(p.name) for p in keepers}
+    need_g = sum(1 for i in open_idx if slots[i] == "G")
+    need_f = sum(1 for i in open_idx if slots[i] == "F")
+    need_u = sum(1 for i in open_idx if slots[i] == "UTIL")
+    gpool, fpool = _swap_candidates(players, locked_names, used, budget)
+    # the players currently in the open slots always stay on the table, so
+    # "leave it alone" competes fairly with every alternative
+    for p in (lineup[i] for i in open_idx):
+        pool = gpool if p.is_guard else fpool
+        if all(normalize_name(q.name) != normalize_name(p.name) for q in pool):
+            pool.append(p)
+    combos = []
+    for gs in itertools.combinations(gpool, need_g):
+        sg = sum(p.salary for p in gs)
+        if sg > budget:
             continue
-        rec = _optimize_swap(lineup, players, set(locked_games), release_max_proj, slots,
-                             locked_names)
-        rec["lineup"] = idx
-        rec["label"] = label
-        results.append(rec)
-    return results
-
-
-def run_late_swap(csv_text, lineups_text, locked_games, release_max_proj,
-                  dk_text=None, auto_lock=True):
-    """Late swap from either our own lineups CSV or a DK entries export. The DK
-    file is preferred: it names the slot order and carries game start times, so
-    locked games are detected automatically (the user can still override)."""
-    players = parse_linestar((csv_text or "").strip())
-    if sum(1 for p in players if p.proj > 0) < ROSTER_SIZE:
-        return {"error": "Drop your updated LineStar CSV first (the same file the "
-                         "optimizer uses)."}
-    slots, labels, autodetected, locked_names = None, None, [], set()
-    slate_games = sorted({p.game for p in players if p.game})
-    if (dk_text or "").strip():
-        dk = parse_dk_entries(dk_text)
-        # DK marks locked players directly — use that as the source of truth.
-        locked_names = {n for n, p in dk["pool"].items() if p.get("locked")}
-        used_entries = [e for e in dk["entries"] if len(e["names"]) == ROSTER_SIZE]
-        entered = [e["names"] for e in used_entries]
-        labels = [f'#{e["entryId"]}' for e in used_entries]
-        slots = dk["slots"]
-        if dk["games"]:
-            slate_games = sorted(dk["games"])
-        if not entered:
-            return {"error": "That DK file has no filled-in lineups yet — enter your "
-                             "lineups on DK first, then export."}
-        # DK's own per-player (LOCKED) markers are ground truth for what can still
-        # move. Only fall back to locking by tip-off time when the file carries no
-        # markers at all — otherwise a file exported the morning after a slate
-        # (start times now in the past) would lock every game and freeze the whole
-        # board, even though DK itself says those players are still swappable.
-        if locked_names:
-            autodetected = []
-        else:
-            autodetected = dk_locked_games(dk["games"])
-            if auto_lock:
-                locked_games = sorted(set(locked_games) | set(autodetected))
-    else:
-        entered = parse_entered_lineups(lineups_text)
-        if not entered:
-            return {"error": "Couldn't read that lineups file — upload your DK entries "
-                             "export, or a CSV with an F,F,F,G,G,UTIL header and one "
-                             "row of 6 names per lineup."}
-    swaps = late_swap(entered, players, locked_games, float(release_max_proj),
-                      slots, labels, locked_names)
-    # Build a re-uploadable DK file from the swapped rosters. This is the actual
-    # deliverable — reading OUT/IN cards and hand-editing 15 entries on a phone
-    # before lock isn't realistic. Every entry is written (changed or not) so the
-    # whole file can go back to DK in one upload.
-    dk_csv, changed = None, 0
-    if (dk_text or "").strip():
-        out_slots = slots or _LS_SLOTS
-        lines = ["Entry ID,Contest Name,Contest ID,Entry Fee," + ",".join(out_slots)]
-        for e, s in zip(used_entries, swaps):
-            roster = s.get("roster")
-            if not roster:
+        for fs in itertools.combinations(fpool, need_f):
+            base = list(gs) + list(fs)
+            sal = sg + sum(p.salary for p in fs)
+            if sal > budget:
                 continue
-            if not s.get("keep"):
-                changed += 1
-            cells = []
-            for p in roster:
-                rec = dk["pool"].get(normalize_name(p.name))
-                cells.append(f'"{p.name} ({rec["dkId"]})"' if rec else f'"{p.name}"')
-            contest = e["contest"].replace('"', '""')
-            lines.append(f'{e["entryId"]},"{contest}",{e["contestId"]},{e["fee"]},'
-                         + ",".join(cells))
-        if len(lines) > 1:
-            dk_csv = "\n".join(lines) + "\n"
-    for s in swaps:  # Player objects aren't JSON-serializable
-        s.pop("roster", None)
+            if need_u:
+                taken = {normalize_name(p.name) for p in base}
+                for u in itertools.chain(gpool, fpool):
+                    un = normalize_name(u.name)
+                    if un in taken or sal + u.salary > budget:
+                        continue
+                    combos.append((sum(p.proj for p in base) + u.proj, base + [u]))
+            else:
+                combos.append((sum(p.proj for p in base), base))
+    combos.sort(key=lambda c: -c[0])
+    out, seen = [], set()
+    for _, chosen in combos:
+        key = frozenset(normalize_name(p.name) for p in chosen)
+        if key in seen:
+            continue
+        seen.add(key)
+        roster = _slot_roster(lineup, open_idx, chosen, slots)
+        if roster:
+            out.append(roster)
+        if len(out) >= cap:
+            break
+    return out
+
+
+def _score_rosters(rosters, players, aggression, n_sims, seed):
+    """Rank with the main tool's simulator. `aggression` slides the statistic
+    between the median (protect) and the 95th percentile (chase)."""
+    from engine import Lineup, simulate_and_score
+    lus = [Lineup(list(r)) for r in rosters]
+    simulate_and_score(lus, players, sims=n_sims, leverage=0.0, seed=seed)
+    for lu in lus:
+        m = lu.metrics
+        # 0 -> mean, 0.5 -> the usual 85th-percentile ceiling, 1 -> p95
+        if aggression <= 0.5:
+            t = aggression / 0.5
+            m["swapScore"] = m["mean"] + t * (m["ceiling"] - m["mean"])
+        else:
+            t = (aggression - 0.5) / 0.5
+            m["swapScore"] = m["ceiling"] + t * (m["p95"] - m["ceiling"])
+    return lus
+
+
+def _swap_payload(p, scored):
+    act = scored.get(normalize_name(p.name))
+    return {"name": p.name, "team": p.team, "salary": p.salary,
+            "proj": round(p.proj, 1), "own": round(p.ownership, 1),
+            "scored": None if act is None else round(act, 1)}
+
+
+def run_late_swap(csv_text, dk_text, options=None):
+    """DK entries file + updated LineStar -> recommended swaps and a re-uploadable
+    DK file. See the module note above for the model."""
+    options = options or {}
+    players = parse_linestar((csv_text or "").strip())
+    scored = parse_linestar_scored((csv_text or "").strip())
+    if sum(1 for p in players if p.proj > 0) < ROSTER_SIZE:
+        return {"error": "Drop your UPDATED LineStar CSV — it carries the new "
+                         "projections and the live scores late swap needs."}
+    if not (dk_text or "").strip():
+        return {"error": "Upload your DK entries export (DKEntries*.csv)."}
+    dk = parse_dk_entries(dk_text)
+    if not dk["pool"]:
+        return {"error": "Couldn't read that as a DK entries file (no player pool found)."}
+    entries = [e for e in dk["entries"] if len(e["names"]) == ROSTER_SIZE]
+    if not entries:
+        return {"error": "That DK file has no filled-in lineups yet."}
+    slots = dk["slots"] or _LS_SLOTS
+    # DK's own (LOCKED) markers are the authority on what can still move.
+    locked_names = {n for n, p in dk["pool"].items() if p.get("locked")}
+    by_norm = {normalize_name(p.name): p for p in players}
+    n_sims = _int(options.get("sims"), 3000)
+    n_lu = len(entries)
+    cap_ct = max(1, round(_float(options.get("maxExposure"), 0.6) * n_lu))
+
+    # Pass 1: per lineup, work out where it stands and rank its legal rosters.
+    ranked, base_rows = [], []
+    for e in entries:
+        lineup = [by_norm.get(normalize_name(n)) for n in e["names"]]
+        if any(p is None for p in lineup):
+            miss = [n for n, p in zip(e["names"], lineup) if p is None]
+            base_rows.append({"entryId": e["entryId"],
+                              "error": f"not in the LineStar file: {', '.join(miss)}"})
+            ranked.append(None)
+            continue
+        open_idx = [i for i in range(ROSTER_SIZE)
+                    if normalize_name(lineup[i].name) not in locked_names]
+        locked_players = [lineup[i] for i in range(ROSTER_SIZE) if i not in open_idx]
+        banked, expected, deficit, wdef = _pace_read(locked_players, scored)
+        aggr = _aggression(wdef)
+        rosters = _enumerate_rosters(lineup, players, locked_names, open_idx, slots)
+        if not rosters:
+            rosters = [list(lineup)]
+        lus = _score_rosters(rosters, players, aggr, n_sims, seed=len(base_rows))
+        cur = frozenset(normalize_name(p.name) for p in lineup)
+        for lu in lus:
+            lu.metrics["isCurrent"] = frozenset(
+                normalize_name(p.name) for p in lu.players) == cur
+        lus.sort(key=lambda l: -l.metrics["swapScore"])
+        ranked.append(lus)
+        base_rows.append({
+            "entryId": e["entryId"], "open": len(open_idx),
+            "banked": round(banked, 1), "expected": round(expected, 1),
+            "pace": round(deficit, 1), "aggression": round(aggr, 2),
+            "lineup": lineup,
+        })
+
+    # Pass 2: commit lineup by lineup under a portfolio exposure cap, so the set
+    # stays diversified instead of every entry converging on the same few plays.
+    # Locked players count toward exposure — they're already committed.
+    # Seed with the exposure the user ALREADY has, every player, locked or not.
+    # The cap's job here is to stop the swap process from concentrating the set
+    # further — not to churn a lineup purely to unwind exposure the user chose,
+    # which would mean downgrading a roster for no gain.
+    counts = {}
+    for row, lus in zip(base_rows, ranked):
+        if lus is None:
+            continue
+        for p in row["lineup"]:
+            n = normalize_name(p.name)
+            counts[n] = counts.get(n, 0) + 1
+    results, changed, gain_total = [], 0, 0.0
+    for row, lus in zip(base_rows, ranked):
+        if lus is None:
+            results.append({"entryId": row["entryId"], "error": row["error"]})
+            continue
+        lineup = row["lineup"]
+        current = next((l for l in lus if l.metrics.get("isCurrent")), None)
+        cur_score = current.metrics["swapScore"] if current else None
+        open_names = {normalize_name(lineup[i].name) for i in range(ROSTER_SIZE)
+                      if normalize_name(lineup[i].name) not in locked_names}
+
+        here = {normalize_name(p.name) for p in lineup}
+
+        def exposure_ok(lu):
+            # Only players this swap would ADD are checked — someone already in
+            # the lineup isn't made more concentrated by staying.
+            for p in lu.players:
+                n = normalize_name(p.name)
+                if n in here:
+                    continue
+                if counts.get(n, 0) + 1 > cap_ct:
+                    return False
+            return True
+
+        pick, why = None, ""
+        for lu in lus:
+            if lu.metrics.get("isCurrent"):
+                continue
+            if lu.salary > SALARY_CAP:
+                continue
+            if not exposure_ok(lu):
+                continue
+            if SALARY_CAP - lu.salary > SWAP_MAX_LEFTOVER and current and \
+                    lu.metrics["swapScore"] - cur_score < SWAP_MIN_GAIN * 2:
+                continue  # only strand salary for a clearly better roster
+            pick = lu
+            break
+        if pick and cur_score is not None and \
+                pick.metrics["swapScore"] - cur_score < SWAP_MIN_GAIN:
+            pick = None  # not worth the churn
+        final = pick.players if pick else list(lineup)
+        if pick:  # move exposure from the dropped players onto the added ones
+            now = {normalize_name(p.name) for p in final}
+            for n in here - now:
+                counts[n] = max(0, counts.get(n, 0) - 1)
+            for n in now - here:
+                counts[n] = counts.get(n, 0) + 1
+        rec = {
+            "entryId": row["entryId"], "open": row["open"],
+            "banked": row["banked"], "expected": row["expected"], "pace": row["pace"],
+            "aggression": row["aggression"],
+            "salary": sum(p.salary for p in final),
+            "proj": round(sum(p.proj for p in final), 1),
+            "score": round((pick or current).metrics["swapScore"], 1) if (pick or current) else None,
+            "keep": pick is None,
+        }
+        if pick and current:
+            was = {normalize_name(p.name) for p in lineup}
+            now = {normalize_name(p.name) for p in final}
+            rec["gain"] = round(pick.metrics["swapScore"] - cur_score, 1)
+            rec["out"] = [_swap_payload(p, scored) for p in lineup
+                          if normalize_name(p.name) not in now]
+            rec["in"] = [_swap_payload(p, scored) for p in final
+                         if normalize_name(p.name) not in was]
+            changed += 1
+            gain_total += rec["gain"]
+        rec["roster"] = final
+        results.append(rec)
+
+    # Re-uploadable DK file: every entry, changed or not, in DK's slot order.
+    lines = ["Entry ID,Contest Name,Contest ID,Entry Fee," + ",".join(slots)]
+    for e, rec in zip(entries, results):
+        roster = rec.pop("roster", None)
+        if not roster:
+            continue
+        cells = []
+        for p in roster:
+            info = dk["pool"].get(normalize_name(p.name))
+            cells.append(f'"{p.name} ({info["dkId"]})"' if info else f'"{p.name}"')
+        contest = e["contest"].replace('"', '""')
+        lines.append(f'{e["entryId"]},"{contest}",{e["contestId"]},{e["fee"]},'
+                     + ",".join(cells))
     return {
-        "games": slate_games,
-        "locked": sorted(locked_games),
-        "autoLocked": autodetected,
         "lockedPlayers": len(locked_names),
-        "slots": slots or _LS_SLOTS,
-        "dkCsv": dk_csv,
+        "entries": len(entries),
         "changed": changed,
-        "gain": round(sum(s.get("gain", 0) for s in swaps), 1),
-        "swaps": swaps,
+        "gain": round(gain_total, 1),
+        "slots": slots,
+        "dkCsv": ("\n".join(lines) + "\n") if len(lines) > 1 else None,
+        "swaps": results,
     }
 
 
@@ -1041,11 +1154,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, json.dumps(
                     {"error": "Drop your LineStar projections CSV."}))
             if self.path == "/api/lateswap":
-                result = run_late_swap(csv_text, payload.get("lineups") or "",
-                                       payload.get("locked") or [],
-                                       payload.get("releaseMaxProj", LATE_RELEASE_DEFAULT),
-                                       payload.get("dk") or "",
-                                       payload.get("autoLock", True))
+                result = run_late_swap(csv_text, payload.get("dk") or "",
+                                       payload.get("options") or {})
             else:
                 result = run_optimize(csv_text, payload.get("options", {}))
             code = 400 if result.get("error") else 200

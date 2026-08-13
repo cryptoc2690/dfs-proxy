@@ -219,22 +219,18 @@ INDEX_HTML = r"""<!doctype html>
       <details id="swapwrap" style="margin-top:18px">
         <summary style="cursor:pointer;font-weight:600;color:var(--text)">🔄 Late swap — already entered? adjust for news</summary>
         <div style="margin-top:10px">
-          <div class="hint">Load the lineups you already submitted. Uses the LineStar file above as the
-            UPDATED projection, keeps your locked games + good plays fixed, and moves only off dead weight —
-            reinvesting the freed salary for the highest projection. Projection only; no ownership guessing
-            (late swap is already leverage-positive — you're pivoting off news-killed chalk).</div>
+          <div class="hint">Drop your DK entries export. Locked players stay pinned; every open slot is
+            re-optimized and scored with the same simulator as the main build. Because the LineStar file
+            above carries live scores, it also reads how each lineup <em>already stands</em> — a lineup
+            running behind (on plays the field didn't have) chases upside, one running ahead protects.
+            You get a re-uploadable DK file back.</div>
           <div id="swapdrop" class="drop" style="margin-top:10px;padding:16px">
             <b>+ your DK entries export</b>
-            <small>DKEntries*.csv — reads your lineups AND locks started games automatically</small>
+            <small>DKEntries*.csv — reads your lineups and who's locked</small>
             <input id="swapfile" type="file" accept=".csv" hidden>
           </div>
-          <label style="margin-top:12px">Games — 🔒 = locked (tap to override)</label>
-          <div id="lockchips" class="chips"><span class="hint">load your DK entries file to see the slate's games</span></div>
-          <label style="margin-top:12px">Only move off players projecting under <span id="relv">45</span></label>
-          <input id="rel" class="slider" type="range" min="8" max="60" value="45">
-          <div class="hint">Default (45) re-optimizes every unlocked slot — good players get upgraded into
-            better ones. Drop it to ~14 for news-only mode (drop a scratch, keep everything else). Locked
-            players never move either way.</div>
+          <div class="hint" style="margin-top:10px">Re-drop the <b>updated</b> LineStar CSV up top first —
+            that's where the new projections and live scores come from.</div>
           <button id="swapgo" class="btn" disabled style="margin-top:12px">Recommend late swaps</button>
         </div>
       </details>
@@ -314,7 +310,7 @@ function loadMin(f){ if(!f) return; const r=new FileReader();
   r.readAsText(f); }
 
 // ---- late swap ----
-let swapText='', swapGames=[], lockedGames=new Set(), swapIsDK=false, autoLock=true, lastSwapCsv='';
+let swapText='', lastSwapCsv='';
 const swapdrop=$('#swapdrop'), swapfile=$('#swapfile');
 swapdrop.addEventListener('click',()=>swapfile.click());
 ['dragover','dragenter'].forEach(ev=>swapdrop.addEventListener(ev,e=>{e.preventDefault();swapdrop.classList.add('over')}));
@@ -322,68 +318,54 @@ swapdrop.addEventListener('click',()=>swapfile.click());
 swapdrop.addEventListener('drop',e=>loadSwap(e.dataTransfer.files[0]));
 swapfile.addEventListener('change',e=>loadSwap(e.target.files[0]));
 function loadSwap(f){ if(!f) return; const r=new FileReader();
-  r.onload=()=>{ swapText=r.result;
-    swapIsDK = /Entry ID/i.test(swapText.slice(0,400));   // DK export vs our own CSV
-    autoLock = swapIsDK; lockedGames.clear();
-    swapdrop.classList.add('loaded');
-    swapdrop.innerHTML='<b>✓ '+f.name+'</b><small>'+(swapIsDK
-      ? 'DK export — locked games detected automatically' : 'lineups file — set locks below')+'</small>';
+  r.onload=()=>{ swapText=r.result; swapdrop.classList.add('loaded');
+    swapdrop.innerHTML='<b>✓ '+f.name+'</b><small>ready — hit recommend</small>';
     $('#swapgo').disabled=false; };
   r.readAsText(f); }
-$('#rel').addEventListener('input',e=>$('#relv').textContent=e.target.value);
 $('#swapgo').addEventListener('click',runSwap);
 async function runSwap(){
-  if(!csvText){ showErr('Drop your LineStar CSV up top first — late swap reuses it.'); return; }
+  if(!csvText){ showErr('Drop your updated LineStar CSV up top first — that is where the new projections and live scores come from.'); return; }
   if(!swapText) return;
-  const btn=$('#swapgo'); btn.disabled=true; btn.innerHTML='<span class="spin"></span>Checking…';
+  const btn=$('#swapgo'); btn.disabled=true; btn.innerHTML='<span class="spin"></span>Simulating…';
   $('#err').style.display='none'; $('#note').style.display='none';
   try{
-    const body={csv:csvText, locked:[...lockedGames], autoLock:autoLock,
-                releaseMaxProj:+$('#rel').value};
-    if(swapIsDK) body.dk=swapText; else body.lineups=swapText;
     const res=await fetch('/api/lateswap',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify(body)});
+      body:JSON.stringify({csv:csvText, dk:swapText,
+        options:{maxExposure:(+$('#exp').value)/100}})});
     const data=await res.json();
-    if(data.error){ showErr(data.error); }
-    else { swapGames=data.games; lockedGames=new Set(data.locked);
-           renderLockChips(data.autoLocked||[]); renderSwaps(data); }
+    if(data.error) showErr(data.error); else renderSwaps(data);
   }catch(e){ showErr(e.message); }
   btn.disabled=false; btn.textContent='Recommend late swaps';
 }
-function renderLockChips(auto){
-  const box=$('#lockchips'); const A=new Set(auto||[]);
-  box.innerHTML=swapGames.map(g=>'<span class="lockchip'+(lockedGames.has(g)?' on':'')+'" data-g="'+g+'" '+
-    'title="'+(A.has(g)?'tipped off — detected from the DK file':'click to lock/unlock')+'">'+
-    (lockedGames.has(g)?'🔒 ':'')+g+(A.has(g)?' <span class="muted">auto</span>':'')+'</span>').join('');
-  box.querySelectorAll('.lockchip').forEach(c=>c.onclick=()=>{
-    const g=c.dataset.g; lockedGames.has(g)?lockedGames.delete(g):lockedGames.add(g);
-    autoLock=false;  // a manual choice sticks — stop re-deriving locks from tip times
-    runSwap(); });
+function aggrTag(a){
+  if(a>=0.62) return '<span style="color:var(--accent)">chasing upside</span>';
+  if(a<=0.38) return '<span style="color:var(--good)">protecting</span>';
+  return '<span class="muted">neutral</span>';
 }
 function renderSwaps(d){
   const box=$('#swapresults'); box.style.display='block'; $('#welcome').style.display='none';
-  const changed=d.swaps.filter(s=>!s.keep&&!s.error).length;
-  const lockTxt=d.lockedPlayers?' · '+d.lockedPlayers+' players locked by DK'
-    :(lockedGames.size?' · locked: '+[...lockedGames].join(', ')
-    :' · nothing locked yet — tap a game above if it already tipped');
-  let html='<div class="coach-h">🔄 Late swap — '+changed+' of '+d.swaps.length+' lineups to adjust'+lockTxt+'</div>';
+  let html='<div class="coach-h">🔄 Late swap — '+d.changed+' of '+d.entries+
+    ' lineups to adjust · '+d.lockedPlayers+' players locked by DK</div>';
   if(d.dkCsv){
     lastSwapCsv=d.dkCsv;
     html+='<div class="note" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">'+
-      '<b>+'+d.gain.toFixed(1)+' projection across '+changed+' lineups.</b>'+
+      '<b>+'+d.gain.toFixed(1)+' simulated ceiling across '+d.changed+' lineups.</b>'+
       '<button id="swapdl" class="btn ghost" style="width:auto;margin:0;padding:8px 14px">'+
       '⬇ Download updated DK file</button>'+
-      '<span class="muted">all '+d.swaps.length+' entries included — upload straight back to DK</span></div>';
+      '<span class="muted">all '+d.entries+' entries — upload straight back to DK</span></div>';
   }
   html+=d.swaps.map(s=>{
-    const L=s.label||('L'+s.lineup);
-    if(s.error) return '<div class="swapcard err">'+L+': '+s.error+'</div>';
-    if(s.keep) return '<div class="swapcard keep">'+L+' · keep as-is <span class="muted">(proj '+s.oldProj+')</span></div>';
-    const row=(p,sign,cls)=>'<div class="swaprow '+cls+'">'+sign+' '+p.name+' <span class="muted">$'+p.salary.toLocaleString()+
-      ' · '+p.proj+' proj · '+p.own+'%'+(p.starter?' · START':'')+'</span></div>';
-    const left=s.leftover>0?' · <span class="muted">$'+s.leftover.toLocaleString()+' left</span>':'';
-    return '<div class="swapcard"><div class="swaphdr">'+L+' <span class="gain">+'+s.gain+' proj</span> '+
-      '<span class="muted">→ '+s.newProj+', $'+s.newSalary.toLocaleString()+'</span>'+left+'</div>'+
+    if(s.error) return '<div class="swapcard err">#'+s.entryId+': '+s.error+'</div>';
+    const pace = s.banked>0
+      ? ' · banked <b>'+s.banked+'</b> vs '+s.expected+' expected ('+(s.pace>=0?'+':'')+s.pace+') · '+aggrTag(s.aggression)
+      : '';
+    if(s.keep) return '<div class="swapcard keep">#'+s.entryId+' · keep as-is '+
+      '<span class="muted">('+s.open+' open, proj '+s.proj+')</span>'+pace+'</div>';
+    const row=(p,sign,cls)=>'<div class="swaprow '+cls+'">'+sign+' '+p.name+
+      ' <span class="muted">$'+p.salary.toLocaleString()+' · '+p.proj+' proj · '+p.own+'%</span></div>';
+    return '<div class="swapcard"><div class="swaphdr">#'+s.entryId+
+      ' <span class="gain">+'+s.gain+'</span> <span class="muted">→ score '+s.score+
+      ', $'+s.salary.toLocaleString()+'</span>'+pace+'</div>'+
       s.out.map(p=>row(p,'−','out')).join('')+s.in.map(p=>row(p,'+','in')).join('')+'</div>';
   }).join('');
   box.innerHTML=html;
@@ -394,50 +376,6 @@ function renderSwaps(d){
     a.download='DKEntries_lateswap.csv'; a.click();
   };
 }
-
-// ---- reusable type-ahead picker (used for cores and the full pool) ----
-function makePicker(prefix, icon){
-  const input=$('#'+prefix+'in'), drop=$('#'+prefix+'drop'), chips=$('#'+prefix+'chips');
-  const sel=[]; let active=-1;
-  function show(){
-    const q=input.value.trim().toLowerCase();
-    const chosen=new Set(sel.map(s=>s.toLowerCase()));
-    let m=playerNames.filter(n=>!chosen.has(n.toLowerCase()));
-    if(q) m=m.filter(n=>n.toLowerCase().includes(q));
-    m=m.slice(0,8);
-    if(!m.length){ hide(); return; }
-    active=-1;
-    drop.innerHTML=m.map(n=>'<div>'+n+'</div>').join('');
-    drop.querySelectorAll('div').forEach(d=>d.onclick=()=>add(d.textContent));
-    drop.classList.add('show');
-  }
-  function hide(){ drop.classList.remove('show'); active=-1; }
-  function paint(items){ items.forEach((it,i)=>it.classList.toggle('active',i===active)); }
-  function add(n){ if(!sel.includes(n)) sel.push(n); input.value=''; hide(); render(); input.focus(); }
-  function remove(n){ const i=sel.indexOf(n); if(i>=0) sel.splice(i,1); render(); }
-  function render(){
-    chips.innerHTML=sel.map(n=>'<span class="chip">'+(icon?'<span class="core-star">'+icon+'</span>':'')+n+
-      '<span class="x" data-n="'+n.replace(/"/g,'&quot;')+'">✕</span></span>').join('');
-    chips.querySelectorAll('.x').forEach(x=>x.onclick=()=>remove(x.dataset.n));
-  }
-  input.addEventListener('input', show);
-  input.addEventListener('focus', show);
-  input.addEventListener('keydown', e => {
-    const items=drop.querySelectorAll('div'); if(!items.length) return;
-    if(e.key==='ArrowDown'){ active=Math.min(active+1,items.length-1); paint(items); e.preventDefault(); }
-    else if(e.key==='ArrowUp'){ active=Math.max(active-1,0); paint(items); e.preventDefault(); }
-    else if(e.key==='Enter'){ if(active>=0){ add(items[active].textContent); e.preventDefault(); } }
-    else if(e.key==='Escape'){ hide(); }
-  });
-  return { sel, enable(){ input.disabled=false; input.placeholder='type a player…'; } };
-}
-document.addEventListener('click', e => { if(!e.target.closest('.typeahead')) document.querySelectorAll('.drop-menu').forEach(d=>d.classList.remove('show')); });
-const corePicker = makePicker('core','★');
-const poolPicker = makePicker('pool','');
-const removePicker = makePicker('remove','🚫');
-const capPicker = makePicker('cap','🔒');
-function enablePickers(){ corePicker.enable(); poolPicker.enable(); removePicker.enable(); capPicker.enable(); }
-$('#cappct').addEventListener('input', e => $('#capv').textContent = e.target.value);
 
 $('#go').addEventListener('click', run);
 async function run(){
