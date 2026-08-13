@@ -773,7 +773,11 @@ def run_dk_fill(dk_text, lineups_names):
 # ownership term on purpose: late swap is inherently leverage-positive (you pivot
 # off news-killed chalk onto news-created value), and the ownership numbers are
 # stale the moment the news drops — so projection is the only honest objective.
-LATE_RELEASE_DEFAULT = 13.0
+# Default high, so the panel RE-OPTIMIZES every unlocked slot out of the box.
+# It used to default low ("only drop dead weight"), which meant that once games
+# tipped — when there's rarely any dead weight left — every entry came back
+# "keep as-is" unless you knew to move a slider. Lower it for news-only mode.
+LATE_RELEASE_DEFAULT = 45.0
 _LS_SLOTS = ["F", "F", "F", "G", "G", "UTIL"]
 
 
@@ -854,15 +858,38 @@ def _optimize_swap(lineup, players, locked_games, release_max_proj, slots=None,
     old_proj = round(sum(p.proj for p in lineup), 1)
     old_sal = sum(p.salary for p in lineup)
     if best is None:  # nothing legal to change
-        return {"keep": True, "oldProj": old_proj, "oldSalary": old_sal, "note": "no legal swap"}
+        return {"keep": True, "oldProj": old_proj, "oldSalary": old_sal,
+                "roster": list(lineup), "note": "no legal swap"}
     chosen = best[2]
     orig = {p.name for p in released}
     new = {p.name for p in chosen}
     out_names, in_names = orig - new, new - orig
-    new6 = keepers + chosen
+    # Rebuild the roster IN SLOT ORDER: locked/kept players stay exactly where
+    # they were (DK pins a locked player to its slot), and the chosen players
+    # fill the vacated slots by type. Without this the export could move a
+    # locked player to a different slot and DK would reject the upload.
+    new6 = [None] * ROSTER_SIZE
+    for i in range(ROSTER_SIZE):
+        if i not in open_idx:
+            new6[i] = lineup[i]
+    gs = [p for p in chosen if p.is_guard]
+    fs = [p for p in chosen if not p.is_guard]
+    for i in open_idx:
+        if slots[i] == "G" and gs:
+            new6[i] = gs.pop(0)
+        elif slots[i] == "F" and fs:
+            new6[i] = fs.pop(0)
+    leftover_picks = gs + fs
+    for i in open_idx:
+        if new6[i] is None and leftover_picks:
+            new6[i] = leftover_picks.pop(0)
+    if any(p is None for p in new6):  # couldn't slot legally — leave it alone
+        return {"keep": True, "oldProj": old_proj, "oldSalary": old_sal,
+                "roster": list(lineup)}
     new_proj = round(sum(p.proj for p in new6), 1)
     if not out_names or new_proj - old_proj < 2.0:  # skip trivial churn
-        return {"keep": True, "oldProj": old_proj, "oldSalary": old_sal}
+        return {"keep": True, "oldProj": old_proj, "oldSalary": old_sal,
+                "roster": list(lineup)}
     info = lambda p: {"name": p.name, "team": p.team, "salary": p.salary,
                       "proj": round(p.proj, 1), "own": round(p.ownership, 1),
                       "starter": p.starter}
@@ -873,6 +900,7 @@ def _optimize_swap(lineup, players, locked_games, release_max_proj, slots=None,
         "leftover": SALARY_CAP - sum(p.salary for p in new6),
         "out": [info(p) for p in released if p.name in out_names],
         "in": [info(p) for p in chosen if p.name in in_names],
+        "roster": new6,
     }
 
 
@@ -913,32 +941,69 @@ def run_late_swap(csv_text, lineups_text, locked_games, release_max_proj,
         dk = parse_dk_entries(dk_text)
         # DK marks locked players directly — use that as the source of truth.
         locked_names = {n for n, p in dk["pool"].items() if p.get("locked")}
-        entered = [e["names"] for e in dk["entries"] if len(e["names"]) == ROSTER_SIZE]
-        labels = [f'#{e["entryId"]}' for e in dk["entries"]
-                  if len(e["names"]) == ROSTER_SIZE]
+        used_entries = [e for e in dk["entries"] if len(e["names"]) == ROSTER_SIZE]
+        entered = [e["names"] for e in used_entries]
+        labels = [f'#{e["entryId"]}' for e in used_entries]
         slots = dk["slots"]
-        autodetected = dk_locked_games(dk["games"])
         if dk["games"]:
             slate_games = sorted(dk["games"])
         if not entered:
             return {"error": "That DK file has no filled-in lineups yet — enter your "
                              "lineups on DK first, then export."}
-        if auto_lock:
-            locked_games = sorted(set(locked_games) | set(autodetected))
+        # DK's own per-player (LOCKED) markers are ground truth for what can still
+        # move. Only fall back to locking by tip-off time when the file carries no
+        # markers at all — otherwise a file exported the morning after a slate
+        # (start times now in the past) would lock every game and freeze the whole
+        # board, even though DK itself says those players are still swappable.
+        if locked_names:
+            autodetected = []
+        else:
+            autodetected = dk_locked_games(dk["games"])
+            if auto_lock:
+                locked_games = sorted(set(locked_games) | set(autodetected))
     else:
         entered = parse_entered_lineups(lineups_text)
         if not entered:
             return {"error": "Couldn't read that lineups file — upload your DK entries "
                              "export, or a CSV with an F,F,F,G,G,UTIL header and one "
                              "row of 6 names per lineup."}
+    swaps = late_swap(entered, players, locked_games, float(release_max_proj),
+                      slots, labels, locked_names)
+    # Build a re-uploadable DK file from the swapped rosters. This is the actual
+    # deliverable — reading OUT/IN cards and hand-editing 15 entries on a phone
+    # before lock isn't realistic. Every entry is written (changed or not) so the
+    # whole file can go back to DK in one upload.
+    dk_csv, changed = None, 0
+    if (dk_text or "").strip():
+        out_slots = slots or _LS_SLOTS
+        lines = ["Entry ID,Contest Name,Contest ID,Entry Fee," + ",".join(out_slots)]
+        for e, s in zip(used_entries, swaps):
+            roster = s.get("roster")
+            if not roster:
+                continue
+            if not s.get("keep"):
+                changed += 1
+            cells = []
+            for p in roster:
+                rec = dk["pool"].get(normalize_name(p.name))
+                cells.append(f'"{p.name} ({rec["dkId"]})"' if rec else f'"{p.name}"')
+            contest = e["contest"].replace('"', '""')
+            lines.append(f'{e["entryId"]},"{contest}",{e["contestId"]},{e["fee"]},'
+                         + ",".join(cells))
+        if len(lines) > 1:
+            dk_csv = "\n".join(lines) + "\n"
+    for s in swaps:  # Player objects aren't JSON-serializable
+        s.pop("roster", None)
     return {
         "games": slate_games,
         "locked": sorted(locked_games),
         "autoLocked": autodetected,
         "lockedPlayers": len(locked_names),
         "slots": slots or _LS_SLOTS,
-        "swaps": late_swap(entered, players, locked_games, float(release_max_proj),
-                           slots, labels, locked_names),
+        "dkCsv": dk_csv,
+        "changed": changed,
+        "gain": round(sum(s.get("gain", 0) for s in swaps), 1),
+        "swaps": swaps,
     }
 
 

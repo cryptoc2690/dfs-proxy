@@ -230,11 +230,11 @@ INDEX_HTML = r"""<!doctype html>
           </div>
           <label style="margin-top:12px">Games — 🔒 = locked (tap to override)</label>
           <div id="lockchips" class="chips"><span class="hint">load your DK entries file to see the slate's games</span></div>
-          <label style="margin-top:12px">Only move off players projecting under <span id="relv">14</span></label>
-          <input id="rel" class="slider" type="range" min="8" max="50" value="14">
-          <div class="hint">Low (~14) = news mode: only drop dead weight. High (~45) = re-optimize mode:
-            every unlocked slot competes, so good players can be upgraded into better ones. Locked players
-            never move either way. After games tip, high is usually what you want.</div>
+          <label style="margin-top:12px">Only move off players projecting under <span id="relv">45</span></label>
+          <input id="rel" class="slider" type="range" min="8" max="60" value="45">
+          <div class="hint">Default (45) re-optimizes every unlocked slot — good players get upgraded into
+            better ones. Drop it to ~14 for news-only mode (drop a scratch, keep everything else). Locked
+            players never move either way.</div>
           <button id="swapgo" class="btn" disabled style="margin-top:12px">Recommend late swaps</button>
         </div>
       </details>
@@ -314,7 +314,7 @@ function loadMin(f){ if(!f) return; const r=new FileReader();
   r.readAsText(f); }
 
 // ---- late swap ----
-let swapText='', swapGames=[], lockedGames=new Set(), swapIsDK=false, autoLock=true;
+let swapText='', swapGames=[], lockedGames=new Set(), swapIsDK=false, autoLock=true, lastSwapCsv='';
 const swapdrop=$('#swapdrop'), swapfile=$('#swapfile');
 swapdrop.addEventListener('click',()=>swapfile.click());
 ['dragover','dragenter'].forEach(ev=>swapdrop.addEventListener(ev,e=>{e.preventDefault();swapdrop.classList.add('over')}));
@@ -363,9 +363,18 @@ function renderLockChips(auto){
 function renderSwaps(d){
   const box=$('#swapresults'); box.style.display='block'; $('#welcome').style.display='none';
   const changed=d.swaps.filter(s=>!s.keep&&!s.error).length;
-  const lockTxt=lockedGames.size?' · locked: '+[...lockedGames].join(', ')
-    :' · nothing locked yet — tap a game above if it already tipped';
+  const lockTxt=d.lockedPlayers?' · '+d.lockedPlayers+' players locked by DK'
+    :(lockedGames.size?' · locked: '+[...lockedGames].join(', ')
+    :' · nothing locked yet — tap a game above if it already tipped');
   let html='<div class="coach-h">🔄 Late swap — '+changed+' of '+d.swaps.length+' lineups to adjust'+lockTxt+'</div>';
+  if(d.dkCsv){
+    lastSwapCsv=d.dkCsv;
+    html+='<div class="note" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">'+
+      '<b>+'+d.gain.toFixed(1)+' projection across '+changed+' lineups.</b>'+
+      '<button id="swapdl" class="btn ghost" style="width:auto;margin:0;padding:8px 14px">'+
+      '⬇ Download updated DK file</button>'+
+      '<span class="muted">all '+d.swaps.length+' entries included — upload straight back to DK</span></div>';
+  }
   html+=d.swaps.map(s=>{
     const L=s.label||('L'+s.lineup);
     if(s.error) return '<div class="swapcard err">'+L+': '+s.error+'</div>';
@@ -378,6 +387,12 @@ function renderSwaps(d){
       s.out.map(p=>row(p,'−','out')).join('')+s.in.map(p=>row(p,'+','in')).join('')+'</div>';
   }).join('');
   box.innerHTML=html;
+  const dl=$('#swapdl');
+  if(dl) dl.onclick=()=>{
+    const blob=new Blob([lastSwapCsv],{type:'text/csv'});
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+    a.download='DKEntries_lateswap.csv'; a.click();
+  };
 }
 
 // ---- reusable type-ahead picker (used for cores and the full pool) ----
