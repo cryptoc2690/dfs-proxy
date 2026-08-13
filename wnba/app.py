@@ -989,7 +989,12 @@ def _enumerate_rosters(lineup, players, locked_names, open_idx, slots, cap=400):
             else:
                 combos.append((sum(p.proj for p in base), base))
     combos.sort(key=lambda c: -c[0])
-    out, seen = [], set()
+    # The roster as it stands goes in FIRST and unconditionally. Everything
+    # downstream diffs against it — gain, what's coming out, what's going in — so
+    # if the salary/position filters or the `cap` cut it from the list there'd be
+    # nothing to compare to, and a swap would be reported with no OUT/IN to show.
+    out = [list(lineup)]
+    seen = {frozenset(normalize_name(lineup[i].name) for i in open_idx)}
     for _, chosen in combos:
         key = frozenset(normalize_name(p.name) for p in chosen)
         if key in seen:
@@ -1200,10 +1205,13 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
             "score": round((pick or current).metrics["swapScore"], 1) if (pick or current) else None,
             "keep": pick is None,
         }
-        if pick and current:
+        if pick:
+            # Never report a change without the diff that explains it — the UI
+            # renders these unconditionally when keep is false.
             was = {normalize_name(p.name) for p in lineup}
             now = {normalize_name(p.name) for p in final}
-            rec["gain"] = round(pick.metrics["swapScore"] - cur_score, 1)
+            rec["gain"] = (round(pick.metrics["swapScore"] - cur_score, 1)
+                           if cur_score is not None else 0.0)
             rec["out"] = [_swap_payload(p, scored) for p in lineup
                           if normalize_name(p.name) not in now]
             rec["in"] = [_swap_payload(p, scored) for p in final
