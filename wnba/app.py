@@ -618,10 +618,20 @@ def _dk_game_start(info):
 
 
 def _dk_name_id(cell):
-    """'Paige Bueckers (43810941)' -> ('Paige Bueckers', '43810941')."""
+    """'Paige Bueckers (43810941)' -> ('Paige Bueckers', '43810941', False).
+
+    Once a player's game tips, DK appends a ' (LOCKED)' marker to the same cell —
+    'Marina Mabrey (43810951) (LOCKED)'. Strip it and return it as a flag: it's a
+    per-PLAYER lock straight from DK, which is more precise than inferring locks
+    from game start times.
+    """
     import re
-    m = re.match(r"\s*(.+?)\s*\((\d+)\)\s*$", cell or "")
-    return (m.group(1), m.group(2)) if m else ((cell or "").strip(), "")
+    s = (cell or "").strip()
+    locked = bool(re.search(r"\(LOCKED\)\s*$", s, re.I))
+    if locked:
+        s = re.sub(r"\s*\(LOCKED\)\s*$", "", s, flags=re.I)
+    m = re.match(r"\s*(.+?)\s*\((\d+)\)\s*$", s)
+    return (m.group(1), m.group(2), locked) if m else (s, "", locked)
 
 
 def parse_dk_entries(text):
@@ -634,6 +644,7 @@ def parse_dk_entries(text):
     """
     import csv as _csv
     import io
+    import re
     rows = list(_csv.reader(io.StringIO((text or "").lstrip("﻿"))))
     slots, entries, pool, games = [], [], {}, {}
     pi = None  # column index of 'Name + ID' in the embedded player pool
@@ -653,21 +664,28 @@ def parse_dk_entries(text):
         if r[0].strip() == "Entry ID" and len(r) > 9:
             slots = [c.strip() for c in r[4:10] if c.strip()]
         elif r[0].strip().isdigit() and len(r) > 9:
-            names = [_dk_name_id(c)[0] for c in r[4:10] if c.strip()]
+            parsed = [_dk_name_id(c) for c in r[4:10] if c.strip()]
             entries.append({"entryId": r[0].strip(), "contest": r[1].strip(),
                             "contestId": r[2].strip(), "fee": r[3].strip(),
-                            "names": names})
+                            "names": [p[0] for p in parsed],
+                            "locked": [p[0] for p in parsed if p[2]]})
         if pi is not None and len(r) > pi + 7 and r[pi + 2].strip().isdigit():
             name = r[pi + 1].strip()
-            game, start = _dk_game_start(r[pi + 5])
+            info = r[pi + 5].strip()
+            game, start = _dk_game_start(info)
+            # DK replaces the matchup with 'In Progress' (or 'Final') once a game
+            # tips, so there's no game key to read — fall back to the per-player
+            # (LOCKED) marker, which is present on exactly those players.
+            in_play = not re.match(r"^\w+@\w+", info)
+            locked = _dk_name_id(r[pi])[2] or in_play
             pool[normalize_name(name)] = {
                 "dkId": r[pi + 2].strip(), "name": name,
                 "guard": r[pi + 3].strip().upper().startswith("G"),
-                "salary": int(_f(r[pi + 4])), "game": game,
+                "salary": int(_f(r[pi + 4])), "game": None if in_play else game,
                 "start": start.isoformat() if start else None,
-                "team": r[pi + 6].strip(),
+                "team": r[pi + 6].strip(), "locked": locked,
             }
-            if game not in games or (start and not games.get(game)):
+            if not in_play and (game not in games or (start and not games.get(game))):
                 games[game] = start.isoformat() if start else None
     return {"slots": slots or ["G", "G", "F", "F", "F", "UTIL"],
             "entries": entries, "pool": pool, "games": games}
@@ -776,7 +794,7 @@ def parse_entered_lineups(text):
 
 
 def _optimize_swap(lineup, players, locked_games, release_max_proj, slots=None,
-                   ftop=20, gtop=20):
+                   locked_names=None, ftop=20, gtop=20):
     """One lineup, slotted in `slots` order (DK files use G,G,F,F,F,UTIL; our own
     export uses F,F,F,G,G,UTIL). A slot is releasable only if its game is OPEN and
     the player is dead weight (proj < release_max_proj); studs and locked players
@@ -784,12 +802,16 @@ def _optimize_swap(lineup, players, locked_games, release_max_proj, slots=None,
     cap. Returns a dict the GUI renders."""
     import itertools
     slots = slots or _LS_SLOTS
+    locked_names = locked_names or set()
 
     def game_of(p):
         return p.game or p.team
 
+    def is_locked(p):  # DK's own per-player lock wins; game locks are the fallback
+        return normalize_name(p.name) in locked_names or game_of(p) in locked_games
+
     open_idx = [i for i in range(ROSTER_SIZE)
-                if game_of(lineup[i]) not in locked_games and lineup[i].proj < release_max_proj]
+                if not is_locked(lineup[i]) and lineup[i].proj < release_max_proj]
     keepers = [lineup[i] for i in range(ROSTER_SIZE) if i not in open_idx]
     released = [lineup[i] for i in open_idx]
     keeper_names = {p.name for p in keepers}
@@ -798,7 +820,7 @@ def _optimize_swap(lineup, players, locked_games, release_max_proj, slots=None,
     needG = sum(1 for i in open_idx if slots[i] == "G")
     needU = sum(1 for i in open_idx if slots[i] == "UTIL")
 
-    cand = [p for p in players if game_of(p) not in locked_games and p.proj >= 12.0
+    cand = [p for p in players if not is_locked(p) and p.proj >= 12.0
             and p.name not in keeper_names]
     cand = list({p.name: p for p in (cand + released)}.values())
     rel_names = {p.name for p in released}
@@ -854,7 +876,8 @@ def _optimize_swap(lineup, players, locked_games, release_max_proj, slots=None,
     }
 
 
-def late_swap(entered, players, locked_games, release_max_proj, slots=None, labels=None):
+def late_swap(entered, players, locked_games, release_max_proj, slots=None, labels=None,
+              locked_names=None):
     by_norm = {normalize_name(p.name): p for p in players}
     results = []
     for idx, names in enumerate(entered, 1):
@@ -867,7 +890,8 @@ def late_swap(entered, players, locked_games, release_max_proj, slots=None, labe
             results.append({"lineup": idx, "label": label,
                             "error": f"couldn't match: {', '.join(missing)}"})
             continue
-        rec = _optimize_swap(lineup, players, set(locked_games), release_max_proj, slots)
+        rec = _optimize_swap(lineup, players, set(locked_games), release_max_proj, slots,
+                             locked_names)
         rec["lineup"] = idx
         rec["label"] = label
         results.append(rec)
@@ -883,10 +907,12 @@ def run_late_swap(csv_text, lineups_text, locked_games, release_max_proj,
     if sum(1 for p in players if p.proj > 0) < ROSTER_SIZE:
         return {"error": "Drop your updated LineStar CSV first (the same file the "
                          "optimizer uses)."}
-    slots, labels, autodetected = None, None, []
+    slots, labels, autodetected, locked_names = None, None, [], set()
     slate_games = sorted({p.game for p in players if p.game})
     if (dk_text or "").strip():
         dk = parse_dk_entries(dk_text)
+        # DK marks locked players directly — use that as the source of truth.
+        locked_names = {n for n, p in dk["pool"].items() if p.get("locked")}
         entered = [e["names"] for e in dk["entries"] if len(e["names"]) == ROSTER_SIZE]
         labels = [f'#{e["entryId"]}' for e in dk["entries"]
                   if len(e["names"]) == ROSTER_SIZE]
@@ -909,9 +935,10 @@ def run_late_swap(csv_text, lineups_text, locked_games, release_max_proj,
         "games": slate_games,
         "locked": sorted(locked_games),
         "autoLocked": autodetected,
+        "lockedPlayers": len(locked_names),
         "slots": slots or _LS_SLOTS,
         "swaps": late_swap(entered, players, locked_games, float(release_max_proj),
-                           slots, labels),
+                           slots, labels, locked_names),
     }
 
 
