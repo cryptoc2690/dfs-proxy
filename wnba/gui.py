@@ -230,10 +230,11 @@ INDEX_HTML = r"""<!doctype html>
           </div>
           <label style="margin-top:12px">Games — 🔒 = locked (tap to override)</label>
           <div id="lockchips" class="chips"><span class="hint">load your DK entries file to see the slate's games</span></div>
-          <label style="margin-top:12px">Only move off players projecting under <span id="relv">13</span></label>
-          <input id="rel" class="slider" type="range" min="8" max="20" value="13">
-          <div class="hint">Your studs and starters stay put — only bodies below this get swapped. Raise it to
-            let it upgrade more marginal plays too.</div>
+          <label style="margin-top:12px">Only move off players projecting under <span id="relv">14</span></label>
+          <input id="rel" class="slider" type="range" min="8" max="50" value="14">
+          <div class="hint">Low (~14) = news mode: only drop dead weight. High (~45) = re-optimize mode:
+            every unlocked slot competes, so good players can be upgraded into better ones. Locked players
+            never move either way. After games tip, high is usually what you want.</div>
           <button id="swapgo" class="btn" disabled style="margin-top:12px">Recommend late swaps</button>
         </div>
       </details>
