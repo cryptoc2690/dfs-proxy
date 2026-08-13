@@ -755,8 +755,8 @@ def build_dk_upload(dk, lineups_names):
             filled.append(pick)
         cells = [f'"{p["name"]} ({p["dkId"]})"' if p and p.get("dkId")
                  else f'"{p["name"]}"' if p else "" for p in filled]
-        contest = e["contest"].replace('"', '""')
-        lines.append(f'{e["entryId"]},"{contest}",{e["contestId"]},{e["fee"]},'
+        cname = e["contest"].replace('"', '""')
+        lines.append(f'{e["entryId"]},"{cname}",{e["contestId"]},{e["fee"]},'
                      + ",".join(cells))
     notes = []
     if missing:
@@ -836,8 +836,80 @@ def _aggression(deficit_weighted):
     because we're uniquely behind; below 0.5 protects because we're uniquely
     ahead. Deliberately gentle and clamped — this is an unvalidated read, so it
     nudges the ranking rather than overriding it.
+
+    This is the FALLBACK read, used when no contest file is supplied. With the
+    standings we replace it with the real thing: an actual leaderboard position.
     """
     return max(0.15, min(0.85, 0.5 - deficit_weighted / 60.0))
+
+
+# How many points of gap-to-target moves the dial from neutral to fully
+# committed. Roughly what a swap of a few slots can realistically swing.
+SWAP_GAP_SCALE = 40.0
+
+
+def parse_contest_standings(text):
+    """Parse a DK contest-standings export.
+
+    Two blocks share the file: the live leaderboard (Rank, EntryId, Points,
+    Lineup) and a per-player summary (Player, %Drafted, FPTS). Note what DK does
+    and doesn't reveal — an opponent's players are hidden until their game
+    starts, so every lineup shows a 'LOCKED' placeholder per still-to-come slot.
+    That means we can count how many slots each rival has left, but not who is in
+    them, and the %Drafted block only covers players already revealed. Real
+    ownership for the players we might swap TO therefore isn't available; we use
+    this for standing, and keep LineStar's projected ownership for differentiation.
+    """
+    import csv as _csv
+    import io
+    rows = list(_csv.reader(io.StringIO((text or "").lstrip("﻿"))))
+    entries, own = [], {}
+    for r in rows[1:]:
+        if len(r) > 5 and r[0].strip().isdigit():
+            entries.append({
+                "rank": int(r[0].strip()),
+                "entryId": r[1].strip(),
+                "points": _f(r[4]),
+                "hidden": r[5].count("LOCKED"),
+            })
+        # The player block lists each player once PER ROSTER SLOT (A'ja shows up
+        # as F 57.2% and again as UTIL 1.0%), so true ownership is the sum across
+        # a player's rows — taking one row undercounts badly.
+        if len(r) > 9 and r[7].strip() and r[9].strip().endswith("%"):
+            n = normalize_name(r[7].strip())
+            own[n] = own.get(n, 0.0) + _f(r[9].strip().rstrip("%"))
+    return {"entries": entries, "ownership": own, "field": len(entries)}
+
+
+def _avg_open_slot(players, locked_names):
+    """Ownership-weighted mean projection of a still-to-play slot — used to
+    estimate what rivals' hidden slots will add."""
+    live = [p for p in players
+            if p.proj > 0 and normalize_name(p.name) not in locked_names]
+    if not live:
+        return 0.0
+    wt = sum(p.ownership for p in live) or 1.0
+    return sum(p.proj * p.ownership for p in live) / wt
+
+
+def _field_targets(contest, avg_slot):
+    """Project every rival's finish (points banked + hidden slots x an average
+    slot) and return the score needed for the top 1% and the top 20%."""
+    finals = sorted((e["points"] + e["hidden"] * avg_slot for e in contest["entries"]),
+                    reverse=True)
+    if not finals:
+        return 0.0, 0.0
+    top = finals[max(0, min(len(finals) - 1, int(len(finals) * 0.01)))]
+    cash = finals[max(0, min(len(finals) - 1, int(len(finals) * 0.20)))]
+    return top, cash
+
+
+def _aggression_from_field(my_final, target):
+    """Dial from the real gap to the score that wins. Behind -> chase, on pace or
+    ahead -> protect. No proxy, no ownership weighting — the leaderboard already
+    reflects what the field did."""
+    gap = target - my_final
+    return max(0.15, min(0.85, 0.5 + gap / SWAP_GAP_SCALE))
 
 
 def _swap_candidates(players, locked_names, used_names, budget):
@@ -931,21 +1003,39 @@ def _enumerate_rosters(lineup, players, locked_names, open_idx, slots, cap=400):
     return out
 
 
+# How hard the CHASE side leans on lineup ownership. Back-testing 8/12 showed the
+# percentile tilt alone is nearly cosmetic: summing six players washes out
+# individual variance (central limit), so the top roster by the median and by p99
+# was literally the same one. What separates a lineup when you're behind is being
+# different from the field, so that's the lever chase has to pull. Below ~0.6 it
+# never actually changed a pick. This is NOT the blanket contrarian fade the
+# 5-slate back-test rejected — it applies only when we're genuinely behind and
+# need separation to win.
+SWAP_OWN_TILT = 0.70
+
+
 def _score_rosters(rosters, players, aggression, n_sims, seed):
-    """Rank with the main tool's simulator. `aggression` slides the statistic
-    between the median (protect) and the 95th percentile (chase)."""
+    """Rank with the main tool's simulator.
+
+    Protect (below 0.5) simply weights the median harder — it does NOT buy chalk.
+    Hugging the field would mean paying ceiling for ownership, and a low-owned
+    play that projects the same is free differentiation. So the ownership tilt is
+    one-sided: it applies only when chasing.
+    """
     from engine import Lineup, simulate_and_score
     lus = [Lineup(list(r)) for r in rosters]
     simulate_and_score(lus, players, sims=n_sims, leverage=0.0, seed=seed)
+    k = max(0.0, aggression - 0.5) * SWAP_OWN_TILT
     for lu in lus:
         m = lu.metrics
         # 0 -> mean, 0.5 -> the usual 85th-percentile ceiling, 1 -> p95
         if aggression <= 0.5:
             t = aggression / 0.5
-            m["swapScore"] = m["mean"] + t * (m["ceiling"] - m["mean"])
+            base = m["mean"] + t * (m["ceiling"] - m["mean"])
         else:
             t = (aggression - 0.5) / 0.5
-            m["swapScore"] = m["ceiling"] + t * (m["p95"] - m["ceiling"])
+            base = m["ceiling"] + t * (m["p95"] - m["ceiling"])
+        m["swapScore"] = base - k * lu.total_own
     return lus
 
 
@@ -956,9 +1046,9 @@ def _swap_payload(p, scored):
             "scored": None if act is None else round(act, 1)}
 
 
-def run_late_swap(csv_text, dk_text, options=None):
-    """DK entries file + updated LineStar -> recommended swaps and a re-uploadable
-    DK file. See the module note above for the model."""
+def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
+    """DK entries file + updated LineStar (+ optional contest standings) ->
+    recommended swaps and a re-uploadable DK file. See the module note above."""
     options = options or {}
     players = parse_linestar((csv_text or "").strip())
     scored = parse_linestar_scored((csv_text or "").strip())
@@ -981,6 +1071,21 @@ def run_late_swap(csv_text, dk_text, options=None):
     n_lu = len(entries)
     cap_ct = max(1, round(_float(options.get("maxExposure"), 0.6) * n_lu))
 
+    # Optional contest standings: replaces the projection-based pace proxy with a
+    # real leaderboard position, and gives actual contest ownership for the
+    # players already revealed.
+    contest = parse_contest_standings(contest_text) if (contest_text or "").strip() else None
+    target = cash_line = avg_slot = 0.0
+    my_rank = {}
+    if contest and contest["entries"]:
+        avg_slot = _avg_open_slot(players, locked_names)
+        target, cash_line = _field_targets(contest, avg_slot)
+        my_rank = {e["entryId"]: e for e in contest["entries"]}
+        for p in players:  # prefer real ownership where DK has revealed it
+            actual = contest["ownership"].get(normalize_name(p.name))
+            if actual is not None and actual > 0:
+                p.ownership = actual
+
     # Pass 1: per lineup, work out where it stands and rank its legal rosters.
     ranked, base_rows = [], []
     for e in entries:
@@ -995,7 +1100,17 @@ def run_late_swap(csv_text, dk_text, options=None):
                     if normalize_name(lineup[i].name) not in locked_names]
         locked_players = [lineup[i] for i in range(ROSTER_SIZE) if i not in open_idx]
         banked, expected, deficit, wdef = _pace_read(locked_players, scored)
-        aggr = _aggression(wdef)
+        # Real standing beats the proxy: if the contest file gave us this entry,
+        # drive aggression off the actual gap to a winning score.
+        me = my_rank.get(e["entryId"])
+        rank = proj_final = None
+        if me is not None:
+            banked = me["points"] or banked
+            proj_final = banked + sum(lineup[i].proj for i in open_idx)
+            aggr = _aggression_from_field(proj_final, target)
+            rank = me["rank"]
+        else:
+            aggr = _aggression(wdef)
         rosters = _enumerate_rosters(lineup, players, locked_names, open_idx, slots)
         if not rosters:
             rosters = [list(lineup)]
@@ -1010,6 +1125,7 @@ def run_late_swap(csv_text, dk_text, options=None):
             "entryId": e["entryId"], "open": len(open_idx),
             "banked": round(banked, 1), "expected": round(expected, 1),
             "pace": round(deficit, 1), "aggression": round(aggr, 2),
+            "rank": rank, "projFinal": None if proj_final is None else round(proj_final, 1),
             "lineup": lineup,
         })
 
@@ -1077,7 +1193,8 @@ def run_late_swap(csv_text, dk_text, options=None):
         rec = {
             "entryId": row["entryId"], "open": row["open"],
             "banked": row["banked"], "expected": row["expected"], "pace": row["pace"],
-            "aggression": row["aggression"],
+            "aggression": row["aggression"], "rank": row.get("rank"),
+            "projFinal": row.get("projFinal"),
             "salary": sum(p.salary for p in final),
             "proj": round(sum(p.proj for p in final), 1),
             "score": round((pick or current).metrics["swapScore"], 1) if (pick or current) else None,
@@ -1106,11 +1223,14 @@ def run_late_swap(csv_text, dk_text, options=None):
         for p in roster:
             info = dk["pool"].get(normalize_name(p.name))
             cells.append(f'"{p.name} ({info["dkId"]})"' if info else f'"{p.name}"')
-        contest = e["contest"].replace('"', '""')
-        lines.append(f'{e["entryId"]},"{contest}",{e["contestId"]},{e["fee"]},'
+        cname = e["contest"].replace('"', '""')
+        lines.append(f'{e["entryId"]},"{cname}",{e["contestId"]},{e["fee"]},'
                      + ",".join(cells))
     return {
         "lockedPlayers": len(locked_names),
+        "field": contest["field"] if contest else None,
+        "target": round(target, 1) if contest else None,
+        "cashLine": round(cash_line, 1) if contest else None,
         "entries": len(entries),
         "changed": changed,
         "gain": round(gain_total, 1),
@@ -1155,6 +1275,7 @@ class Handler(BaseHTTPRequestHandler):
                     {"error": "Drop your LineStar projections CSV."}))
             if self.path == "/api/lateswap":
                 result = run_late_swap(csv_text, payload.get("dk") or "",
+                                       payload.get("contest") or "",
                                        payload.get("options") or {})
             else:
                 result = run_optimize(csv_text, payload.get("options", {}))

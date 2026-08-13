@@ -229,8 +229,14 @@ INDEX_HTML = r"""<!doctype html>
             <small>DKEntries*.csv — reads your lineups and who's locked</small>
             <input id="swapfile" type="file" accept=".csv" hidden>
           </div>
+          <div id="condrop" class="drop" style="margin-top:10px;padding:16px">
+            <b>+ contest standings <span style="font-weight:400;color:var(--muted)">(optional)</span></b>
+            <small>DK contest export — your real rank + the score that's winning</small>
+            <input id="confile" type="file" accept=".csv" hidden>
+          </div>
           <div class="hint" style="margin-top:10px">Re-drop the <b>updated</b> LineStar CSV up top first —
-            that's where the new projections and live scores come from.</div>
+            that's where the new projections and live scores come from. Add the contest standings and the
+            tool reads your <em>actual</em> leaderboard position instead of estimating it.</div>
           <button id="swapgo" class="btn" disabled style="margin-top:12px">Recommend late swaps</button>
         </div>
       </details>
@@ -310,7 +316,7 @@ function loadMin(f){ if(!f) return; const r=new FileReader();
   r.readAsText(f); }
 
 // ---- late swap ----
-let swapText='', lastSwapCsv='';
+let swapText='', conText='', lastSwapCsv='';
 const swapdrop=$('#swapdrop'), swapfile=$('#swapfile');
 swapdrop.addEventListener('click',()=>swapfile.click());
 ['dragover','dragenter'].forEach(ev=>swapdrop.addEventListener(ev,e=>{e.preventDefault();swapdrop.classList.add('over')}));
@@ -322,6 +328,16 @@ function loadSwap(f){ if(!f) return; const r=new FileReader();
     swapdrop.innerHTML='<b>✓ '+f.name+'</b><small>ready — hit recommend</small>';
     $('#swapgo').disabled=false; };
   r.readAsText(f); }
+const condrop=$('#condrop'), confile=$('#confile');
+condrop.addEventListener('click',()=>confile.click());
+['dragover','dragenter'].forEach(ev=>condrop.addEventListener(ev,e=>{e.preventDefault();condrop.classList.add('over')}));
+['dragleave','drop'].forEach(ev=>condrop.addEventListener(ev,e=>{e.preventDefault();condrop.classList.remove('over')}));
+condrop.addEventListener('drop',e=>loadCon(e.dataTransfer.files[0]));
+confile.addEventListener('change',e=>loadCon(e.target.files[0]));
+function loadCon(f){ if(!f) return; const r=new FileReader();
+  r.onload=()=>{ conText=r.result; condrop.classList.add('loaded');
+    condrop.innerHTML='<b>✓ '+f.name+'</b><small>real leaderboard position loaded</small>'; };
+  r.readAsText(f); }
 $('#swapgo').addEventListener('click',runSwap);
 async function runSwap(){
   if(!csvText){ showErr('Drop your updated LineStar CSV up top first — that is where the new projections and live scores come from.'); return; }
@@ -330,7 +346,7 @@ async function runSwap(){
   $('#err').style.display='none'; $('#note').style.display='none';
   try{
     const res=await fetch('/api/lateswap',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({csv:csvText, dk:swapText,
+      body:JSON.stringify({csv:csvText, dk:swapText, contest:conText,
         options:{maxExposure:(+$('#exp').value)/100}})});
     const data=await res.json();
     if(data.error) showErr(data.error); else renderSwaps(data);
@@ -344,8 +360,11 @@ function aggrTag(a){
 }
 function renderSwaps(d){
   const box=$('#swapresults'); box.style.display='block'; $('#welcome').style.display='none';
+  const fieldTxt = d.field
+    ? ' · field '+d.field.toLocaleString()+', '+d.target+' projected to win'
+    : ' · no contest file — position estimated from projections';
   let html='<div class="coach-h">🔄 Late swap — '+d.changed+' of '+d.entries+
-    ' lineups to adjust · '+d.lockedPlayers+' players locked by DK</div>';
+    ' lineups to adjust · '+d.lockedPlayers+' locked'+fieldTxt+'</div>';
   if(d.dkCsv){
     lastSwapCsv=d.dkCsv;
     html+='<div class="note" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">'+
@@ -356,9 +375,11 @@ function renderSwaps(d){
   }
   html+=d.swaps.map(s=>{
     if(s.error) return '<div class="swapcard err">#'+s.entryId+': '+s.error+'</div>';
-    const pace = s.banked>0
-      ? ' · banked <b>'+s.banked+'</b> vs '+s.expected+' expected ('+(s.pace>=0?'+':'')+s.pace+') · '+aggrTag(s.aggression)
-      : '';
+    const pace = s.rank
+      ? ' · rank <b>#'+s.rank.toLocaleString()+'</b>, banked '+s.banked+' → '+s.projFinal+' projected · '+aggrTag(s.aggression)
+      : (s.banked>0
+        ? ' · banked <b>'+s.banked+'</b> vs '+s.expected+' expected ('+(s.pace>=0?'+':'')+s.pace+') · '+aggrTag(s.aggression)
+        : '');
     if(s.keep) return '<div class="swapcard keep">#'+s.entryId+' · keep as-is '+
       '<span class="muted">('+s.open+' open, proj '+s.proj+')</span>'+pace+'</div>';
     const row=(p,sign,cls)=>'<div class="swaprow '+cls+'">'+sign+' '+p.name+
