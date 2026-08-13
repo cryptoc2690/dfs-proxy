@@ -315,6 +315,50 @@ function loadMin(f){ if(!f) return; const r=new FileReader();
     mindrop.innerHTML='<b>✓ '+f.name+'</b><small>minutes + stat-stuffer floor loaded</small>'; };
   r.readAsText(f); }
 
+// ---- reusable type-ahead picker (used for cores and the full pool) ----
+function makePicker(prefix, icon){
+  const input=$('#'+prefix+'in'), drop=$('#'+prefix+'drop'), chips=$('#'+prefix+'chips');
+  const sel=[]; let active=-1;
+  function show(){
+    const q=input.value.trim().toLowerCase();
+    const chosen=new Set(sel.map(s=>s.toLowerCase()));
+    let m=playerNames.filter(n=>!chosen.has(n.toLowerCase()));
+    if(q) m=m.filter(n=>n.toLowerCase().includes(q));
+    m=m.slice(0,8);
+    if(!m.length){ hide(); return; }
+    active=-1;
+    drop.innerHTML=m.map(n=>'<div>'+n+'</div>').join('');
+    drop.querySelectorAll('div').forEach(d=>d.onclick=()=>add(d.textContent));
+    drop.classList.add('show');
+  }
+  function hide(){ drop.classList.remove('show'); active=-1; }
+  function paint(items){ items.forEach((it,i)=>it.classList.toggle('active',i===active)); }
+  function add(n){ if(!sel.includes(n)) sel.push(n); input.value=''; hide(); render(); input.focus(); }
+  function remove(n){ const i=sel.indexOf(n); if(i>=0) sel.splice(i,1); render(); }
+  function render(){
+    chips.innerHTML=sel.map(n=>'<span class="chip">'+(icon?'<span class="core-star">'+icon+'</span>':'')+n+
+      '<span class="x" data-n="'+n.replace(/"/g,'&quot;')+'">✕</span></span>').join('');
+    chips.querySelectorAll('.x').forEach(x=>x.onclick=()=>remove(x.dataset.n));
+  }
+  input.addEventListener('input', show);
+  input.addEventListener('focus', show);
+  input.addEventListener('keydown', e => {
+    const items=drop.querySelectorAll('div'); if(!items.length) return;
+    if(e.key==='ArrowDown'){ active=Math.min(active+1,items.length-1); paint(items); e.preventDefault(); }
+    else if(e.key==='ArrowUp'){ active=Math.max(active-1,0); paint(items); e.preventDefault(); }
+    else if(e.key==='Enter'){ if(active>=0){ add(items[active].textContent); e.preventDefault(); } }
+    else if(e.key==='Escape'){ hide(); }
+  });
+  return { sel, enable(){ input.disabled=false; input.placeholder='type a player…'; } };
+}
+document.addEventListener('click', e => { if(!e.target.closest('.typeahead')) document.querySelectorAll('.drop-menu').forEach(d=>d.classList.remove('show')); });
+const corePicker = makePicker('core','★');
+const poolPicker = makePicker('pool','');
+const removePicker = makePicker('remove','🚫');
+const capPicker = makePicker('cap','🔒');
+function enablePickers(){ corePicker.enable(); poolPicker.enable(); removePicker.enable(); capPicker.enable(); }
+$('#cappct').addEventListener('input', e => $('#capv').textContent = e.target.value);
+
 // ---- late swap ----
 let swapText='', conText='', lastSwapCsv='';
 const swapdrop=$('#swapdrop'), swapfile=$('#swapfile');
