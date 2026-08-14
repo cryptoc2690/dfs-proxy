@@ -843,11 +843,6 @@ def _aggression(deficit_weighted):
     return max(0.15, min(0.85, 0.5 - deficit_weighted / 60.0))
 
 
-# How many points of gap-to-target moves the dial from neutral to fully
-# committed. Roughly what a swap of a few slots can realistically swing.
-SWAP_GAP_SCALE = 40.0
-
-
 def parse_contest_standings(text):
     """Parse a DK contest-standings export.
 
@@ -892,24 +887,46 @@ def _avg_open_slot(players, locked_names):
     return sum(p.proj * p.ownership for p in live) / wt
 
 
-def _field_targets(contest, avg_slot):
-    """Project every rival's finish (points banked + hidden slots x an average
-    slot) and return the score needed for the top 1% and the top 20%."""
-    finals = sorted((e["points"] + e["hidden"] * avg_slot for e in contest["entries"]),
-                    reverse=True)
-    if not finals:
-        return 0.0, 0.0
-    top = finals[max(0, min(len(finals) - 1, int(len(finals) * 0.01)))]
-    cash = finals[max(0, min(len(finals) - 1, int(len(finals) * 0.20)))]
-    return top, cash
+# Where a projected finish sits in the field, in percent, at the two anchors that
+# matter: in contention to win, and on the cash line.
+SWAP_WIN_PCT = 1.0
+SWAP_CASH_PCT = 20.0
+SWAP_CHASE_PCT = 70.0   # at or below this deep, commit fully to chasing
 
 
-def _aggression_from_field(my_final, target):
-    """Dial from the real gap to the score that wins. Behind -> chase, on pace or
-    ahead -> protect. No proxy, no ownership weighting — the leaderboard already
-    reflects what the field did."""
-    gap = target - my_final
-    return max(0.15, min(0.85, 0.5 + gap / SWAP_GAP_SCALE))
+def _field_finals(contest, avg_slot, exclude_ids=()):
+    """Every rival's projected finish, ascending: what they've banked plus their
+    still-hidden slots at an average slot's value. Our own entries are excluded so
+    we're not ranked against ourselves."""
+    return sorted(e["points"] + e["hidden"] * avg_slot
+                  for e in contest["entries"] if e["entryId"] not in exclude_ids)
+
+
+def _aggression_from_rank(my_final, field_sorted):
+    """Aggression from where THIS lineup projects to finish in the field.
+
+    The earlier version compared our median projected final against the score
+    projected to WIN, which is not a like-for-like comparison: by construction
+    only ~1% of entries can be top 1%, so nearly every lineup showed a gap and
+    the dial pinned at maximum chase for all of them — useless as a signal, and
+    it fired hardest exactly when a whole game busted and the field was equally
+    hurt. Ranking our projection against THEIR projections puts both sides on the
+    same scale, so a lineup sitting at the field median reads as average (which
+    it is) instead of desperate.
+    """
+    import bisect
+    n = len(field_sorted)
+    if not n:
+        return 0.5
+    ahead = n - bisect.bisect_left(field_sorted, my_final)   # rivals projected above us
+    pct = ahead / n * 100.0
+    if pct <= SWAP_WIN_PCT:                 # projecting to win -> hold position
+        return 0.15
+    if pct <= SWAP_CASH_PCT:                # between winning and cashing
+        t = (pct - SWAP_WIN_PCT) / (SWAP_CASH_PCT - SWAP_WIN_PCT)
+        return 0.15 + t * 0.35
+    t = min(1.0, (pct - SWAP_CASH_PCT) / (SWAP_CHASE_PCT - SWAP_CASH_PCT))
+    return 0.5 + t * 0.35
 
 
 def _swap_candidates(players, locked_names, used_names, budget):
@@ -1019,7 +1036,14 @@ def _enumerate_rosters(lineup, players, locked_names, open_idx, slots, cap=400):
 SWAP_OWN_TILT = 0.70
 
 
-def _score_rosters(rosters, players, aggression, n_sims, seed):
+# Small tiebreak against loading up on the game that tips first. Filling a slot
+# from the earliest game locks it immediately; the same points from a later game
+# keep the slot swappable if news breaks. Deliberately tiny — this should only
+# separate rosters that are otherwise close, never drive a decision.
+SWAP_EARLY_PENALTY = 0.4
+
+
+def _score_rosters(rosters, players, aggression, n_sims, seed, early_names=()):
     """Rank with the main tool's simulator.
 
     Protect (below 0.5) simply weights the median harder — it does NOT buy chalk.
@@ -1031,6 +1055,7 @@ def _score_rosters(rosters, players, aggression, n_sims, seed):
     lus = [Lineup(list(r)) for r in rosters]
     simulate_and_score(lus, players, sims=n_sims, leverage=0.0, seed=seed)
     k = max(0.0, aggression - 0.5) * SWAP_OWN_TILT
+    early = set(early_names or ())
     for lu in lus:
         m = lu.metrics
         # 0 -> mean, 0.5 -> the usual 85th-percentile ceiling, 1 -> p95
@@ -1040,7 +1065,8 @@ def _score_rosters(rosters, players, aggression, n_sims, seed):
         else:
             t = (aggression - 0.5) / 0.5
             base = m["ceiling"] + t * (m["p95"] - m["ceiling"])
-        m["swapScore"] = base - k * lu.total_own
+        soon = sum(1 for p in lu.players if normalize_name(p.name) in early)
+        m["swapScore"] = base - k * lu.total_own - SWAP_EARLY_PENALTY * soon
     return lus
 
 
@@ -1080,16 +1106,26 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
     # real leaderboard position, and gives actual contest ownership for the
     # players already revealed.
     contest = parse_contest_standings(contest_text) if (contest_text or "").strip() else None
-    target = cash_line = avg_slot = 0.0
+    field_finals = []
     my_rank = {}
     if contest and contest["entries"]:
         avg_slot = _avg_open_slot(players, locked_names)
-        target, cash_line = _field_targets(contest, avg_slot)
+        mine = {e["entryId"] for e in entries}
+        field_finals = _field_finals(contest, avg_slot, mine)
         my_rank = {e["entryId"]: e for e in contest["entries"]}
         for p in players:  # prefer real ownership where DK has revealed it
             actual = contest["ownership"].get(normalize_name(p.name))
             if actual is not None and actual > 0:
                 p.ownership = actual
+
+    # Cores carry over from the build — protected, not optimized away.
+    core_names = _parse_names(options.get("cores"))
+    # Players in the next game to tip: filling a slot from there costs optionality.
+    starts = sorted({p["start"] for p in dk["pool"].values()
+                     if p.get("start") and not p.get("locked")})
+    early_names = ({n for n, p in dk["pool"].items()
+                    if p.get("start") == starts[0] and not p.get("locked")}
+                   if len(starts) > 1 else set())
 
     # Pass 1: per lineup, work out where it stands and rank its legal rosters.
     ranked, base_rows = [], []
@@ -1101,25 +1137,34 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
                               "error": f"not in the LineStar file: {', '.join(miss)}"})
             ranked.append(None)
             continue
+        # A core is a conviction play — late swap protects it rather than
+        # treating it as an anonymous name to be optimized away. It only becomes
+        # releasable if the projection says it's genuinely broken (ruled out).
         open_idx = [i for i in range(ROSTER_SIZE)
-                    if normalize_name(lineup[i].name) not in locked_names]
+                    if normalize_name(lineup[i].name) not in locked_names
+                    and not (normalize_name(lineup[i].name) in core_names
+                             and lineup[i].proj > 0)]
         locked_players = [lineup[i] for i in range(ROSTER_SIZE) if i not in open_idx]
         banked, expected, deficit, wdef = _pace_read(locked_players, scored)
         # Real standing beats the proxy: if the contest file gave us this entry,
         # drive aggression off the actual gap to a winning score.
         me = my_rank.get(e["entryId"])
         rank = proj_final = None
-        if me is not None:
+        if me is not None and field_finals:
             banked = me["points"] or banked
-            proj_final = banked + sum(lineup[i].proj for i in open_idx)
-            aggr = _aggression_from_field(proj_final, target)
+            # Project OUR finish the same way we projected theirs, then rank it
+            # against them — like for like.
+            proj_final = banked + sum(p.proj for i, p in enumerate(lineup)
+                                      if i in open_idx or normalize_name(p.name) not in locked_names)
+            aggr = _aggression_from_rank(proj_final, field_finals)
             rank = me["rank"]
         else:
             aggr = _aggression(wdef)
         rosters = _enumerate_rosters(lineup, players, locked_names, open_idx, slots)
         if not rosters:
             rosters = [list(lineup)]
-        lus = _score_rosters(rosters, players, aggr, n_sims, seed=len(base_rows))
+        lus = _score_rosters(rosters, players, aggr, n_sims, seed=len(base_rows),
+                             early_names=early_names)
         cur = frozenset(normalize_name(p.name) for p in lineup)
         for lu in lus:
             lu.metrics["isCurrent"] = frozenset(
@@ -1237,8 +1282,6 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
     return {
         "lockedPlayers": len(locked_names),
         "field": contest["field"] if contest else None,
-        "target": round(target, 1) if contest else None,
-        "cashLine": round(cash_line, 1) if contest else None,
         "entries": len(entries),
         "changed": changed,
         "gain": round(gain_total, 1),
