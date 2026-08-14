@@ -1242,6 +1242,9 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
                 counts[n] = counts.get(n, 0) + 1
         rec = {
             "entryId": row["entryId"], "open": row["open"],
+            # Nothing left to move: the stance is meaningless here, so say so
+            # rather than labelling a finished lineup "chasing upside".
+            "settled": row["open"] == 0,
             "banked": row["banked"], "expected": row["expected"], "pace": row["pace"],
             "aggression": row["aggression"], "rank": row.get("rank"),
             "projFinal": row.get("projFinal"),
@@ -1279,9 +1282,13 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
         cname = e["contest"].replace('"', '""')
         lines.append(f'{e["entryId"]},"{cname}",{e["contestId"]},{e["fee"]},'
                      + ",".join(cells))
+    win_score = None
+    if field_finals:  # informational: what the top 1% is projected to finish on
+        win_score = round(field_finals[int(len(field_finals) * 0.99)], 1)
     return {
         "lockedPlayers": len(locked_names),
         "field": contest["field"] if contest else None,
+        "winScore": win_score,
         "entries": len(entries),
         "changed": changed,
         "gain": round(gain_total, 1),

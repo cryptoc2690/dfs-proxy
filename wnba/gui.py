@@ -406,7 +406,7 @@ function aggrTag(a){
 function renderSwaps(d){
   const box=$('#swapresults'); box.style.display='block'; $('#welcome').style.display='none';
   const fieldTxt = d.field
-    ? ' · field '+d.field.toLocaleString()+', '+d.target+' projected to win'
+    ? ' · field '+d.field.toLocaleString()+(d.winScore?', ~'+d.winScore+' projected to win':'')
     : ' · no contest file — position estimated from projections';
   let html='<div class="coach-h">🔄 Late swap — '+d.changed+' of '+d.entries+
     ' lineups to adjust · '+d.lockedPlayers+' locked'+fieldTxt+'</div>';
@@ -420,7 +420,9 @@ function renderSwaps(d){
   }
   html+=d.swaps.map(s=>{
     if(s.error) return '<div class="swapcard err">#'+s.entryId+': '+s.error+'</div>';
-    const pace = s.rank
+    const pace = s.settled
+      ? ' · <span class="muted">all players locked — nothing left to change</span>'
+      : s.rank
       ? ' · rank <b>#'+s.rank.toLocaleString()+'</b>, banked '+s.banked+' → '+s.projFinal+' projected · '+aggrTag(s.aggression)
       : (s.banked>0
         ? ' · banked <b>'+s.banked+'</b> vs '+s.expected+' expected ('+(s.pace>=0?'+':'')+s.pace+') · '+aggrTag(s.aggression)
