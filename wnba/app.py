@@ -724,6 +724,51 @@ def dk_locked_games(games):
     return sorted(out)
 
 
+def _util_holds_latest(roster, slots, pool, locked_names=()):
+    """Re-slot so the UTIL spot holds the player from the LAST game to tip.
+
+    Same six players — only which slot each one sits in changes, which DK allows
+    and which costs nothing. It buys late-swap flexibility: UTIL is the one spot
+    that takes a guard OR a forward, so it should be the last to lock. If UTIL
+    holds an early-game player it locks early and the only slot still open in the
+    final game is a G or F, which can only be refilled from that position; with
+    the late-game player in UTIL the open slot accepts anyone.
+
+    Locked players never move — DK pins a locked player to its slot.
+    """
+    if "UTIL" not in slots:
+        return roster
+    util = slots.index("UTIL")
+    roster = list(roster)
+    locked_names = set(locked_names)
+
+    def movable(i):
+        return normalize_name(roster[i].name) not in locked_names
+
+    def start_of(i):
+        rec = pool.get(normalize_name(roster[i].name)) or {}
+        return rec.get("start") or ""   # in-progress/unknown sorts earliest
+
+    if not movable(util):
+        return roster
+    # Try the latest-starting movable player first, then work back — a swap is
+    # only legal if whoever currently holds UTIL can fill the vacated slot.
+    for i in sorted((j for j in range(len(roster)) if movable(j)),
+                    key=start_of, reverse=True):
+        if i == util:
+            return roster                      # already right
+        if not start_of(i) or start_of(i) <= start_of(util):
+            return roster                      # nothing later than UTIL already is
+        occ = roster[util]
+        if slots[i] == "G" and not occ.is_guard:
+            continue
+        if slots[i] == "F" and occ.is_guard:
+            continue
+        roster[i], roster[util] = roster[util], roster[i]
+        return roster
+    return roster
+
+
 def build_dk_upload(dk, lineups_names):
     """Fill our generated lineups into the DK entries file's slot order and return
     re-uploadable CSV text. Uses the file's REAL DK IDs, so it imports directly
@@ -753,6 +798,13 @@ def build_dk_upload(dk, lineups_names):
             if pick is not None:
                 used.add(id(pick))
             filled.append(pick)
+        # UTIL should carry the latest game, so it stays swappable longest.
+        class _P:  # the re-slotter works on objects with .name/.is_guard
+            def __init__(s, r):
+                s.name, s.is_guard, s.rec = r["name"], r.get("guard", False), r
+        wrapped = [_P(p) for p in filled if p]
+        if len(wrapped) == len(filled):
+            filled = [w.rec for w in _util_holds_latest(wrapped, slots, pool)]
         cells = [f'"{p["name"]} ({p["dkId"]})"' if p and p.get("dkId")
                  else f'"{p["name"]}"' if p else "" for p in filled]
         cname = e["contest"].replace('"', '""')
@@ -1275,6 +1327,8 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
         roster = rec.pop("roster", None)
         if not roster:
             continue
+        # Keep UTIL on the latest game so it's the last slot to lock.
+        roster = _util_holds_latest(roster, slots, dk["pool"], locked_names)
         cells = []
         for p in roster:
             info = dk["pool"].get(normalize_name(p.name))
