@@ -392,7 +392,8 @@ async function runSwap(){
     const res=await fetch('/api/lateswap',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({csv:csvText, dk:swapText, contest:conText,
         options:{maxExposure:(+$('#exp').value)/100,
-                 cores:corePicker.sel.join('\n'), pool:poolPicker.sel.join('\n')}})});
+                 cores:corePicker.sel.join('\n'), pool:poolPicker.sel.join('\n'),
+                 minutes:minText}})});
     const data=await res.json();
     if(data.error) showErr(data.error); else renderSwaps(data);
   }catch(e){ showErr(e.message); }

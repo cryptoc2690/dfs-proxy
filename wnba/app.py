@@ -854,8 +854,17 @@ def run_dk_fill(dk_text, lineups_names):
 _LS_SLOTS = ["F", "F", "F", "G", "G", "UTIL"]
 SWAP_MIN_GAIN = 2.0        # ignore sub-noise "improvements"
 SWAP_OFF_POOL_MIN_GAIN = 10.0   # projection a player OUTSIDE the pool must add
-SWAP_MAX_LEFTOVER = 1500   # preference, not a filter — locks can strand salary
+SWAP_MAX_LEFTOVER = 700    # match the build's salary floor; still a preference
+                           # rather than a filter, since locks can strand money
 SWAP_TOP_PER_POS = 14      # candidate breadth per position (keeps combos sane)
+SWAP_MAX_PER_TEAM = 3      # same team-correlation cap the build uses
+
+
+def _max_per_team(roster):
+    counts = {}
+    for p in roster:
+        counts[p.team] = counts.get(p.team, 0) + 1
+    return max(counts.values()) if counts else 0
 
 
 def _pace_read(locked, scored):
@@ -983,10 +992,17 @@ def _aggression_from_rank(my_final, field_sorted):
 
 
 def _swap_candidates(players, locked_names, used_names, budget):
-    """Unlocked, projecting players who could still fill an open slot."""
+    """Unlocked, projecting players who could still fill an open slot.
+
+    Applies the build's minutes gate too: a body projected under the rotation
+    floor is a lottery ticket there and is no better here, so late swap must not
+    hand one to a lineup the build deliberately kept clean.
+    """
     out = []
     for p in players:
         if p.proj <= 0 or p.salary > budget:
+            continue
+        if p.risk and not p.core:
             continue
         n = normalize_name(p.name)
         if n in locked_names or n in used_names:
@@ -1071,10 +1087,17 @@ def _enumerate_rosters(lineup, players, locked_names, open_idx, slots, cap=400):
             continue
         seen.add(key)
         roster = _slot_roster(lineup, open_idx, chosen, slots)
-        if roster:
+        # Same team-correlation cap the build enforces: more than this from one
+        # team is a bet on a single game script, not a lineup.
+        if roster and _max_per_team(roster) <= SWAP_MAX_PER_TEAM:
             out.append(roster)
         if len(out) >= cap:
             break
+    if not out:   # locks alone can already exceed the cap — don't strand the lineup
+        for _, chosen in combos[:cap]:
+            roster = _slot_roster(lineup, open_idx, chosen, slots)
+            if roster:
+                out.append(roster)
     return out
 
 
@@ -1137,6 +1160,10 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
     options = options or {}
     players = parse_linestar((csv_text or "").strip())
     scored = parse_linestar_scored((csv_text or "").strip())
+    # Mirror the build's pipeline so the same player is judged the same way in
+    # both places: the minutes gate, then the recency ownership nudge.
+    apply_daily_projections(players, options.get("minutes") or "")
+    apply_recency_nudge(players)
     if sum(1 for p in players if p.proj > 0) < ROSTER_SIZE:
         return {"error": "Drop your UPDATED LineStar CSV — it carries the new "
                          "projections and the live scores late swap needs."}
@@ -1178,6 +1205,8 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
     pool_names = _parse_names(options.get("pool"))
     if pool_names:
         pool_names |= core_names
+    for p in players:   # the minutes gate exempts cores, same as the build
+        p.core = normalize_name(p.name) in core_names
     # Players in the next game to tip: filling a slot from there costs optionality.
     starts = sorted({p["start"] for p in dk["pool"].values()
                      if p.get("start") and not p.get("locked")})
