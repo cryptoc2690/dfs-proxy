@@ -853,6 +853,7 @@ def run_dk_fill(dk_text, lineups_names):
 # relative to the field, which is a different job.
 _LS_SLOTS = ["F", "F", "F", "G", "G", "UTIL"]
 SWAP_MIN_GAIN = 2.0        # ignore sub-noise "improvements"
+SWAP_OFF_POOL_MIN_GAIN = 10.0   # projection a player OUTSIDE the pool must add
 SWAP_MAX_LEFTOVER = 1500   # preference, not a filter — locks can strand salary
 SWAP_TOP_PER_POS = 14      # candidate breadth per position (keeps combos sane)
 
@@ -1122,11 +1123,12 @@ def _score_rosters(rosters, players, aggression, n_sims, seed, early_names=()):
     return lus
 
 
-def _swap_payload(p, scored):
+def _swap_payload(p, scored, pool_names=None):
     act = scored.get(normalize_name(p.name))
     return {"name": p.name, "team": p.team, "salary": p.salary,
             "proj": round(p.proj, 1), "own": round(p.ownership, 1),
-            "scored": None if act is None else round(act, 1)}
+            "scored": None if act is None else round(act, 1),
+            "offPool": bool(pool_names) and normalize_name(p.name) not in pool_names}
 
 
 def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
@@ -1172,6 +1174,10 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
 
     # Cores carry over from the build — protected, not optimized away.
     core_names = _parse_names(options.get("cores"))
+    # The pool carries over too. Cores count as in-pool, same as in the build.
+    pool_names = _parse_names(options.get("pool"))
+    if pool_names:
+        pool_names |= core_names
     # Players in the next game to tip: filling a slot from there costs optionality.
     starts = sorted({p["start"] for p in dk["pool"].values()
                      if p.get("start") and not p.get("locked")})
@@ -1269,6 +1275,7 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
                     return False
             return True
 
+        cur_proj = sum(p.proj for p in lineup)
         pick, why = None, ""
         for lu in lus:
             if lu.metrics.get("isCurrent"):
@@ -1280,6 +1287,21 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
             if SALARY_CAP - lu.salary > SWAP_MAX_LEFTOVER and current and \
                     lu.metrics["swapScore"] - cur_score < SWAP_MIN_GAIN * 2:
                 continue  # only strand salary for a clearly better roster
+            # Pool discipline. The pool is the vetted list; reaching outside it
+            # for a couple of points is a bad trade, because the projection edge
+            # is inside the model's error bars while the pool encodes judgement
+            # the model doesn't have. So an unvetted name has to clear a much
+            # higher bar — a real projection jump, not a rounding win.
+            if pool_names:
+                incoming_off = [p for p in lu.players
+                                if normalize_name(p.name) not in here
+                                and normalize_name(p.name) not in pool_names]
+                # Scaled by how many unvetted names it takes: two of them have to
+                # earn twice as much, so a roster can't sneak several marginal
+                # off-pool plays in under one lump gain.
+                if incoming_off and (sum(p.proj for p in lu.players) - cur_proj
+                                     < SWAP_OFF_POOL_MIN_GAIN * len(incoming_off)):
+                    continue
             pick = lu
             break
         if pick and cur_score is not None and \
@@ -1314,8 +1336,9 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
                            if cur_score is not None else 0.0)
             rec["out"] = [_swap_payload(p, scored) for p in lineup
                           if normalize_name(p.name) not in now]
-            rec["in"] = [_swap_payload(p, scored) for p in final
+            rec["in"] = [_swap_payload(p, scored, pool_names) for p in final
                          if normalize_name(p.name) not in was]
+            rec["projGain"] = round(sum(p.proj for p in final) - cur_proj, 1)
             changed += 1
             gain_total += rec["gain"]
         rec["roster"] = final

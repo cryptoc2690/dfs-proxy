@@ -392,7 +392,7 @@ async function runSwap(){
     const res=await fetch('/api/lateswap',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({csv:csvText, dk:swapText, contest:conText,
         options:{maxExposure:(+$('#exp').value)/100,
-                 cores:corePicker.sel.join('\n')}})});
+                 cores:corePicker.sel.join('\n'), pool:poolPicker.sel.join('\n')}})});
     const data=await res.json();
     if(data.error) showErr(data.error); else renderSwaps(data);
   }catch(e){ showErr(e.message); }
@@ -430,9 +430,11 @@ function renderSwaps(d){
     if(s.keep) return '<div class="swapcard keep">#'+s.entryId+' · keep as-is '+
       '<span class="muted">('+s.open+' open, proj '+s.proj+')</span>'+pace+'</div>';
     const row=(p,sign,cls)=>'<div class="swaprow '+cls+'">'+sign+' '+p.name+
+      (p.offPool?' <span class="offpool" title="not in your pool">◇</span>':'')+
       ' <span class="muted">$'+p.salary.toLocaleString()+' · '+p.proj+' proj · '+p.own+'%</span></div>';
     return '<div class="swapcard"><div class="swaphdr">#'+s.entryId+
-      ' <span class="gain">+'+s.gain+'</span> <span class="muted">→ score '+s.score+
+      ' <span class="gain">+'+s.gain+'</span> <span class="muted">'+
+      (s.projGain!==undefined?'('+(s.projGain>=0?'+':'')+s.projGain+' proj) ':'')+'→ score '+s.score+
       ', $'+s.salary.toLocaleString()+'</span>'+pace+'</div>'+
       s.out.map(p=>row(p,'−','out')).join('')+s.in.map(p=>row(p,'+','in')).join('')+'</div>';
   }).join('');
