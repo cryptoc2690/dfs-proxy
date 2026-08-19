@@ -295,7 +295,7 @@ def _upload_str(p):
     return p.name if (not p.dk_id or p.dk_id.startswith(("dff-", "ls-"))) else f"{p.name} ({p.dk_id})"
 
 
-_SLOTS = ["F", "F", "F", "G", "G", "UTIL"]
+_SLOTS = ["G", "G", "F", "F", "F", "UTIL"]
 
 
 def _slots_payload(slots):
@@ -852,7 +852,7 @@ def run_dk_fill(dk_text, lineups_names):
 # selection uses ownership: the 5-slate back-test showed projected ownership is
 # noise for picking players, and it is only used here to read our position
 # relative to the field, which is a different job.
-_LS_SLOTS = ["F", "F", "F", "G", "G", "UTIL"]
+_LS_SLOTS = ["G", "G", "F", "F", "F", "UTIL"]
 # Late swap is deliberately CONSERVATIVE after review. On the one slate where
 # swaps really fired it cost 125 points across 11 lineups, systematically trading
 # high scorers for lower-owned busts (Iriafen 40 -> Onyenwere 8, Citron 46 ->
@@ -871,6 +871,13 @@ def _max_per_team(roster):
     counts = {}
     for p in roster:
         counts[p.team] = counts.get(p.team, 0) + 1
+    return max(counts.values()) if counts else 0
+
+
+def _max_per_game(roster):
+    counts = {}
+    for p in roster:
+        counts[p.game] = counts.get(p.game, 0) + 1
     return max(counts.values()) if counts else 0
 
 
@@ -1095,8 +1102,11 @@ def _enumerate_rosters(lineup, players, locked_names, open_idx, slots, cap=400):
         seen.add(key)
         roster = _slot_roster(lineup, open_idx, chosen, slots)
         # Same team-correlation cap the build enforces: more than this from one
-        # team is a bet on a single game script, not a lineup.
-        if roster and _max_per_team(roster) <= SWAP_MAX_PER_TEAM:
+        # team is a bet on a single game script, not a lineup. And DK's own rule
+        # that a roster must span at least two games — an all-one-game lineup is
+        # rejected at upload, so a swap must never create one.
+        if (roster and _max_per_team(roster) <= SWAP_MAX_PER_TEAM
+                and _max_per_game(roster) <= ROSTER_SIZE - 1):
             out.append(roster)
         if len(out) >= cap:
             break

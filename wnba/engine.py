@@ -16,6 +16,11 @@ from dk import MIN_FORWARDS, MIN_GUARDS, ROSTER_SIZE, SALARY_CAP, Player
 
 MIN_SALARY = 3000  # DK WNBA min; used so partial lineups stay completable
 
+# DraftKings Classic requires players from at least two different games, so a
+# roster can never be more than ROSTER_SIZE-1 from one game. This is a contest
+# rule, not a preference — an all-one-game lineup is rejected at upload.
+MAX_PER_GAME = ROSTER_SIZE - 1
+
 # Team-correlation control. Four underowned starters on ONE team look
 # independently great but ride a single game script — when that team lays an egg
 # the whole pool sinks together (the TOR wound). Across the pool, a team may hold
@@ -50,10 +55,10 @@ class Lineup:
         return {p.game for p in self.players}
 
     def dk_slots(self) -> list[Player]:
-        """DK upload order: F, F, F, G, G, UTIL."""
+        """DK upload order: G, G, F, F, F, UTIL — matching the DK entries file."""
         g = sorted((p for p in self.players if p.is_guard), key=lambda p: -p.proj)
         f = sorted((p for p in self.players if not p.is_guard), key=lambda p: -p.proj)
-        slotted = f[:MIN_FORWARDS] + g[:MIN_GUARDS]          # 3 F, 2 G
+        slotted = g[:MIN_GUARDS] + f[:MIN_FORWARDS]          # 2 G, 3 F
         rest = sorted(g[MIN_GUARDS:] + f[MIN_FORWARDS:], key=lambda p: -p.proj)
         return slotted + rest[:ROSTER_SIZE - MIN_FORWARDS - MIN_GUARDS]  # + UTIL
 
@@ -105,7 +110,7 @@ def _stack_targets(pool):
     return teams, sorted(games.items(), key=lambda kv: -kv[1])
 
 
-def _seed_stack(pool, plan, rng, used, team_count, max_per_team, salary_left):
+def _seed_stack(pool, plan, rng, used, team_count, game_count, max_per_team, salary_left):
     """Pick the stack members up front. Position legality is left to the main
     fill — we only take players that still leave a legal roster reachable."""
     kind, key, size = plan
@@ -119,6 +124,7 @@ def _seed_stack(pool, plan, rng, used, team_count, max_per_team, salary_left):
         elig = [p for p in group
                 if p.dk_id not in used
                 and team_count.get(p.team, 0) < max_per_team
+                and game_count.get(p.game, 0) < MAX_PER_GAME
                 and p.salary <= salary_left - MIN_SALARY * (ROSTER_SIZE - len(used) - 1)]
         # never take so many of one position that the roster can't be completed
         g = sum(1 for p in picked if p.is_guard)
@@ -133,6 +139,7 @@ def _seed_stack(pool, plan, rng, used, team_count, max_per_team, salary_left):
         picked.append(p)
         used.add(p.dk_id)
         team_count[p.team] = team_count.get(p.team, 0) + 1
+        game_count[p.game] = game_count.get(p.game, 0) + 1
         salary_left -= p.salary
     return picked
 
@@ -150,10 +157,13 @@ def _build_one(pool, max_per_team, rng, cores=None, min_cores=0, reserve=MIN_SAL
             picked = list(rng.sample(avail, k))
     used = {p.dk_id for p in picked}
     salary = sum(p.salary for p in picked)
-    team_count = {}
+    team_count, game_count = {}, {}
     for p in picked:
         team_count[p.team] = team_count.get(p.team, 0) + 1
+        game_count[p.game] = game_count.get(p.game, 0) + 1
     if salary > SALARY_CAP or any(v > max_per_team for v in team_count.values()):
+        return None
+    if any(v > MAX_PER_GAME for v in game_count.values()):
         return None
     if max_off_pool is not None and sum(1 for p in picked if not p.in_pool) > max_off_pool:
         return None
@@ -161,8 +171,8 @@ def _build_one(pool, max_per_team, rng, cores=None, min_cores=0, reserve=MIN_SAL
     # Seed the correlation stack before the generic fill, so the lineup is built
     # AROUND it rather than hoping one emerges from projection weighting.
     if plan and len(picked) < ROSTER_SIZE:
-        seeded = _seed_stack(pool, plan, rng, used, team_count, max_per_team,
-                             SALARY_CAP - salary)
+        seeded = _seed_stack(pool, plan, rng, used, team_count, game_count,
+                             max_per_team, SALARY_CAP - salary)
         picked += seeded
         salary += sum(p.salary for p in seeded)
         if salary > SALARY_CAP:
@@ -186,6 +196,8 @@ def _build_one(pool, max_per_team, rng, cores=None, min_cores=0, reserve=MIN_SAL
                 continue
             if team_count.get(p.team, 0) >= max_per_team:
                 continue
+            if game_count.get(p.game, 0) >= MAX_PER_GAME:
+                continue
             if max_off_pool is not None and not p.in_pool and off_pool_used >= max_off_pool:
                 continue
             if (must_guard and not p.is_guard) or (must_forward and p.is_guard):
@@ -202,9 +214,12 @@ def _build_one(pool, max_per_team, rng, cores=None, min_cores=0, reserve=MIN_SAL
         used.add(p.dk_id)
         salary += p.salary
         team_count[p.team] = team_count.get(p.team, 0) + 1
+        game_count[p.game] = game_count.get(p.game, 0) + 1
 
     g = sum(1 for p in picked if p.is_guard)
     if g < MIN_GUARDS or (len(picked) - g) < MIN_FORWARDS or salary > SALARY_CAP:
+        return None
+    if len({p.game for p in picked}) < 2:   # DK: at least two games
         return None
     return picked
 
