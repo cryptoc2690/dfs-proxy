@@ -209,18 +209,22 @@ def simulate_and_score(cands, pool, *, sims, leverage, seed=0):
             "ceiling": totals[int(sims * 0.85)],
             "p95": totals[int(sims * 0.95)],
         }
-    # Leverage on OVER-ownership (ownership per point of ceiling), not raw
-    # ownership. Raw ownership can't tell good chalk (high-owned because it's the
-    # best play — a big ceiling backs it) from overpriced chalk (high-owned with
-    # no ceiling to show for it). Dividing by ceiling fades only the latter, and
-    # stops a cheap, low-owned, low-ceiling body from reading as "leverage" just
-    # because it's unpopular — it's unpopular because it's worse. Differentiation
-    # still comes from the overlap + exposure caps in select_final, not here.
-    effs = [c.total_own / (c.metrics["ceiling"] or 1.0) for c in cands] or [0]
-    lo, hi = min(effs), max(effs)
+    # Ownership tilt on RAW lineup ownership, and off by default.
+    #
+    # This used to divide ownership by ceiling to flag "overpriced chalk". A
+    # 7-slate review killed that metric: own/ceiling correlated POSITIVELY with
+    # actual value (+0.23), and the bucket it labelled overpriced returned the
+    # best value of any group while the bucket it labelled leverage returned the
+    # worst. It separated the opposite of what it was built to separate, so the
+    # tilt was nudging toward players who produced less. The same review found
+    # chalk beat contrarian in 6 of 7 slates and that the winning lineups
+    # consistently out-owned ours — so the honest default is no tilt at all. The
+    # slider still works for anyone who wants to fade, it just starts neutral.
+    owns = [c.total_own for c in cands] or [0]
+    lo, hi = min(owns), max(owns)
     span = (hi - lo) or 1.0
-    for c, eff in zip(cands, effs):
-        on = (eff - lo) / span
+    for c in cands:
+        on = (c.total_own - lo) / span
         c.metrics["score"] = c.metrics["ceiling"] * (1 + leverage * (1 - 2 * on))
     cands.sort(key=lambda c: -c.metrics["score"])
 
@@ -392,9 +396,9 @@ def _attach_pool_alternatives(lineups, pool, max_per_team, n_sims, leverage, see
 
 # ---------------- public API ----------------
 def build_gpp(players, *, n=20, pool_size=None, min_stack=2, max_per_team=3,
-              max_exposure=0.6, leverage=0.05, n_sims=5000, seed=0,
+              max_exposure=0.6, leverage=0.0, n_sims=5000, seed=0,
               cores=None, min_cores=0, max_overlap=4, max_off_pool=None,
-              stars_and_scrubs=None, max_leftover=700, player_caps=None):
+              stars_and_scrubs=None, max_leftover=500, player_caps=None):
     # Reliability gate (not a grade). Back-testing 5 slates showed minutes and
     # stat-stuffer had ZERO correlation with bust rate — grading/rationing them
     # bought nothing. All they cleanly flag is genuine non-rotation risk, so we

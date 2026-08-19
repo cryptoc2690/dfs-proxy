@@ -68,6 +68,8 @@ class Player:
     minutes: float = 0.0     # projected minutes (from the daily-projections file)
     stuffer: float = 0.0     # DK pts from NON-scoring cats (reb/ast/stl/blk) = floor
     risk: bool = False       # gated: projected minutes below the non-rotation floor
+    raw_ceil: float = 0.0    # LineStar's ceiling before the low-minute cap, so the
+                             # minutes pass can give it back to rotation players
     trending: bool = False   # projection well above season baseline -> field hype
     implied: float = 0.0     # team's Vegas implied total (game environment)
     spread: float = 0.0      # team's Vegas spread (+ = underdog)

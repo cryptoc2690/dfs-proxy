@@ -153,8 +153,11 @@ INDEX_HTML = r"""<!doctype html>
       </div>
       <label>Max exposure — <span id="expv">60</span>%</label>
       <input id="exp" class="slider" type="range" min="10" max="100" value="60">
-      <label>Fade chalk (leverage) — <span id="levv">0.05</span></label>
-      <input id="lev" class="slider" type="range" min="0" max="100" value="5">
+      <label>Fade chalk (leverage) — <span id="levv">0.00</span></label>
+      <input id="lev" class="slider" type="range" min="0" max="100" value="0">
+      <div class="hint">Off by default. Two reviews found fading chalk is −EV at this field
+        size — chalk won 6 of 7 slates and the winning lineups consistently out-owned ours.
+        Raise it only if you specifically want differentiation.</div>
 
       <h2 style="margin-top:22px">3 · Game-theory cores <span style="text-transform:none;color:var(--muted)">(optional)</span></h2>
       <label>Core plays — type a name to add</label>
@@ -490,7 +493,7 @@ function render(d){
   if(d.coach && d.coach.length){
     cx.style.display='block';
     const legend = '<div class="coach-legend">★ core · ⚠ gated (sub-14-min non-rotation, excluded unless cored)'+
-      ' · 🔥 trending (over-owned, ownership nudged up) · ◇ off-pool</div>';
+      ' · ◇ off-pool</div>';
     cx.innerHTML = '<div class="coach-h">📋 Read on your build — you decide, this is just the data’s take</div>'+
       d.coach.map(c=>'<div class="coach-note '+c.type+'">'+c.text+'</div>').join('')+legend;
   } else cx.style.display='none';
@@ -582,7 +585,7 @@ function renderProj(players, key){
     let v = p[c[0]]; if(c[0]==='salary') v='$'+v.toLocaleString();
     if(c[0]==='name'){ if(p.core) v='<span class="core-star">★</span> '+v;
       if(p.risk) v='<span class="riskdot" title="gated: sub-14-min non-rotation (cored in by you)">⚠</span> '+v;
-      if(p.trending) v='🔥 '+v; }
+      }
     return '<td class="'+(num?'num':'')+'">'+(v===undefined?'':v)+'</td>';
   }).join('')+'</tr>').join('');
   const t = $('#ptable'); t.innerHTML = head+body;

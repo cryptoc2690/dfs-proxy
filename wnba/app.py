@@ -40,6 +40,16 @@ def _float(v, default):
         return default
 
 
+# Ceiling sanity caps, as a multiple of the projection. A 7-slate review found
+# the old flat 2.5x rarely bound (6% of rows) but clipped real smashes when it
+# did — 9 of 22 capped players beat 2.5x, including a 25-minute starter who
+# scored 49 against an 11-point projection. The artifact it exists to kill is a
+# low-MINUTE body with an inflated ceiling, so the tight cap now applies only
+# below the rotation floor and rotation players get room to run.
+CEIL_CAP_MULT = 2.5        # applied at parse time, before minutes are known
+CEIL_CAP_MULT_ROTATION = 3.0   # relaxed once minutes confirm a real role
+
+
 # ---------------- LineStar parsing ----------------
 def _parse_versus(vs, team):
     """LineStar VersusStr -> (opponent, DK-style game key 'AWAY@HOME').
@@ -104,13 +114,16 @@ def parse_linestar(text):
         # plays and under-fading chalk like Sabally).
         if ceil <= proj:
             ceil = round(proj * 1.3, 1)
-        elif ceil > proj * 2.5:
+        elif ceil > proj * CEIL_CAP_MULT:
             # Broken high ceiling: LineStar inflates the ceiling on some low-minute
             # bench players (Okot: 5.48 proj / 5 min, but a 22 ceiling). A ceiling
             # that's a wild multiple of the projection isn't real upside, it's a
             # data artifact — and it would make a 5-minute punt look like the best
             # cheap play on the board. Cap it to a sane band around the projection.
-            ceil = round(proj * 2.5, 1)
+            # Cap the RAW value too, so the minutes pass can relax it for players
+            # who clear the rotation floor without losing the original number.
+            p.raw_ceil = ceil
+            ceil = round(proj * CEIL_CAP_MULT, 1)
         if floor <= 0 or floor < proj * 0.35 or floor >= proj:
             floor = round(proj * 0.6, 1)
         p.proj = round(proj, 1)
@@ -201,6 +214,10 @@ def apply_daily_projections(players, text):
         p.minutes = d["minutes"]
         p.stuffer = d["stuffer"]
         p.risk = p.minutes < GATE_MINUTES  # gate flag: genuine non-rotation only
+        # Real rotation minutes -> the ceiling wasn't a low-minute artifact, so
+        # give back what the parse-time cap took (up to the looser multiple).
+        if not p.risk and getattr(p, "raw_ceil", 0):
+            p.ceil = round(min(p.raw_ceil, p.proj * CEIL_CAP_MULT_ROTATION), 1)
         p.notes.append(f"gated: {p.minutes:.0f} proj min (non-rotation)" if p.risk
                        else f"{p.minutes:.0f} min, stuffer {p.stuffer:.0f}")
         # Cross-source disagreement flag (informational; LineStar's proj is used).
@@ -209,32 +226,14 @@ def apply_daily_projections(players, text):
     return True
 
 
-# ---------------- recency / ownership nudge ----------------
-# The field over-owns players trending up — today's projection well above their
-# season baseline (a recent big game, a new role). Projected ownership under-
-# rates them, so leverage would wrongly read them as contrarian. We nudge their
-# ownership toward reality: gentle and capped, because proj-vs-season is a
-# directional proxy, not exact. This never benches anyone — it only makes the
-# leverage math honest, so a trending play gets played the right amount and the
-# real differentiation lands elsewhere.
-RECENCY_TREND_MIN = 1.20    # proj this many x above season PPG => trending
-RECENCY_NUDGE = 0.8         # ownership bump per unit of trend above 1.0
-RECENCY_NUDGE_CAP = 1.8     # never more than this x on one player's ownership
-
-
-def apply_recency_nudge(players):
-    for p in players:
-        if p.proj <= 0 or p.avg_points <= 0:
-            continue
-        trend = p.proj / p.avg_points
-        if trend < RECENCY_TREND_MIN:
-            continue
-        before = p.ownership
-        mult = min(1 + RECENCY_NUDGE * (trend - 1), RECENCY_NUDGE_CAP)
-        p.ownership = round(min(p.ownership * mult, 75.0), 1)
-        p.trending = True
-        p.notes.append(f"🔥 trending {trend:.1f}x season · own {before:.0f}→{p.ownership:.0f}")
-
+# ---------------- recency / ownership nudge (REMOVED) ----------------
+# There used to be a nudge here that inflated the projected ownership of players
+# trending above their season average, on the theory that the field over-owns
+# them. A 7-slate review tested the premise directly and it failed both halves:
+# "hot" players (projection >= 1.20x season PPG) drew LESS ownership than
+# projected (14.4% -> 13.5% actual), and they under-produced their projection by
+# 1.5 points. The rule was inflating ownership for players who neither got owned
+# up nor delivered, which then fed the leverage tilt and faded them further.
 
 # ---------------- slate helpers ----------------
 def _slate_date(players):
@@ -485,11 +484,6 @@ def run_optimize(csv_text: str, options: dict) -> dict:
     if had_minutes:
         source_label += " + minutes"
 
-    # Recency: bump the ownership of trending-up plays toward reality so leverage
-    # reads them as the chalk they'll become (not as contrarian). Uses today's
-    # proj vs season PPG — both already in the LineStar file, no API.
-    apply_recency_nudge(players)
-
     # Manual removals (late scratch / missed shootaround the projection hasn't
     # caught). Zero them and flow their minutes/usage to teammates.
     removed_info = _apply_removals(players, _parse_names(options.get("remove")))
@@ -555,11 +549,11 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         # maxPerTeam only for a deliberate shootout stack.
         max_per_team=_int(options.get("maxPerTeam"), 3),
         max_exposure=_float(options.get("maxExposure"), 0.6),
-        # Ownership tilt, dialed to a light tiebreak. Back-test: projected
-        # ownership had ~zero correlation with actual value and chalk beat
-        # contrarian in 4 of 5 slates, so leverage is a gentle differentiator now,
-        # not a lineup-wide fade.
-        leverage=_float(options.get("leverage"), 0.05),
+        # Ownership tilt, OFF by default. Two reviews now say fading is -EV at
+        # this field size: chalk won 6 of 7 slates in the latest one and the
+        # winning lineups consistently out-owned ours. The slider still fades if
+        # you want it to; it just no longer does so unasked.
+        leverage=_float(options.get("leverage"), 0.0),
         n_sims=_int(options.get("sims"), 5000),
         cores=cores,
         # Anchor rule: every lineup built around at least this many cores (which
@@ -569,11 +563,11 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         max_overlap=_int(options.get("maxOverlap"), 4),
         max_off_pool=max_off_pool,
         stars_and_scrubs=(slate_type == "stars-and-scrubs"),
-        # Don't leave money on the table — winners used ~99.5% of the cap, so keep
-        # unspent salary tight. Relaxes only if the slate can't field enough
-        # lineups. (Reliability is now a gate applied at pool build, not a per-
-        # lineup ration, so there's no max_risk knob anymore.)
-        max_leftover=_int(options.get("maxLeftover"), 700),
+        # Don't leave money on the table. Winners averaged $49,876 spent, and
+        # top-10% rate falls monotonically with leftover ($300 -> 10.7%, $700-1500
+        # -> 7.6%, $3000+ -> 0%), so keep it tight. Relaxes if the slate can't
+        # field enough lineups.
+        max_leftover=_int(options.get("maxLeftover"), 500),
         player_caps=player_caps,
     )
 
@@ -852,8 +846,14 @@ def run_dk_fill(dk_text, lineups_names):
 # noise for picking players, and it is only used here to read our position
 # relative to the field, which is a different job.
 _LS_SLOTS = ["F", "F", "F", "G", "G", "UTIL"]
-SWAP_MIN_GAIN = 2.0        # ignore sub-noise "improvements"
-SWAP_OFF_POOL_MIN_GAIN = 10.0   # projection a player OUTSIDE the pool must add
+# Late swap is deliberately CONSERVATIVE after review. On the one slate where
+# swaps really fired it cost 125 points across 11 lineups, systematically trading
+# high scorers for lower-owned busts (Iriafen 40 -> Onyenwere 8, Citron 46 ->
+# Young 23). n=1, so that's a red flag rather than proof — but the mechanism it
+# used to chase is the same ownership-fading the wider review found -EV, so the
+# bar to touch a lineup is now high enough that only real news moves it.
+SWAP_MIN_GAIN = 6.0        # was 2.0 — sub-noise churn is how the damage happened
+SWAP_OFF_POOL_MIN_GAIN = 12.0   # projection a player OUTSIDE the pool must add
 SWAP_MAX_LEFTOVER = 700    # match the build's salary floor; still a preference
                            # rather than a filter, since locks can strand money
 SWAP_TOP_PER_POS = 14      # candidate breadth per position (keeps combos sane)
@@ -1101,15 +1101,17 @@ def _enumerate_rosters(lineup, players, locked_names, open_idx, slots, cap=400):
     return out
 
 
-# How hard the CHASE side leans on lineup ownership. Back-testing 8/12 showed the
-# percentile tilt alone is nearly cosmetic: summing six players washes out
-# individual variance (central limit), so the top roster by the median and by p99
-# was literally the same one. What separates a lineup when you're behind is being
-# different from the field, so that's the lever chase has to pull. Below ~0.6 it
-# never actually changed a pick. This is NOT the blanket contrarian fade the
-# 5-slate back-test rejected — it applies only when we're genuinely behind and
-# need separation to win.
-SWAP_OWN_TILT = 0.70
+# Chase-side ownership penalty, now OFF.
+#
+# The idea was that a lineup which is behind has to differentiate to win, so
+# chasing should fade the field. Two independent findings killed it. The 7-slate
+# review found fading is -EV at this field size generally (chalk won 6 of 7, and
+# the winning lineups consistently OUT-owned ours). And on the single slate where
+# late swap actually fired, this penalty is what moved 40-point players out for
+# 8-point ones. Keeping the constant at 0 rather than deleting the term: the
+# aggression read is still shown, and if logging ever justifies a tilt this is
+# the one line to change.
+SWAP_OWN_TILT = 0.0
 
 
 # Small tiebreak against loading up on the game that tips first. Filling a slot
@@ -1163,7 +1165,6 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
     # Mirror the build's pipeline so the same player is judged the same way in
     # both places: the minutes gate, then the recency ownership nudge.
     apply_daily_projections(players, options.get("minutes") or "")
-    apply_recency_nudge(players)
     if sum(1 for p in players if p.proj > 0) < ROSTER_SIZE:
         return {"error": "Drop your UPDATED LineStar CSV — it carries the new "
                          "projections and the live scores late swap needs."}
