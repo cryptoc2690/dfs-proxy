@@ -159,6 +159,14 @@ INDEX_HTML = r"""<!doctype html>
         size — chalk won 6 of 7 slates and the winning lineups consistently out-owned ours.
         Raise it only if you specifically want differentiation.</div>
 
+      <label>Stack seeking — <span id="stkv">50</span>% of lineups</label>
+      <input id="stk" class="slider" type="range" min="0" max="100" value="50">
+      <div class="hint">Builds this share of lineups AROUND a correlation stack: 3 from a
+        high-implied-total team, or 4–5 from the biggest game. A 7-slate review found
+        high-total 3-stacks hit top-1% at 2.6× the base rate and 5-man game stacks at 7×,
+        while projection weighting alone produced them only ~3 times in 20. Low-total stacks
+        are avoided — those finish worse than not stacking.</div>
+
       <h2 style="margin-top:22px">3 · Game-theory cores <span style="text-transform:none;color:var(--muted)">(optional)</span></h2>
       <label>Core plays — type a name to add</label>
       <div class="typeahead">
@@ -278,6 +286,7 @@ let csvText = null, lastResult = null, playerNames = [], minText = '';
 
 $('#exp').addEventListener('input', e => $('#expv').textContent = e.target.value);
 $('#lev').addEventListener('input', e => $('#levv').textContent = (e.target.value/100).toFixed(2));
+$('#stk').addEventListener('input', e => $('#stkv').textContent = e.target.value);
 
 // file handling
 const drop = $('#drop'), fileIn = $('#file');
@@ -459,6 +468,7 @@ async function run(){
   const options = {
     n:+$('#n').value, stack:+$('#stack').value,
     maxExposure:(+$('#exp').value)/100, leverage:(+$('#lev').value)/100,
+    stackShare:(+$('#stk').value)/100,
     cores:corePicker.sel.join('\n'), pool:poolPicker.sel.join('\n'),
     remove:removePicker.sel.join('\n'), maxOffPool:+$('#offpool').value,
     minCores:+$('#mincores').value,

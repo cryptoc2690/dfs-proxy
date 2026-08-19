@@ -73,8 +73,72 @@ def _weighted_pick(cands, rng):
     return cands[-1]
 
 
+# Correlation seeding. A 7-slate, ~20,600-lineup review found this is where
+# top-1% finishes come from, and that our builder was leaving it on the table:
+#
+#   3 from one team, team implied total >= 84 -> 2.65% top-1% (vs 1.04% at 2)
+#   3 from one team, team implied total <  84 -> 0.40% top-1% (WORSE than 2)
+#   5 from one game                           -> 7.03% top-1% (vs 0.98% at 4)
+#
+# So it was never "stacking helps" — it's "concentrate on high-total offences".
+# Projection-weighted construction almost never produces these by accident (we
+# measured ~3 of 20 lineups reaching even an unconditioned 3-stack), so a share
+# of lineups is now SEEDED with a stack instead of hoping one shows up.
+STACK_SHARE = 0.5          # fraction of lineups built around a deliberate stack
+STACK_GAME_FRACTION = 0.5  # of those, how many go for a game stack vs a team stack
+STACK_GAME_SIZE = 5        # players from one game (the 7x cell)
+STACK_TEAM_SIZE = 3        # players from one team (the 2.65% cell)
+
+
+def _stack_targets(pool):
+    """Rank teams by implied total and games by combined total, so seeding aims
+    at real offences rather than any old cluster."""
+    team_total, game_total = {}, {}
+    for p in pool:
+        if p.implied > 0:
+            team_total[p.team] = p.implied
+    for p in pool:
+        if p.game and p.team in team_total:
+            game_total.setdefault(p.game, set()).add(p.team)
+    games = {g: sum(team_total.get(t, 0) for t in ts) for g, ts in game_total.items()}
+    teams = sorted(team_total.items(), key=lambda kv: -kv[1])
+    return teams, sorted(games.items(), key=lambda kv: -kv[1])
+
+
+def _seed_stack(pool, plan, rng, used, team_count, max_per_team, salary_left):
+    """Pick the stack members up front. Position legality is left to the main
+    fill — we only take players that still leave a legal roster reachable."""
+    kind, key, size = plan
+    group = [p for p in pool
+             if (p.team == key if kind == "team" else p.game == key)
+             and p.dk_id not in used and p.proj > 0]
+    if len(group) < size:
+        return []
+    picked = []
+    for _ in range(size):
+        elig = [p for p in group
+                if p.dk_id not in used
+                and team_count.get(p.team, 0) < max_per_team
+                and p.salary <= salary_left - MIN_SALARY * (ROSTER_SIZE - len(used) - 1)]
+        # never take so many of one position that the roster can't be completed
+        g = sum(1 for p in picked if p.is_guard)
+        f = len(picked) - g
+        if g >= MIN_GUARDS + 1:
+            elig = [p for p in elig if not p.is_guard]
+        if f >= MIN_FORWARDS + 1:
+            elig = [p for p in elig if p.is_guard]
+        if not elig:
+            break
+        p = _weighted_pick(elig, rng)
+        picked.append(p)
+        used.add(p.dk_id)
+        team_count[p.team] = team_count.get(p.team, 0) + 1
+        salary_left -= p.salary
+    return picked
+
+
 def _build_one(pool, max_per_team, rng, cores=None, min_cores=0, reserve=MIN_SALARY,
-               max_off_pool=None):
+               max_off_pool=None, plan=None):
     # Seed the lineup with the required number of cores, then fill the rest with
     # a position-aware greedy that always keeps the G/F minimums reachable.
     # (Extra cores can still land in the fill — min_cores is a floor.)
@@ -93,6 +157,18 @@ def _build_one(pool, max_per_team, rng, cores=None, min_cores=0, reserve=MIN_SAL
         return None
     if max_off_pool is not None and sum(1 for p in picked if not p.in_pool) > max_off_pool:
         return None
+
+    # Seed the correlation stack before the generic fill, so the lineup is built
+    # AROUND it rather than hoping one emerges from projection weighting.
+    if plan and len(picked) < ROSTER_SIZE:
+        seeded = _seed_stack(pool, plan, rng, used, team_count, max_per_team,
+                             SALARY_CAP - salary)
+        picked += seeded
+        salary += sum(p.salary for p in seeded)
+        if salary > SALARY_CAP:
+            return None
+        if max_off_pool is not None and sum(1 for p in picked if not p.in_pool) > max_off_pool:
+            return None
 
     while len(picked) < ROSTER_SIZE:
         remaining = ROSTER_SIZE - len(picked)
@@ -141,14 +217,27 @@ def _has_stack(players, stack):
 
 
 def build_candidates(pool, count, *, stack, max_per_team, seed=0,
-                     cores=None, min_cores=0, reserve=MIN_SALARY, max_off_pool=None):
+                     cores=None, min_cores=0, reserve=MIN_SALARY, max_off_pool=None,
+                     stack_share=STACK_SHARE):
     rng = random.Random(seed)
+    teams, games = _stack_targets(pool)
+    # Only high-total offences are worth concentrating on — the review found a
+    # 3-stack of a LOW-total team finishes worse than not stacking at all.
+    med = sorted(v for _, v in teams)[len(teams) // 2] if teams else 0
+    hi_teams = [t for t, v in teams if v >= med]
     out, seen = [], set()
     tries = 0
     while len(out) < count and tries < count * 15:
         tries += 1
+        plan = None
+        if stack_share and rng.random() < stack_share:
+            if games and rng.random() < STACK_GAME_FRACTION:
+                plan = ("game", games[0][0], STACK_GAME_SIZE)
+            elif hi_teams:
+                plan = ("team", hi_teams[rng.randrange(min(2, len(hi_teams)))],
+                        STACK_TEAM_SIZE)
         lu = _build_one(pool, max_per_team, rng, cores, min_cores, reserve,
-                        max_off_pool)
+                        max_off_pool, plan)
         if not lu:
             continue
         if stack > 1 and not _has_stack(lu, stack):
@@ -398,7 +487,8 @@ def _attach_pool_alternatives(lineups, pool, max_per_team, n_sims, leverage, see
 def build_gpp(players, *, n=20, pool_size=None, min_stack=2, max_per_team=3,
               max_exposure=0.6, leverage=0.0, n_sims=5000, seed=0,
               cores=None, min_cores=0, max_overlap=4, max_off_pool=None,
-              stars_and_scrubs=None, max_leftover=500, player_caps=None):
+              stars_and_scrubs=None, max_leftover=500, player_caps=None,
+              stack_share=STACK_SHARE):
     # Reliability gate (not a grade). Back-testing 5 slates showed minutes and
     # stat-stuffer had ZERO correlation with bust rate — grading/rationing them
     # bought nothing. All they cleanly flag is genuine non-rotation risk, so we
@@ -429,7 +519,8 @@ def build_gpp(players, *, n=20, pool_size=None, min_stack=2, max_per_team=3,
         stars_and_scrubs = cheap_best >= 16
     reserve = 4200 if stars_and_scrubs else 6000
     kw = dict(max_per_team=max_per_team, seed=seed, cores=cores,
-              min_cores=min_cores, reserve=reserve, max_off_pool=max_off_pool)
+              min_cores=min_cores, reserve=reserve, max_off_pool=max_off_pool,
+              stack_share=stack_share)
     cands = build_candidates(pool, pool_size, stack=min_stack, **kw)
     if not cands:  # relax the stack requirement rather than return nothing
         cands = build_candidates(pool, pool_size, stack=1, **kw)

@@ -501,12 +501,14 @@ def run_optimize(csv_text: str, options: dict) -> dict:
             continue
         if p.core:
             # Cores are the ANCHOR plays — the sharp's picks that keep landing in
-            # winners. Small projection edge, and NO ownership penalty: fading
-            # them for being chalk fought their inclusion (A'ja stranded at
-            # 8-17%). Differentiation comes from the other five spots; the
-            # per-lineup minimum (min_cores) makes every lineup build around them.
-            p.proj = round(p.proj * 1.06, 1)
-            p.ceil = round(p.ceil * 1.06, 1)
+            # winners. They used to get a +6% projection/ceiling edge on top; a
+            # 7-slate review removed it. Cores DID outperform everything else
+            # (30.1 actual vs 24.5 for the rest of the pool vs 12.8 slate-wide) —
+            # but they hit 1.01x their projection, i.e. they MEET it rather than
+            # beat it. The edge was double-counting a belief already priced into
+            # the projection that got them cored. Their pull now comes from
+            # min_cores and the exposure floor, which are exposure levers rather
+            # than a thumb on the projection.
             p.notes.append("GT core")
         elif pool_names and not p.in_pool:
             p.notes.append("off-pool")
@@ -568,6 +570,10 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         # -> 7.6%, $3000+ -> 0%), so keep it tight. Relaxes if the slate can't
         # field enough lineups.
         max_leftover=_int(options.get("maxLeftover"), 500),
+        # Seed a share of lineups with a correlation stack — high-implied-total
+        # team 3-stacks and 4-5 man stacks of the biggest game. Projection
+        # weighting alone produced these ~3 times in 20.
+        stack_share=_float(options.get("stackShare"), 0.5),
         player_caps=player_caps,
     )
 
