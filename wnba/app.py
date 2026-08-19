@@ -565,11 +565,12 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         max_overlap=_int(options.get("maxOverlap"), 4),
         max_off_pool=max_off_pool,
         stars_and_scrubs=(slate_type == "stars-and-scrubs"),
-        # Don't leave money on the table. Winners averaged $49,876 spent, and
-        # top-10% rate falls monotonically with leftover ($300 -> 10.7%, $700-1500
-        # -> 7.6%, $3000+ -> 0%), so keep it tight. Relaxes if the slate can't
-        # field enough lineups.
-        max_leftover=_int(options.get("maxLeftover"), 500),
+        # Don't leave money on the table. Re-scored on the objective that
+        # actually pays (P(top 1%), not median finish), unspent salary hurts
+        # roughly 3x more than the median numbers implied: <=$300 left -> 1.87%
+        # top-1%, $300-700 -> 0.62%, $1,500+ -> 0.00%. Relaxes if the slate
+        # can't field enough lineups at this floor.
+        max_leftover=_int(options.get("maxLeftover"), 300),
         # Seed a share of lineups with a correlation stack — high-implied-total
         # team 3-stacks and 4-5 man stacks of the biggest game. Projection
         # weighting alone produced these ~3 times in 20.

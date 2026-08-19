@@ -487,7 +487,7 @@ def _attach_pool_alternatives(lineups, pool, max_per_team, n_sims, leverage, see
 def build_gpp(players, *, n=20, pool_size=None, min_stack=2, max_per_team=3,
               max_exposure=0.6, leverage=0.0, n_sims=5000, seed=0,
               cores=None, min_cores=0, max_overlap=4, max_off_pool=None,
-              stars_and_scrubs=None, max_leftover=500, player_caps=None,
+              stars_and_scrubs=None, max_leftover=300, player_caps=None,
               stack_share=STACK_SHARE):
     # Reliability gate (not a grade). Back-testing 5 slates showed minutes and
     # stat-stuffer had ZERO correlation with bust rate — grading/rationing them
