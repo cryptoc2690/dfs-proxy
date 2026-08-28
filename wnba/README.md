@@ -76,6 +76,21 @@ triple-double +3.
 | `dk.py` | DK ruleset, scoring, name normalization, the Player record. |
 | `../WNBA-Optimizer.command` | Double-click launcher (Mac). |
 
+## Build log
+
+Every build appends one JSON line to `logs/builds.jsonl` (gitignored). It records
+only what is known *before* the slate runs: the settings used, the core and pool
+sets in force, and for each lineup its salary and leftover, projection, ceiling,
+total ownership, stack shape (biggest team stack, that team's implied total and
+whether it cleared the slate median, biggest game stack and the game's combined
+total), which cores it held, and every rostered player with salary, projection,
+ownership, minutes and implied total.
+
+Finishes, actual points and real ownership are not in here — they come from the
+post-slate LineStar pull and the DK standings export, joined on the slate date.
+Rebuilding during the day appends a second record rather than replacing the
+first, so a mid-day core or pool change is visible as a timestamped edit.
+
 ## Building your own ownership model (later)
 
 LineStar already gives projected ownership. If you ever want a model fitted to

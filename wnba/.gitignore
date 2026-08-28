@@ -3,3 +3,4 @@ lineups.csv
 cash.csv
 *.pyc
 __pycache__/
+logs/

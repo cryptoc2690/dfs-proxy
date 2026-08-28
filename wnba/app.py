@@ -578,7 +578,7 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         player_caps=player_caps,
     )
 
-    return {
+    result = {
         "source": source_label,
         "slateType": slate_type,
         "poolActive": bool(pool_names),
@@ -612,6 +612,91 @@ def run_optimize(csv_text: str, options: dict) -> dict:
             "alt": _alt_payload(lu.alt),
         } for i, lu in enumerate(lineups)],
     }
+    _log_build(result, players, lineups, options)
+    return result
+
+
+# ---------------- build log ----------------
+# Every review since the first one has asked for this. Each build appends one
+# JSON line so a later analysis can ask what we actually did on a given day
+# rather than reconstructing it from the DK export. We log only what is known
+# BEFORE the slate runs; finishes, actual points and real ownership come from
+# the post-slate LineStar and DK standings files, joined on the slate date.
+#
+# Successive records for one date are the audit trail for mid-day core/pool
+# edits: each carries its own timestamp and the core/pool set in force at the
+# time, so a change shows up as a new record rather than overwriting anything.
+LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "logs", "builds.jsonl")
+
+
+def _lineup_log(lu, med_implied, game_totals):
+    """The shape of one lineup, in the terms the reviews keep asking about."""
+    teams, games = {}, {}
+    for p in lu.players:
+        teams[p.team] = teams.get(p.team, 0) + 1
+        games[p.game] = games.get(p.game, 0) + 1
+    top_team = max(teams, key=lambda t: teams[t])
+    top_game = max(games, key=lambda g: games[g])
+    implied = max((p.implied for p in lu.players if p.team == top_team), default=0.0)
+    return {
+        "salary": lu.salary,
+        "leftover": SALARY_CAP - lu.salary,
+        "proj": lu.proj,
+        "ceiling": round(lu.metrics.get("ceiling", 0), 1),
+        "totalOwn": lu.total_own,
+        "teamStack": teams[top_team],
+        "stackTeam": top_team,
+        "stackImplied": round(implied, 1),
+        # the cut the field data keeps splitting on: a 3-stack of a low-total
+        # team is the worst construction on the board
+        "stackAboveMedian": (implied >= med_implied) if teams[top_team] >= 3 else None,
+        "gameStack": games[top_game],
+        "stackGame": top_game,
+        # the whole game's combined implied total, not just the rostered half
+        "gameTotal": round(game_totals.get(top_game, 0.0), 1),
+        "cores": [p.name for p in lu.players if p.core],
+        "offPool": [p.name for p in lu.players if not p.in_pool],
+        "players": [{
+            "name": p.name, "team": p.team, "pos": p.pos, "salary": p.salary,
+            "proj": round(p.proj, 1), "ceil": round(p.ceil, 1),
+            "own": round(p.ownership, 1), "min": round(p.minutes, 1),
+            "implied": round(p.implied, 1), "core": p.core, "pool": p.in_pool,
+        } for p in lu.dk_slots()],
+    }
+
+
+def _log_build(result, players, lineups, options):
+    """Append one record per build. Never let logging break a build."""
+    try:
+        from datetime import datetime
+        team_implied = {p.team: p.implied for p in players if p.implied > 0}
+        implieds = sorted(team_implied.values())
+        med = implieds[len(implieds) // 2] if implieds else 0.0
+        game_totals = {}
+        for p in players:
+            if p.game and p.team in team_implied:
+                game_totals.setdefault(p.game, {})[p.team] = team_implied[p.team]
+        game_totals = {g: sum(v.values()) for g, v in game_totals.items()}
+        record = {
+            "ts": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "slate": result.get("slate", {}).get("date"),
+            "games": result.get("slate", {}).get("games", []),
+            "slateType": result.get("slateType"),
+            "medianImplied": round(med, 1),
+            "options": {k: options.get(k) for k in (
+                "n", "leverage", "stackShare", "maxPerTeam", "maxLeftover",
+                "maxExposure", "minCores", "maxOverlap", "stack") if k in options},
+            "cores": [p.name for p in players if p.core],
+            "pool": [p.name for p in players if p.in_pool],
+            "removed": result.get("removed", []),
+            "lineups": [_lineup_log(lu, med, game_totals) for lu in lineups],
+        }
+        os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+        with open(LOG_PATH, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
+    except Exception:
+        pass
 
 
 # ---------------- DK entries file (DKEntries*.csv) ----------------
