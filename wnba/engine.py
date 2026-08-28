@@ -89,10 +89,15 @@ def _weighted_pick(cands, rng):
 # Projection-weighted construction almost never produces these by accident (we
 # measured ~3 of 20 lineups reaching even an unconditioned 3-stack), so a share
 # of lineups is now SEEDED with a stack instead of hoping one shows up.
+# The 22-slate review re-measured these cells on ~4x the sample. The 5-man game
+# stack regressed hard (7.03% -> 2.76%) and only holds its edge in a genuinely
+# big game (>=178 combined implied -> 3.83%, below that 1.81%), so the game stack
+# now has to clear that bar and the mix leans a little more on team stacks.
 STACK_SHARE = 0.5          # fraction of lineups built around a deliberate stack
-STACK_GAME_FRACTION = 0.5  # of those, how many go for a game stack vs a team stack
-STACK_GAME_SIZE = 5        # players from one game (the 7x cell)
+STACK_GAME_FRACTION = 0.4  # of those, how many go for a game stack vs a team stack
+STACK_GAME_SIZE = 5        # players from one game
 STACK_TEAM_SIZE = 3        # players from one team (the 2.65% cell)
+STACK_GAME_MIN_TOTAL = 178.0  # combined implied a game must reach to be worth stacking
 
 
 def _stack_targets(pool):
@@ -119,11 +124,23 @@ def _seed_stack(pool, plan, rng, used, team_count, game_count, max_per_team, sal
              and p.dk_id not in used and p.proj > 0]
     if len(group) < size:
         return []
+    # A game stack splits across two teams, and which side gets the bigger half
+    # decides whether we end up with a good 3-stack or the field's worst one (a
+    # 3-stack of a low-total team). Hold the weaker offence to the small half.
+    caps = {}
+    if kind == "game":
+        sides = {}
+        for p in group:
+            sides[p.team] = max(sides.get(p.team, 0), p.implied)
+        if len(sides) == 2:
+            weak = min(sides, key=sides.get)
+            caps[weak] = max(0, size - max_per_team)
     picked = []
     for _ in range(size):
         elig = [p for p in group
                 if p.dk_id not in used
                 and team_count.get(p.team, 0) < max_per_team
+                and sum(1 for q in picked if q.team == p.team) < caps.get(p.team, size)
                 and game_count.get(p.game, 0) < MAX_PER_GAME
                 and p.salary <= salary_left - MIN_SALARY * (ROSTER_SIZE - len(used) - 1)]
         # never take so many of one position that the roster can't be completed
@@ -246,8 +263,10 @@ def build_candidates(pool, count, *, stack, max_per_team, seed=0,
         tries += 1
         plan = None
         if stack_share and rng.random() < stack_share:
-            if games and rng.random() < STACK_GAME_FRACTION:
-                plan = ("game", games[0][0], STACK_GAME_SIZE)
+            top_game = games[0] if games else None
+            if (top_game and top_game[1] >= STACK_GAME_MIN_TOTAL
+                    and rng.random() < STACK_GAME_FRACTION):
+                plan = ("game", top_game[0], STACK_GAME_SIZE)
             elif hi_teams:
                 plan = ("team", hi_teams[rng.randrange(min(2, len(hi_teams)))],
                         STACK_TEAM_SIZE)
