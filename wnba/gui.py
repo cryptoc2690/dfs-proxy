@@ -89,6 +89,14 @@ INDEX_HTML = r"""<!doctype html>
   .mk.on.rm{background:#3a1a1a;border-color:#a04040;color:#e69090}
   .mk.on.cap{background:#3a2f14;border-color:#e0a030;color:#f0c070}
   .marklegend .mk{cursor:default;margin-right:0}
+  .boardsum{grid-column:1/-1;border-top:1px solid var(--line);padding-top:14px;margin-top:2px}
+  .bgroup{display:flex;align-items:baseline;gap:9px;margin-bottom:7px;flex-wrap:wrap}
+  .bgroup>b{font-size:11.5px;color:var(--muted);font-weight:600;min-width:74px}
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{background:var(--chip);border:1px solid var(--line);border-radius:15px;padding:3px 10px;
+    font-size:12.5px;cursor:pointer;user-select:none}
+  .chip:hover{border-color:var(--accent);color:var(--accent)}
+  .chip::after{content:" ✕";color:var(--muted);font-size:11px}
   /* a core shows as pooled without being a pool member — the engine already
      treats it as in-pool, and adding it would switch the constraint on */
   .mk.on.pool.implied{opacity:.55}
@@ -242,10 +250,11 @@ INDEX_HTML = r"""<!doctype html>
     <div>
       <label>Max exposure — <span id="expv">60</span>%</label>
       <input id="exp" class="slider" type="range" min="10" max="100" value="60">
-      <label>Cap the 🔒 players at <span id="capv">30</span>%</label>
+      <label>Cap the 🔒 players at <span id="capv">30</span>% <span id="capwho" class="muted"></span></label>
       <input id="cappct" class="slider" type="range" min="5" max="60" value="30">
-      <div class="hint">Limits <em>only</em> the players you lock on the slate — everyone
-        else stays at your max exposure. Reins in one heavy play without capping the board.</div>
+      <div class="hint">Applies to the players you mark 🔒 <b>on the slate row</b> — there is no
+        list to type here. Everyone else stays at your max exposure. Reins in one heavy play
+        without capping the whole board.</div>
     </div>
     <div>
       <label>Fade chalk (leverage) — <span id="levv">0.00</span></label>
@@ -259,6 +268,7 @@ INDEX_HTML = r"""<!doctype html>
         team, or 5 from the biggest game (which must clear 178 combined). Low-total stacks
         are avoided — those finish worse than not stacking at all.</div>
     </div>
+    <div class="boardsum" id="boardsum"></div>
   </div>
 </details>
 
@@ -323,6 +333,7 @@ let slate=[], medImplied=0, swapData=null, swapTake=[];
 // The four build levers. They used to be four type-aheads you had to spell names
 // into; they are now toggles on the slate row itself.
 const sel = {core:new Set(), pool:new Set(), remove:new Set(), cap:new Set()};
+const GROUPS = [['core','Cores'],['pool','Pool'],['remove','Removed'],['cap','Capped']];
 
 // ---- settings ----
 const setSummary = () => {
@@ -336,7 +347,7 @@ $('#lev').addEventListener('input', e => { $('#levv').textContent = (e.target.va
 $('#stk').addEventListener('input', e => { $('#stkv').textContent = e.target.value; setSummary(); });
 $('#cappct').addEventListener('input', e => $('#capv').textContent = e.target.value);
 $('#n').addEventListener('input', setSummary);
-setSummary();
+setSummary(); paintDock();
 
 // ---- the file rail ----
 function csvSplit(line){ const out=[]; let cur='',q=false; for(const ch of line){ if(ch==='"')q=!q; else if(ch===','&&!q){out.push(cur);cur='';} else cur+=ch; } out.push(cur); return out; }
@@ -422,6 +433,23 @@ function toggleMark(kind, name){
 function paintDock(){
   $('#d-core').textContent=sel.core.size; $('#d-pool').textContent=sel.pool.size;
   $('#d-rm').textContent=sel.remove.size; $('#d-cap').textContent=sel.cap.size;
+  $('#capwho').textContent = sel.cap.size
+    ? '— ' + sel.cap.size + ' locked' : '— none locked yet';
+  paintBoard();
+}
+// The picks live on the slate rows, which means a player you marked can scroll
+// out of sight. List them here so the set is always visible and clearable.
+function paintBoard(){
+  const any=GROUPS.some(([k])=>sel[k].size);
+  $('#boardsum').innerHTML = !any
+    ? '<span class="hint">Nothing picked yet — use ★ ◆ 🚫 🔒 on any slate row.</span>'
+    : GROUPS.filter(([k])=>sel[k].size).map(([k,label])=>
+        '<div class="bgroup"><b>'+label+'</b><div class="chips">'+
+        [...sel[k]].map(n=>'<span class="chip" data-k="'+k+'" data-n="'+
+          n.replace(/"/g,'&quot;')+'">'+n+'</span>').join('')+'</div></div>').join('');
+  $('#boardsum').querySelectorAll('.chip').forEach(c=>c.onclick=()=>{
+    sel[c.dataset.k].delete(c.dataset.n); renderSlate(); paintDock();
+  });
 }
 function renderSlate(){
   if(!slate.length) return;
