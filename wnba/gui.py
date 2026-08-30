@@ -22,12 +22,6 @@ INDEX_HTML = r"""<!doctype html>
   header .ball{width:26px;height:26px;border-radius:50%;
     background:radial-gradient(circle at 35% 30%,#ff8a5c,var(--accent));}
   header .sub{color:var(--muted);font-size:13px;margin-left:auto}
-  main{max-width:1120px;margin:0 auto;padding:24px 20px 60px}
-  .grid{display:grid;grid-template-columns:320px 1fr;gap:22px;align-items:start}
-  @media(max-width:820px){.grid{grid-template-columns:1fr}}
-  .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px}
-  .panel h2{font-size:13px;text-transform:uppercase;letter-spacing:.6px;
-    color:var(--muted);margin:0 0 14px}
   label{display:block;font-size:13px;color:var(--muted);margin:12px 0 5px}
   input[type=text],input[type=number],input[type=password],textarea,select{width:100%;background:var(--panel2);
     border:1px solid var(--line);color:var(--text);border-radius:9px;padding:9px 11px;font-size:14px;
@@ -35,15 +29,83 @@ INDEX_HTML = r"""<!doctype html>
   textarea{resize:vertical;min-height:58px;line-height:1.35}
   select{cursor:pointer;-webkit-appearance:none;appearance:none}
   input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent2)}
+  /* ---- file rail: intake collapses to one line once loaded ---- */
+  #filerail{display:flex;align-items:stretch;border-bottom:1px solid var(--line);background:var(--panel)}
+  .fslot{padding:9px 15px;border-right:1px solid var(--line);cursor:pointer;min-width:0;transition:.15s}
+  .fslot b{display:block;font-size:12.5px;color:var(--text);white-space:nowrap}
+  .fslot .fstate{display:block;font-size:11px;color:var(--muted);white-space:nowrap}
+  .fslot:hover,.fslot.over{background:var(--panel2)}
+  .fslot.loaded b{color:var(--good)}
+  .fslot.req b{color:var(--accent)}
+  .fslot.req::after{content:"";}
+  .fmeta{margin-left:auto;align-self:center;padding:0 16px;font-size:11.5px;color:var(--muted);
+    font-variant-numeric:tabular-nums;text-align:right}
+  @media(max-width:900px){#filerail{flex-wrap:wrap}.fmeta{margin-left:0;padding:8px 15px;width:100%;text-align:left}}
+
+  /* ---- settings drawer ---- */
+  #setwrap{border-bottom:1px solid var(--line);background:var(--panel)}
+  #setwrap>summary{cursor:pointer;padding:9px 20px;font-size:12.5px;color:var(--muted);list-style:none}
+  #setwrap>summary::-webkit-details-marker{display:none}
+  #setwrap>summary::before{content:"⚙ ";opacity:.7}
+  #setwrap>summary:hover{color:var(--text)}
+  #setwrap[open]>summary{color:var(--text);border-bottom:1px solid var(--line)}
+  .setgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:22px;padding:16px 20px 20px}
+  .setgrid label:first-child{margin-top:0}
+
+  /* ---- the board ---- */
+  .board{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);
+    align-items:start;gap:0;max-width:none;margin:0;padding:0}
+  @media(max-width:1000px){.board{grid-template-columns:1fr}
+    .slatecol,.outcol{max-height:none;overflow:visible}}
+  .slatecol{padding:14px 18px;border-right:1px solid var(--line);min-width:0;
+    overflow:hidden;max-height:calc(100vh - 190px);display:flex;flex-direction:column}
+  .outcol{padding:14px 18px;min-width:0;overflow:auto;max-height:calc(100vh - 190px)}
+  .colhead{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+  .colhead>span:first-child{font-size:12px;text-transform:uppercase;letter-spacing:.6px;
+    color:var(--muted);font-weight:600}
+  .colhead .count{margin-left:auto;font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+  #slatefilter{width:auto;flex:1;max-width:220px;padding:5px 9px;font-size:13px}
+  .marklegend{display:flex;flex-wrap:wrap;gap:12px;font-size:11.5px;color:var(--muted);margin-bottom:8px}
+  .marklegend span{display:flex;align-items:center;gap:5px}
+  .slatewrap{overflow:auto;flex:1;min-height:0;border:1px solid var(--line);border-radius:9px}
+  #slatetable{width:100%;border-collapse:collapse;font-size:13px}
+  #slatetable th{position:sticky;top:0;background:var(--panel2);z-index:2;text-align:left;
+    padding:7px 8px;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;
+    color:var(--muted);border-bottom:1px solid var(--line);cursor:pointer;white-space:nowrap}
+  #slatetable th:hover{color:var(--text)}
+  #slatetable th.mkcol,#slatetable td.mkcol{cursor:default;width:104px}
+  #slatetable td{padding:5px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+  #slatetable td.num{text-align:right;font-variant-numeric:tabular-nums}
+  #slatetable tr:hover td{background:var(--panel2)}
+  #slatetable tr.gone td{opacity:.4;text-decoration:line-through}
+  #slatetable td.hi{color:var(--good)}
+  #slatetable td.lo{color:var(--muted)}
+  .mk{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;
+    border-radius:5px;border:1px solid var(--line);background:var(--panel2);color:#5c6775;
+    font-size:11px;font-style:normal;cursor:pointer;margin-right:3px;user-select:none;transition:.12s}
+  .mk:hover{border-color:var(--muted);color:var(--text)}
+  .mk.on.core{background:#3a2314;border-color:var(--accent);color:#ff8a5c}
+  .mk.on.pool{background:#12303a;border-color:var(--accent2);color:#7ec8ff}
+  .mk.on.rm{background:#3a1a1a;border-color:#a04040;color:#e69090}
+  .mk.on.cap{background:#3a2f14;border-color:#e0a030;color:#f0c070}
+  .marklegend .mk{cursor:default;margin-right:0}
+  /* a core shows as pooled without being a pool member — the engine already
+     treats it as in-pool, and adding it would switch the constraint on */
+  .mk.on.pool.implied{opacity:.55}
+
+  /* ---- dock: the counts and the two things you actually press ---- */
+  #dock{position:sticky;bottom:0;z-index:20;display:flex;align-items:center;gap:16px;
+    padding:10px 20px;background:var(--panel);border-top:1px solid var(--line);flex-wrap:wrap}
+  #dock .dk{font-size:12.5px;color:var(--muted)}
+  #dock .dk b{color:var(--text);font-variant-numeric:tabular-nums}
+  #dock .sep{margin-left:auto;text-align:right}
+  #dock .dockbtn{width:auto;margin:0;padding:9px 20px;font-size:13.5px}
   .core-star{color:var(--accent2);font-weight:700}
   .offpool{color:var(--accent);font-weight:700}
   .riskdot{color:#e0a030}
   .riskrow td{color:var(--muted)}
   .note{background:#1e2530;border:1px solid #33506e;color:#a8c4e0;border-radius:10px;
     padding:10px 13px;margin-bottom:12px;font-size:13.5px}
-  .lockchip{display:inline-block;padding:5px 11px;margin:3px 3px 0 0;border-radius:15px;
-    border:1px solid var(--line);cursor:pointer;font-size:13px;background:var(--chip);user-select:none}
-  .lockchip.on{background:#3a2a1e;border-color:#e0a030;color:#f0c070}
   .swapcard{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;background:var(--panel)}
   .swapcard.keep{opacity:.55;font-size:13px;padding:7px 12px}
   .swapcard.err{color:#e08080;font-size:13px}
@@ -71,25 +133,7 @@ INDEX_HTML = r"""<!doctype html>
   .swaprow.in{color:var(--good)}
   .gain{color:var(--accent);font-weight:700}
   .muted{color:var(--muted);font-weight:400;font-size:12px}
-  .typeahead{position:relative}
-  .drop-menu{position:absolute;left:0;right:0;top:100%;z-index:30;background:var(--panel2);
-    border:1px solid var(--line);border-radius:9px;margin-top:4px;max-height:220px;overflow:auto;display:none}
-  .drop-menu.show{display:block}
-  .drop-menu div{padding:8px 11px;cursor:pointer;font-size:14px}
-  .drop-menu div:hover,.drop-menu div.active{background:var(--chip)}
-  .drop-menu div.nopick{cursor:default;color:var(--muted);font-size:13px}
-  .drop-menu div.nopick:hover{background:none}
-  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
-  .chip{background:var(--chip);border:1px solid var(--line);border-radius:16px;padding:4px 10px;
-    font-size:13px;display:flex;align-items:center;gap:7px}
-  .chip .x{cursor:pointer;color:var(--muted);font-weight:700}.chip .x:hover{color:var(--accent)}
   input:disabled{opacity:.5}
-  .row{display:flex;gap:12px}.row>*{flex:1}
-  .drop{margin-top:4px;border:1.5px dashed var(--line);border-radius:12px;padding:26px 14px;
-    text-align:center;cursor:pointer;transition:.15s;background:var(--panel2)}
-  .drop:hover,.drop.over{border-color:var(--accent);background:#20262f}
-  .drop b{color:var(--text)}.drop small{color:var(--muted);display:block;margin-top:6px}
-  .drop.loaded{border-color:var(--good)}
   .slider{width:100%}
   .btn{margin-top:18px;width:100%;background:var(--accent);color:#fff;border:none;
     border-radius:10px;padding:13px;font-size:15px;font-weight:600;cursor:pointer;transition:.15s}
@@ -110,7 +154,9 @@ INDEX_HTML = r"""<!doctype html>
   .coach-legend{font-size:12px;color:var(--muted);margin-top:4px;padding-top:8px;border-top:1px solid var(--line)}
   .status{margin-bottom:16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
   .status .meta{color:var(--muted);font-size:13px}
-  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px;margin-bottom:14px}
+  .card table td.slot,.card table td.stat,.card table td.sal,
+  .card table td.pr{white-space:nowrap}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
   .card .top{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;
     background:var(--panel2);border-bottom:1px solid var(--line)}
@@ -150,291 +196,274 @@ INDEX_HTML = r"""<!doctype html>
   <h1>WNBA DFS Optimizer</h1>
   <span class="sub">DraftKings · GPP · LineStar</span>
 </header>
-<main>
-  <div class="grid">
-    <!-- controls -->
-    <div class="panel">
-      <h2>1 · Your slate</h2>
-      <div id="drop" class="drop">
-        <b>Drop your LineStar CSV</b>
-        <small>projections, floor/ceiling, ownership, starters — all in one file</small>
-        <input id="file" type="file" accept=".csv" hidden>
-      </div>
-      <div id="mindrop" class="drop" style="margin-top:10px;padding:16px">
-        <b>+ daily projections CSV</b>
-        <small>adds projected minutes — gates out sub-14-min non-rotation plays</small>
-        <input id="minfile" type="file" accept=".csv" hidden>
-      </div>
 
-      <h2 style="margin-top:22px">2 · Settings</h2>
-      <div class="row">
-        <div><label>Lineups</label><input id="n" type="number" value="20" min="1" max="150"></div>
-        <div><label>Min game stack</label><input id="stack" type="number" value="2" min="1" max="4"></div>
-      </div>
-      <label>Max exposure — <span id="expv">60</span>%</label>
-      <input id="exp" class="slider" type="range" min="10" max="100" value="60">
-      <label>Fade chalk (leverage) — <span id="levv">0.00</span></label>
-      <input id="lev" class="slider" type="range" min="0" max="100" value="0">
-      <div class="hint">Off by default. Two reviews found fading chalk is −EV at this field
-        size — chalk won 6 of 7 slates and the winning lineups consistently out-owned ours.
-        Raise it only if you specifically want differentiation.</div>
+<!-- Files live in one rail across the top. Cold start it fills the screen;
+     once loaded it collapses, because a fresh LineStar pull mid-slate has to
+     be one click rather than a trip to another screen. -->
+<div id="filerail">
+  <div class="fslot req" id="f-slate" data-for="file">
+    <b>LineStar</b><span class="fstate">required — drop or click</span>
+    <input id="file" type="file" accept=".csv" hidden>
+  </div>
+  <div class="fslot" id="f-min" data-for="minfile">
+    <b>Daily projections</b><span class="fstate">minutes + stuffer floor</span>
+    <input id="minfile" type="file" accept=".csv" hidden>
+  </div>
+  <div class="fslot" id="f-dk" data-for="swapfile">
+    <b>DK entries</b><span class="fstate">real DK IDs · unlocks late swap</span>
+    <input id="swapfile" type="file" accept=".csv" hidden>
+  </div>
+  <div class="fslot" id="f-con" data-for="confile">
+    <b>Contest standings</b><span class="fstate">your live rank + field ownership</span>
+    <input id="confile" type="file" accept=".csv" hidden>
+  </div>
+  <div class="fmeta" id="fmeta">no slate loaded</div>
+</div>
 
-      <label>Stack seeking — <span id="stkv">50</span>% of lineups</label>
-      <input id="stk" class="slider" type="range" min="0" max="100" value="50">
-      <div class="hint">Builds this share of lineups AROUND a correlation stack: 3 from a
-        high-implied-total team, or 4–5 from the biggest game. A 7-slate review found
-        high-total 3-stacks hit top-1% at 2.6× the base rate and 5-man game stacks at 7×,
-        while projection weighting alone produced them only ~3 times in 20. Low-total stacks
-        are avoided — those finish worse than not stacking.</div>
-
-      <h2 style="margin-top:22px">3 · Game-theory cores <span style="text-transform:none;color:var(--muted)">(optional)</span></h2>
-      <label>Core plays — type a name to add</label>
-      <div class="typeahead">
-        <input id="corein" type="text" autocomplete="off" placeholder="drop a CSV first, then type…" disabled>
-        <div id="coredrop" class="drop-menu"></div>
-      </div>
-      <div id="corechips" class="chips"></div>
-      <label style="margin-top:12px">Minimum cores per lineup</label>
+<details id="setwrap">
+  <summary id="setsum">Settings</summary>
+  <div class="setgrid">
+    <div>
+      <label>Lineups</label><input id="n" type="number" value="20" min="1" max="150">
+      <label>Min game stack</label><input id="stack" type="number" value="2" min="1" max="4">
+      <label>Minimum cores per lineup</label>
       <select id="mincores">
         <option value="0">0 — no requirement</option>
         <option value="1" selected>1 — every lineup built around ≥1 core</option>
         <option value="2">2 — every lineup built around ≥2</option>
       </select>
-      <div class="hint">Cores are your anchor plays — the sharp's picks that keep landing
-        in winning lineups. This guarantees every lineup is built around at least this many;
-        which ones vary across your set. No cores set → no requirement. Each core is also
-        guaranteed a minimum share of your lineups (data-driven from the slate), so a play you
-        believe in can't get buried — the coach grades whether the data agrees, but the call to
-        keep or drop a weak core stays yours.</div>
-      <label style="margin-top:14px">His full pool — type to add (optional)</label>
-      <div class="typeahead">
-        <input id="poolin" type="text" autocomplete="off" placeholder="drop a file first, then type…" disabled>
-        <div id="pooldrop" class="drop-menu"></div>
-      </div>
-      <div id="poolchips" class="chips"></div>
-      <label style="margin-top:12px">Off-pool players allowed per lineup</label>
+      <label>Off-pool players allowed per lineup</label>
       <select id="offpool">
         <option value="0" selected>0 — build only from the pool</option>
         <option value="1">1 — allow one, only if the data earns it</option>
         <option value="2">2 — allow up to two</option>
       </select>
-      <div class="hint">The pool is a hard build constraint, not an ownership nudge.
-        At 0, every player comes from your pool. At 1–2 the app may spend a slot off-pool,
-        but only when that player makes a genuinely better lineup — never a forced
-        contrarian dart. Cores (★) count as in-pool. No pool set → no constraint.</div>
-
-      <label style="margin-top:14px">Remove player — out / traded / benched / missed shootaround</label>
-      <div class="typeahead">
-        <input id="removein" type="text" autocomplete="off" placeholder="drop a file first, then type…" disabled>
-        <div id="removedrop" class="drop-menu"></div>
-      </div>
-      <div id="removechips" class="chips"></div>
-      <div class="hint">Zeroes the player <em>and</em> redistributes their minutes/usage
-        onto teammates (weighted to same-position replacements), so the rest of the
-        roster's projections rise the way they actually would.</div>
-
-      <label style="margin-top:14px">Cap a player's exposure — type to add</label>
-      <div class="typeahead">
-        <input id="capin" type="text" autocomplete="off" placeholder="drop a file first, then type…" disabled>
-        <div id="capdrop" class="drop-menu"></div>
-      </div>
-      <div id="capchips" class="chips"></div>
-      <label style="margin-top:8px">Cap those players at <span id="capv">30</span>%</label>
-      <input id="cappct" class="slider" type="range" min="5" max="60" value="30">
-      <div class="hint">Limits <em>only</em> the listed players — everyone else stays at your
-        max exposure. Use it to rein in one heavy play without capping the whole board on a
-        short slate.</div>
-
-      <button id="go" class="btn" disabled>Generate lineups</button>
-
-      <details style="margin-top:18px">
-        <summary style="cursor:pointer;font-weight:600;color:var(--text)">🔄 Late swap — already entered? adjust for news</summary>
-        <div style="margin-top:10px">
-          <div class="hint">Drop your DK entries export. Locked players stay pinned; every open slot is
-            re-optimized and scored with the same simulator as the main build. Because the LineStar file
-            above carries live scores, it also reads how each lineup <em>already stands</em> — a lineup
-            running behind (on plays the field didn't have) chases upside, one running ahead protects.
-            You get a re-uploadable DK file back.</div>
-          <div id="swapdrop" class="drop" style="margin-top:10px;padding:16px">
-            <b>+ your DK entries export</b>
-            <small>DKEntries*.csv — reads your lineups and who's locked</small>
-            <input id="swapfile" type="file" accept=".csv" hidden>
-          </div>
-          <div id="condrop" class="drop" style="margin-top:10px;padding:16px">
-            <b>+ contest standings <span style="font-weight:400;color:var(--muted)">(optional)</span></b>
-            <small>DK contest export — your real rank + the score that's winning</small>
-            <input id="confile" type="file" accept=".csv" hidden>
-          </div>
-          <div class="hint" style="margin-top:10px">Re-drop the <b>updated</b> LineStar CSV up top first —
-            that's where the new projections and live scores come from. Add the contest standings and the
-            tool reads your <em>actual</em> leaderboard position instead of estimating it.</div>
-          <button id="swapgo" class="btn" disabled style="margin-top:12px">Recommend late swaps</button>
-        </div>
-      </details>
     </div>
-
-    <!-- results -->
     <div>
-      <div id="err" class="err" style="display:none"></div>
-      <div id="note" class="note" style="display:none"></div>
-      <div id="status" class="status" style="display:none"></div>
-      <div id="coach" class="coach" style="display:none"></div>
-      <div id="tools" style="display:none;margin-bottom:14px">
-        <button id="dl" class="btn ghost" style="width:auto;margin:0;padding:9px 16px">⬇ Download lineups CSV</button>
-        <button id="dkfill" class="btn ghost" style="width:auto;margin:0 0 0 8px;padding:9px 16px">⬆ Fill DK entries file</button>
-        <input id="dkfile" type="file" accept=".csv" hidden>
-        <div class="hint" style="margin-top:6px">Upload your DK entries export (DKEntries*.csv) and it slots
-          these lineups into your entries with real DK IDs — download it and upload straight back to DraftKings.</div>
-      </div>
-      <div id="swapresults" style="display:none;margin-bottom:14px"></div>
-      <div id="cards" class="cards"></div>
-      <div id="welcome" class="empty">Drop your LineStar CSV and hit generate.</div>
-      <details id="expwrap" style="display:none">
-        <summary>Exposure — how spread your lineups are</summary>
-        <table class="ptable" id="exptable"></table>
-      </details>
-      <details id="projwrap" style="display:none">
-        <summary>Player projections</summary>
-        <table class="ptable" id="ptable"></table>
-      </details>
+      <label>Max exposure — <span id="expv">60</span>%</label>
+      <input id="exp" class="slider" type="range" min="10" max="100" value="60">
+      <label>Cap the 🔒 players at <span id="capv">30</span>%</label>
+      <input id="cappct" class="slider" type="range" min="5" max="60" value="30">
+      <div class="hint">Limits <em>only</em> the players you lock on the slate — everyone
+        else stays at your max exposure. Reins in one heavy play without capping the board.</div>
+    </div>
+    <div>
+      <label>Fade chalk (leverage) — <span id="levv">0.00</span></label>
+      <input id="lev" class="slider" type="range" min="0" max="100" value="0">
+      <div class="hint">Off by default. Two reviews found fading chalk is −EV at this field
+        size — the chalkiest bucket had the highest top-1% rate. Raise it only if you
+        specifically want differentiation.</div>
+      <label>Stack seeking — <span id="stkv">50</span>% of lineups</label>
+      <input id="stk" class="slider" type="range" min="0" max="100" value="50">
+      <div class="hint">Builds this share AROUND a correlation stack: 3 from a high-implied
+        team, or 5 from the biggest game (which must clear 178 combined). Low-total stacks
+        are avoided — those finish worse than not stacking at all.</div>
     </div>
   </div>
+</details>
+
+<main class="board">
+  <section class="slatecol">
+    <div class="colhead">
+      <span>Slate</span>
+      <input id="slatefilter" type="text" placeholder="filter…" autocomplete="off" disabled>
+      <span class="count" id="slatecount"></span>
+    </div>
+    <div class="marklegend">
+      <span><i class="mk on core">★</i> core</span>
+      <span><i class="mk on pool">◆</i> pool</span>
+      <span><i class="mk on rm">🚫</i> remove</span>
+      <span><i class="mk on cap">🔒</i> cap</span>
+      <span class="muted">a core is never treated as off-pool</span>
+    </div>
+    <div class="slatewrap"><table id="slatetable"></table></div>
+    <div id="slateempty" class="empty">Drop your LineStar CSV to see the slate.</div>
+  </section>
+
+  <section class="outcol">
+    <div id="err" class="err" style="display:none"></div>
+    <div id="note" class="note" style="display:none"></div>
+    <div id="status" class="status" style="display:none"></div>
+    <div id="tools" style="display:none;margin-bottom:14px">
+      <button id="dl" class="btn ghost" style="width:auto;margin:0;padding:9px 16px">⬇ Download lineups CSV</button>
+      <button id="dkfill" class="btn ghost" style="width:auto;margin:0 0 0 8px;padding:9px 16px">⬆ Fill DK entries file</button>
+      <input id="dkfile" type="file" accept=".csv" hidden>
+      <div class="hint" style="margin-top:6px">Slots these lineups into your DK entries with real
+        DK IDs — download and upload straight back to DraftKings.</div>
+    </div>
+    <div id="swapresults" style="display:none;margin-bottom:14px"></div>
+    <div id="cards" class="cards"></div>
+    <div id="welcome" class="empty">Drop your LineStar CSV and build.</div>
+    <div id="coach" class="coach" style="display:none"></div>
+    <details id="expwrap" style="display:none">
+      <summary>Exposure — how spread your lineups are</summary>
+      <table class="ptable" id="exptable"></table>
+    </details>
+    <details id="projwrap" style="display:none">
+      <summary>Player projections</summary>
+      <table class="ptable" id="ptable"></table>
+    </details>
+  </section>
 </main>
+
+<div id="dock">
+  <span class="dk"><b id="d-core">0</b> cores</span>
+  <span class="dk"><b id="d-pool">0</b> pool</span>
+  <span class="dk"><b id="d-rm">0</b> removed</span>
+  <span class="dk"><b id="d-cap">0</b> capped</span>
+  <span class="dk sep" id="d-set"></span>
+  <button id="swapgo" class="btn ghost dockbtn" disabled>🔄 Late swap</button>
+  <button id="go" class="btn dockbtn" disabled>Build lineups</button>
+</div>
+
 <script>
 const $ = s => document.querySelector(s);
-let csvText = null, lastResult = null, playerNames = [], minText = '';
+let csvText=null, lastResult=null, minText='', swapText='', conText='';
+let slate=[], medImplied=0, swapData=null, swapTake=[];
+// The four build levers. They used to be four type-aheads you had to spell names
+// into; they are now toggles on the slate row itself.
+const sel = {core:new Set(), pool:new Set(), remove:new Set(), cap:new Set()};
 
-$('#exp').addEventListener('input', e => $('#expv').textContent = e.target.value);
-$('#lev').addEventListener('input', e => $('#levv').textContent = (e.target.value/100).toFixed(2));
-$('#stk').addEventListener('input', e => $('#stkv').textContent = e.target.value);
+// ---- settings ----
+const setSummary = () => {
+  $('#setsum').textContent = 'Settings — ' + $('#n').value + ' lineups · ' +
+    $('#exp').value + '% max exposure · leverage ' + (+$('#lev').value/100).toFixed(2) +
+    ' · stack seeking ' + $('#stk').value + '%';
+  $('#d-set').textContent = $('#n').value + ' lineups · ' + $('#exp').value + '% cap';
+};
+$('#exp').addEventListener('input', e => { $('#expv').textContent = e.target.value; setSummary(); });
+$('#lev').addEventListener('input', e => { $('#levv').textContent = (e.target.value/100).toFixed(2); setSummary(); });
+$('#stk').addEventListener('input', e => { $('#stkv').textContent = e.target.value; setSummary(); });
+$('#cappct').addEventListener('input', e => $('#capv').textContent = e.target.value);
+$('#n').addEventListener('input', setSummary);
+setSummary();
 
-// file handling
-const drop = $('#drop'), fileIn = $('#file');
-drop.addEventListener('click', () => fileIn.click());
-fileIn.addEventListener('change', e => loadFile(e.target.files[0]));
-['dragover','dragenter'].forEach(ev => drop.addEventListener(ev, e => {e.preventDefault();drop.classList.add('over')}));
-['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => {e.preventDefault();drop.classList.remove('over')}));
-drop.addEventListener('drop', e => loadFile(e.dataTransfer.files[0]));
-function loadFile(f){
-  if(!f) return;
-  const r = new FileReader();
-  r.onload = () => { csvText = r.result; drop.classList.add('loaded');
-    drop.innerHTML = '<b>✓ '+f.name+'</b><small>ready — change file anytime</small>';
-    $('#go').disabled = false;
-    playerNames = parseNames(csvText); enablePickers();
-  };
-  r.readAsText(f);
-}
-function parseNames(text){
-  const lines = text.replace(/\r/g,'').split('\n').filter(l=>l.trim());
-  if(!lines.length) return [];
-  const cols = csvSplit(lines[0]); const iName = cols.findIndex(c=>c.trim().toLowerCase()==='name');
-  const out = [];
-  for(let i=1;i<lines.length;i++){ const c = csvSplit(lines[i]); const nm=(c[iName]||'').trim(); if(nm) out.push(nm); }
-  return [...new Set(out)];
-}
+// ---- the file rail ----
 function csvSplit(line){ const out=[]; let cur='',q=false; for(const ch of line){ if(ch==='"')q=!q; else if(ch===','&&!q){out.push(cur);cur='';} else cur+=ch; } out.push(cur); return out; }
 
-// ---- daily projections (minutes) drop ----
-const mindrop = $('#mindrop'), minfile = $('#minfile');
-mindrop.addEventListener('click', () => minfile.click());
-minfile.addEventListener('change', e => loadMin(e.target.files[0]));
-['dragover','dragenter'].forEach(ev => mindrop.addEventListener(ev, e => {e.preventDefault();mindrop.classList.add('over')}));
-['dragleave','drop'].forEach(ev => mindrop.addEventListener(ev, e => {e.preventDefault();mindrop.classList.remove('over')}));
-mindrop.addEventListener('drop', e => loadMin(e.dataTransfer.files[0]));
-function loadMin(f){ if(!f) return; const r=new FileReader();
-  r.onload=()=>{ minText=r.result; mindrop.classList.add('loaded');
-    mindrop.innerHTML='<b>✓ '+f.name+'</b><small>minutes + stat-stuffer floor loaded</small>'; };
-  r.readAsText(f); }
-
-// ---- reusable type-ahead picker (used for cores and the full pool) ----
-function makePicker(prefix, icon, onAdd){
-  const input=$('#'+prefix+'in'), drop=$('#'+prefix+'drop'), chips=$('#'+prefix+'chips');
-  const sel=[]; let active=-1;
-  const LIMIT=10;
-  function show(){
-    const q=input.value.trim().toLowerCase();
-    const chosen=new Set(sel.map(s=>s.toLowerCase()));
-    const hit=q ? playerNames.filter(n=>n.toLowerCase().includes(q)) : playerNames.slice();
-    let m=hit.filter(n=>!chosen.has(n.toLowerCase()));
-    // Say WHY there's nothing to pick. A silent empty dropdown reads as "this
-    // player doesn't exist", when usually she's already on the list.
-    if(!m.length){
-      const already=hit.filter(n=>chosen.has(n.toLowerCase()));
-      if(!already.length){ hide(); return; }
-      active=-1;
-      drop.innerHTML=already.slice(0,LIMIT).map(n=>
-        '<div class="nopick">'+n+' <span class="muted">already added</span></div>').join('');
-      drop.classList.add('show');
-      return;
-    }
-    const more=m.length-LIMIT;
-    m=m.slice(0,LIMIT);
-    active=-1;
-    drop.innerHTML=m.map(n=>'<div>'+n+'</div>').join('')+
-      // ...and say when the list is cut off, so a name that didn't fit doesn't
-      // look like it's missing from the slate.
-      (more>0?'<div class="nopick muted">+'+more+' more — keep typing</div>':'');
-    drop.querySelectorAll('div:not(.nopick)').forEach(d=>d.onclick=()=>add(d.textContent));
-    drop.classList.add('show');
+// Parse the whole LineStar row, not just the name: the slate table needs salary,
+// projection, ownership and the team's implied total to be useful as a picker.
+function parseSlate(text){
+  const lines = text.replace(/\r/g,'').split('\n').filter(l=>l.trim());
+  if(!lines.length) return [];
+  const cols = csvSplit(lines[0]).map(c=>c.trim().toLowerCase());
+  const at = n => cols.indexOf(n);
+  const iName=at('name'), iTeam=at('team'), iPos=at('position'), iSal=at('salary'),
+        iProj=at('projected'), iOwn=at('projown'), iImp=at('vegasimplied');
+  const out=[], seen=new Set();
+  for(let i=1;i<lines.length;i++){
+    const c=csvSplit(lines[i]);
+    const nm=(c[iName]||'').trim();
+    if(!nm || seen.has(nm)) continue;
+    const proj=parseFloat(c[iProj])||0;
+    if(proj<=0) continue;           // out / deep bench — nothing to pick
+    seen.add(nm);
+    out.push({name:nm, team:(c[iTeam]||'').trim(), pos:(c[iPos]||'').trim().split('/')[0],
+      salary:parseInt(c[iSal])||0, proj:proj,
+      own:parseFloat(c[iOwn])||0, implied:parseFloat(c[iImp])||0});
   }
-  function hide(){ drop.classList.remove('show'); active=-1; }
-  function paint(items){ items.forEach((it,i)=>it.classList.toggle('active',i===active)); }
-  function add(n){ if(!sel.includes(n)) sel.push(n); input.value=''; hide(); render();
-    if(onAdd) onAdd(n); input.focus(); }
-  function remove(n){ const i=sel.indexOf(n); if(i>=0) sel.splice(i,1); render(); }
-  function render(){
-    chips.innerHTML=sel.map(n=>'<span class="chip">'+(icon?'<span class="core-star">'+icon+'</span>':'')+n+
-      '<span class="x" data-n="'+n.replace(/"/g,'&quot;')+'">✕</span></span>').join('');
-    chips.querySelectorAll('.x').forEach(x=>x.onclick=()=>remove(x.dataset.n));
-  }
-  input.addEventListener('input', show);
-  input.addEventListener('focus', show);
-  input.addEventListener('keydown', e => {
-    const items=drop.querySelectorAll('div:not(.nopick)'); if(!items.length) return;
-    if(e.key==='ArrowDown'){ active=Math.min(active+1,items.length-1); paint(items); e.preventDefault(); }
-    else if(e.key==='ArrowUp'){ active=Math.max(active-1,0); paint(items); e.preventDefault(); }
-    else if(e.key==='Enter'){ if(active>=0){ add(items[active].textContent); e.preventDefault(); } }
-    else if(e.key==='Escape'){ hide(); }
-  });
-  return { sel, add, enable(){ input.disabled=false; input.placeholder='type a player…'; } };
+  return out;
 }
-document.addEventListener('click', e => { if(!e.target.closest('.typeahead')) document.querySelectorAll('.drop-menu').forEach(d=>d.classList.remove('show')); });
-// A core already counts as in-pool everywhere in the build and in late swap, so
-// mirror it into the pool list rather than making you add it twice.
-const corePicker = makePicker('core','★', n => poolPicker.add(n));
-const poolPicker = makePicker('pool','');
-const removePicker = makePicker('remove','🚫');
-const capPicker = makePicker('cap','🔒');
-function enablePickers(){ corePicker.enable(); poolPicker.enable(); removePicker.enable(); capPicker.enable(); }
-$('#cappct').addEventListener('input', e => $('#capv').textContent = e.target.value);
+function slateMedianImplied(rows){
+  const t={}; rows.forEach(r=>{ if(r.implied>0) t[r.team]=r.implied; });
+  const v=Object.values(t).sort((a,b)=>a-b);
+  return v.length ? v[Math.floor(v.length/2)] : 0;
+}
+function markSlot(id, name, note){
+  const el=$(id); el.classList.add('loaded');
+  el.querySelector('b').textContent = '✓ ' + name;
+  el.querySelector('.fstate').textContent = note;
+}
+function railMeta(){
+  if(!slate.length){ $('#fmeta').textContent='no slate loaded'; return; }
+  const games=[...new Set(slate.map(r=>r.team))].length/2;
+  $('#fmeta').textContent = slate.length+' playable · ~'+games+' games · median implied '+
+    medImplied.toFixed(1) + (swapText?' · late swap ready':'');
+}
+function wireSlot(slotId, inputId, handler){
+  const slot=$(slotId), input=$(inputId);
+  slot.addEventListener('click', ()=>input.click());
+  input.addEventListener('change', e=>{ handler(e.target.files[0]); e.target.value=''; });
+  ['dragover','dragenter'].forEach(ev=>slot.addEventListener(ev,e=>{e.preventDefault();slot.classList.add('over')}));
+  ['dragleave','drop'].forEach(ev=>slot.addEventListener(ev,e=>{e.preventDefault();slot.classList.remove('over')}));
+  slot.addEventListener('drop', e=>handler(e.dataTransfer.files[0]));
+}
+const stamp = () => new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+function readFile(f, done){ if(!f) return; const r=new FileReader(); r.onload=()=>done(r.result); r.readAsText(f); }
+
+wireSlot('#f-slate','#file', f=>readFile(f, txt=>{
+  csvText=txt; slate=parseSlate(txt); medImplied=slateMedianImplied(slate);
+  markSlot('#f-slate', f.name, 'loaded '+stamp()+' — click to replace');
+  $('#f-slate').classList.remove('req');
+  $('#go').disabled=false; $('#slatefilter').disabled=false;
+  $('#slateempty').style.display='none';
+  if(swapText) $('#swapgo').disabled=false;
+  renderSlate(); railMeta();
+}));
+wireSlot('#f-min','#minfile', f=>readFile(f, txt=>{
+  minText=txt; markSlot('#f-min', f.name, 'loaded '+stamp()); railMeta();
+}));
+wireSlot('#f-dk','#swapfile', f=>readFile(f, txt=>{
+  swapText=txt; markSlot('#f-dk', f.name, 'loaded '+stamp());
+  if(csvText) $('#swapgo').disabled=false;
+  railMeta();
+}));
+wireSlot('#f-con','#confile', f=>readFile(f, txt=>{
+  conText=txt; markSlot('#f-con', f.name, 'loaded '+stamp()); railMeta();
+}));
+
+// ---- the slate table: every lever is one click on the row ----
+let slateSort='proj', slateDir=-1;
+const MARKS=[['core','★','core'],['pool','◆','pool'],['remove','🚫','rm'],['cap','🔒','cap']];
+function toggleMark(kind, name){
+  if(sel[kind].has(name)) sel[kind].delete(name); else sel[kind].add(name);
+  renderSlate(); paintDock();
+}
+function paintDock(){
+  $('#d-core').textContent=sel.core.size; $('#d-pool').textContent=sel.pool.size;
+  $('#d-rm').textContent=sel.remove.size; $('#d-cap').textContent=sel.cap.size;
+}
+function renderSlate(){
+  if(!slate.length) return;
+  const q=$('#slatefilter').value.trim().toLowerCase();
+  let rows=slate.filter(r=>!q || r.name.toLowerCase().includes(q) || r.team.toLowerCase().includes(q));
+  rows.sort((a,b)=>{
+    const av=a[slateSort], bv=b[slateSort];
+    return (typeof av==='number' ? (av-bv) : String(av).localeCompare(String(bv)))*slateDir;
+  });
+  const cols=[['name','Player'],['team','Tm'],['pos','Pos'],['salary','Sal'],
+              ['proj','Proj'],['own','Own'],['implied','Impl']];
+  const head='<tr><th class="mkcol"></th>'+
+    cols.map(c=>'<th data-k="'+c[0]+'"'+(c[0]==='name'?'':' class="num"')+'>'+c[1]+'</th>').join('')+'</tr>';
+  const body=rows.map(r=>{
+    const marks=MARKS.map(([k,glyph,cls])=>
+      '<i class="mk '+cls+((sel[k].has(r.name)||(k==='pool'&&sel.core.has(r.name)))?' on':'')+
+      (k==='pool'&&sel.core.has(r.name)&&!sel.pool.has(r.name)?' implied':'')+'" data-k="'+k+
+      '" data-n="'+r.name.replace(/"/g,'&quot;')+'" title="'+k+'">'+glyph+'</i>').join('');
+    // implied total is the cut the field data keeps splitting on, so it earns a
+    // colour: at or above the slate median is where stacking pays.
+    const impCls = r.implied>=medImplied ? 'hi' : 'lo';
+    return '<tr'+(sel.remove.has(r.name)?' class="gone"':'')+'>'+
+      '<td class="mkcol">'+marks+'</td>'+
+      '<td>'+r.name+'</td><td class="num">'+r.team+'</td><td class="num">'+r.pos+'</td>'+
+      '<td class="num">$'+r.salary.toLocaleString()+'</td>'+
+      '<td class="num">'+r.proj.toFixed(1)+'</td>'+
+      '<td class="num">'+r.own.toFixed(1)+'%</td>'+
+      '<td class="num '+impCls+'">'+(r.implied?r.implied.toFixed(1):'—')+'</td></tr>';
+  }).join('');
+  const t=$('#slatetable'); t.innerHTML=head+body;
+  t.querySelectorAll('th[data-k]').forEach(th=>th.onclick=()=>{
+    const k=th.dataset.k; slateDir=(slateSort===k)?-slateDir:-1; slateSort=k; renderSlate();
+  });
+  t.querySelectorAll('.mk').forEach(m=>m.onclick=()=>toggleMark(m.dataset.k, m.dataset.n));
+  $('#slatecount').textContent=rows.length+' of '+slate.length;
+}
+$('#slatefilter').addEventListener('input', renderSlate);
 
 // ---- late swap ----
-let swapText='', conText='', swapData=null, swapTake=[];
-const swapdrop=$('#swapdrop'), swapfile=$('#swapfile');
-swapdrop.addEventListener('click',()=>swapfile.click());
-['dragover','dragenter'].forEach(ev=>swapdrop.addEventListener(ev,e=>{e.preventDefault();swapdrop.classList.add('over')}));
-['dragleave','drop'].forEach(ev=>swapdrop.addEventListener(ev,e=>{e.preventDefault();swapdrop.classList.remove('over')}));
-swapdrop.addEventListener('drop',e=>loadSwap(e.dataTransfer.files[0]));
-swapfile.addEventListener('change',e=>loadSwap(e.target.files[0]));
-function loadSwap(f){ if(!f) return; const r=new FileReader();
-  r.onload=()=>{ swapText=r.result; swapdrop.classList.add('loaded');
-    swapdrop.innerHTML='<b>✓ '+f.name+'</b><small>ready — hit recommend</small>';
-    $('#swapgo').disabled=false; };
-  r.readAsText(f); }
-const condrop=$('#condrop'), confile=$('#confile');
-condrop.addEventListener('click',()=>confile.click());
-['dragover','dragenter'].forEach(ev=>condrop.addEventListener(ev,e=>{e.preventDefault();condrop.classList.add('over')}));
-['dragleave','drop'].forEach(ev=>condrop.addEventListener(ev,e=>{e.preventDefault();condrop.classList.remove('over')}));
-condrop.addEventListener('drop',e=>loadCon(e.dataTransfer.files[0]));
-confile.addEventListener('change',e=>loadCon(e.target.files[0]));
-function loadCon(f){ if(!f) return; const r=new FileReader();
-  r.onload=()=>{ conText=r.result; condrop.classList.add('loaded');
-    condrop.innerHTML='<b>✓ '+f.name+'</b><small>real leaderboard position loaded</small>'; };
-  r.readAsText(f); }
-$('#swapgo').addEventListener('click',runSwap);
+$('#swapgo').addEventListener('click', runSwap);
 async function runSwap(){
-  if(!csvText){ showErr('Drop your updated LineStar CSV up top first — that is where the new projections and live scores come from.'); return; }
+  if(!csvText){ showErr('Drop the updated LineStar CSV first — that is where the new projections and live scores come from.'); return; }
   if(!swapText) return;
   const btn=$('#swapgo'); btn.disabled=true; btn.innerHTML='<span class="spin"></span>Simulating…';
   $('#err').style.display='none'; $('#note').style.display='none';
@@ -442,12 +471,12 @@ async function runSwap(){
     const res=await fetch('/api/lateswap',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({csv:csvText, dk:swapText, contest:conText,
         options:{maxExposure:(+$('#exp').value)/100,
-                 cores:corePicker.sel.join('\n'), pool:poolPicker.sel.join('\n'),
+                 cores:[...sel.core].join('\n'), pool:[...sel.pool].join('\n'),
                  minutes:minText}})});
     const data=await res.json();
     if(data.error) showErr(data.error); else renderSwaps(data);
   }catch(e){ showErr(e.message); }
-  btn.disabled=false; btn.textContent='Recommend late swaps';
+  btn.disabled=false; btn.textContent='🔄 Late swap';
 }
 function aggrTag(a){
   if(a>=0.62) return '<span style="color:var(--accent)">chasing upside</span>';
@@ -565,16 +594,16 @@ function paintSwapBar(){
 $('#go').addEventListener('click', run);
 async function run(){
   if(!csvText) return;
-  const btn = $('#go'); btn.disabled = true; btn.innerHTML = '<span class="spin"></span>Crunching…';
+  const btn = $('#go'); btn.disabled = true; btn.innerHTML = '<span class="spin"></span>Building…';
   $('#err').style.display='none'; $('#note').style.display='none';
   const options = {
     n:+$('#n').value, stack:+$('#stack').value,
     maxExposure:(+$('#exp').value)/100, leverage:(+$('#lev').value)/100,
     stackShare:(+$('#stk').value)/100,
-    cores:corePicker.sel.join('\n'), pool:poolPicker.sel.join('\n'),
-    remove:removePicker.sel.join('\n'), maxOffPool:+$('#offpool').value,
+    cores:[...sel.core].join('\n'), pool:[...sel.pool].join('\n'),
+    remove:[...sel.remove].join('\n'), maxOffPool:+$('#offpool').value,
     minCores:+$('#mincores').value,
-    capPlayers:capPicker.sel.join('\n'), capPct:+$('#cappct').value, minutes:minText,
+    capPlayers:[...sel.cap].join('\n'), capPct:+$('#cappct').value, minutes:minText,
   };
   try{
     const res = await fetch('/api/optimize', {method:'POST',headers:{'Content-Type':'application/json'},
@@ -583,7 +612,7 @@ async function run(){
     if(data.error){ showErr(data.error); }
     else { lastResult = data; render(data); }
   }catch(e){ showErr(e.message); }
-  btn.disabled=false; btn.textContent='Generate lineups';
+  btn.disabled=false; btn.textContent='Build lineups';
 }
 function showErr(m){ $('#err').style.display='block'; $('#err').textContent = m; }
 function showNote(m){ $('#note').style.display='block'; $('#note').textContent = m; }
