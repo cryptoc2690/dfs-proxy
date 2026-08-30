@@ -47,7 +47,25 @@ INDEX_HTML = r"""<!doctype html>
   .swapcard{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;background:var(--panel)}
   .swapcard.keep{opacity:.55;font-size:13px;padding:7px 12px}
   .swapcard.err{color:#e08080;font-size:13px}
-  .swaphdr{font-weight:600;margin-bottom:5px}
+  .swapcard.skipped{opacity:.5}
+  .swaphdr{display:flex;align-items:flex-start;gap:9px;flex-wrap:wrap;
+    font-weight:600;margin-bottom:5px}
+  .swaphdr .hdrtext{flex:1;min-width:0}
+  .swapchk{margin:3px 0 0;width:15px;height:15px;accent-color:var(--accent);cursor:pointer;flex:none}
+  .swaptoggle{background:none;border:1px solid var(--line);color:var(--muted);
+    border-radius:6px;font:inherit;font-size:11px;padding:2px 8px;cursor:pointer;flex:none}
+  .swaptoggle:hover{color:var(--fg);border-color:var(--muted)}
+  .cmp{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:9px}
+  .cmp h5{margin:0 0 5px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+  .cmp table{width:100%;border-collapse:collapse;font-size:12px}
+  .cmp td{padding:3px 4px;border-bottom:1px solid var(--line);white-space:nowrap}
+  .cmp td.slot{color:var(--muted);width:34px;font-size:10px}
+  .cmp td.num{text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+  .cmp tr.diff td{background:rgba(255,138,90,.10)}
+  .cmp tr.diff td.slot{color:var(--accent)}
+  .cmp .lockmark{color:var(--muted);font-size:10px}
+  .cmp tfoot td{border-bottom:none;padding-top:6px;color:var(--fg);font-weight:600}
+  @media(max-width:900px){ .cmp{grid-template-columns:1fr} }
   .swaprow{font-size:13px;padding:2px 0}
   .swaprow.out{color:#e88}
   .swaprow.in{color:var(--good)}
@@ -59,6 +77,8 @@ INDEX_HTML = r"""<!doctype html>
   .drop-menu.show{display:block}
   .drop-menu div{padding:8px 11px;cursor:pointer;font-size:14px}
   .drop-menu div:hover,.drop-menu div.active{background:var(--chip)}
+  .drop-menu div.nopick{cursor:default;color:var(--muted);font-size:13px}
+  .drop-menu div.nopick:hover{background:none}
   .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
   .chip{background:var(--chip);border:1px solid var(--line);border-radius:16px;padding:4px 10px;
     font-size:13px;display:flex;align-items:center;gap:7px}
@@ -328,24 +348,40 @@ function loadMin(f){ if(!f) return; const r=new FileReader();
   r.readAsText(f); }
 
 // ---- reusable type-ahead picker (used for cores and the full pool) ----
-function makePicker(prefix, icon){
+function makePicker(prefix, icon, onAdd){
   const input=$('#'+prefix+'in'), drop=$('#'+prefix+'drop'), chips=$('#'+prefix+'chips');
   const sel=[]; let active=-1;
+  const LIMIT=10;
   function show(){
     const q=input.value.trim().toLowerCase();
     const chosen=new Set(sel.map(s=>s.toLowerCase()));
-    let m=playerNames.filter(n=>!chosen.has(n.toLowerCase()));
-    if(q) m=m.filter(n=>n.toLowerCase().includes(q));
-    m=m.slice(0,8);
-    if(!m.length){ hide(); return; }
+    const hit=q ? playerNames.filter(n=>n.toLowerCase().includes(q)) : playerNames.slice();
+    let m=hit.filter(n=>!chosen.has(n.toLowerCase()));
+    // Say WHY there's nothing to pick. A silent empty dropdown reads as "this
+    // player doesn't exist", when usually she's already on the list.
+    if(!m.length){
+      const already=hit.filter(n=>chosen.has(n.toLowerCase()));
+      if(!already.length){ hide(); return; }
+      active=-1;
+      drop.innerHTML=already.slice(0,LIMIT).map(n=>
+        '<div class="nopick">'+n+' <span class="muted">already added</span></div>').join('');
+      drop.classList.add('show');
+      return;
+    }
+    const more=m.length-LIMIT;
+    m=m.slice(0,LIMIT);
     active=-1;
-    drop.innerHTML=m.map(n=>'<div>'+n+'</div>').join('');
-    drop.querySelectorAll('div').forEach(d=>d.onclick=()=>add(d.textContent));
+    drop.innerHTML=m.map(n=>'<div>'+n+'</div>').join('')+
+      // ...and say when the list is cut off, so a name that didn't fit doesn't
+      // look like it's missing from the slate.
+      (more>0?'<div class="nopick muted">+'+more+' more — keep typing</div>':'');
+    drop.querySelectorAll('div:not(.nopick)').forEach(d=>d.onclick=()=>add(d.textContent));
     drop.classList.add('show');
   }
   function hide(){ drop.classList.remove('show'); active=-1; }
   function paint(items){ items.forEach((it,i)=>it.classList.toggle('active',i===active)); }
-  function add(n){ if(!sel.includes(n)) sel.push(n); input.value=''; hide(); render(); input.focus(); }
+  function add(n){ if(!sel.includes(n)) sel.push(n); input.value=''; hide(); render();
+    if(onAdd) onAdd(n); input.focus(); }
   function remove(n){ const i=sel.indexOf(n); if(i>=0) sel.splice(i,1); render(); }
   function render(){
     chips.innerHTML=sel.map(n=>'<span class="chip">'+(icon?'<span class="core-star">'+icon+'</span>':'')+n+
@@ -355,16 +391,18 @@ function makePicker(prefix, icon){
   input.addEventListener('input', show);
   input.addEventListener('focus', show);
   input.addEventListener('keydown', e => {
-    const items=drop.querySelectorAll('div'); if(!items.length) return;
+    const items=drop.querySelectorAll('div:not(.nopick)'); if(!items.length) return;
     if(e.key==='ArrowDown'){ active=Math.min(active+1,items.length-1); paint(items); e.preventDefault(); }
     else if(e.key==='ArrowUp'){ active=Math.max(active-1,0); paint(items); e.preventDefault(); }
     else if(e.key==='Enter'){ if(active>=0){ add(items[active].textContent); e.preventDefault(); } }
     else if(e.key==='Escape'){ hide(); }
   });
-  return { sel, enable(){ input.disabled=false; input.placeholder='type a player…'; } };
+  return { sel, add, enable(){ input.disabled=false; input.placeholder='type a player…'; } };
 }
 document.addEventListener('click', e => { if(!e.target.closest('.typeahead')) document.querySelectorAll('.drop-menu').forEach(d=>d.classList.remove('show')); });
-const corePicker = makePicker('core','★');
+// A core already counts as in-pool everywhere in the build and in late swap, so
+// mirror it into the pool list rather than making you add it twice.
+const corePicker = makePicker('core','★', n => poolPicker.add(n));
 const poolPicker = makePicker('pool','');
 const removePicker = makePicker('remove','🚫');
 const capPicker = makePicker('cap','🔒');
@@ -372,7 +410,7 @@ function enablePickers(){ corePicker.enable(); poolPicker.enable(); removePicker
 $('#cappct').addEventListener('input', e => $('#capv').textContent = e.target.value);
 
 // ---- late swap ----
-let swapText='', conText='', lastSwapCsv='';
+let swapText='', conText='', swapData=null, swapTake=[];
 const swapdrop=$('#swapdrop'), swapfile=$('#swapfile');
 swapdrop.addEventListener('click',()=>swapfile.click());
 ['dragover','dragenter'].forEach(ev=>swapdrop.addEventListener(ev,e=>{e.preventDefault();swapdrop.classList.add('over')}));
@@ -418,20 +456,19 @@ function aggrTag(a){
 }
 function renderSwaps(d){
   const box=$('#swapresults'); box.style.display='block'; $('#welcome').style.display='none';
+  swapData=d;
+  // Every proposed change starts accepted; unticking one keeps that entry exactly
+  // as you entered it, and the download follows the ticks.
+  swapTake=d.swaps.map(s=>!s.keep && !s.error);
   const fieldTxt = d.field
     ? ' · field '+d.field.toLocaleString()+(d.winScore?', ~'+d.winScore+' projected to win':'')
     : ' · no contest file — position estimated from projections';
   let html='<div class="coach-h">🔄 Late swap — '+d.changed+' of '+d.entries+
     ' lineups to adjust · '+d.lockedPlayers+' locked'+fieldTxt+'</div>';
   if(d.dkCsv){
-    lastSwapCsv=d.dkCsv;
-    html+='<div class="note" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">'+
-      '<b>+'+d.gain.toFixed(1)+' simulated ceiling across '+d.changed+' lineups.</b>'+
-      '<button id="swapdl" class="btn ghost" style="width:auto;margin:0;padding:8px 14px">'+
-      '⬇ Download updated DK file</button>'+
-      '<span class="muted">all '+d.entries+' entries — upload straight back to DK</span></div>';
+    html+='<div class="note" id="swapbar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"></div>';
   }
-  html+=d.swaps.map(s=>{
+  html+=d.swaps.map((s,i)=>{
     if(s.error) return '<div class="swapcard err">#'+s.entryId+': '+s.error+'</div>';
     const pace = s.settled
       ? ' · <span class="muted">all players locked — nothing left to change</span>'
@@ -440,21 +477,86 @@ function renderSwaps(d){
       : (s.banked>0
         ? ' · banked <b>'+s.banked+'</b> vs '+s.expected+' expected ('+(s.pace>=0?'+':'')+s.pace+') · '+aggrTag(s.aggression)
         : '');
-    if(s.keep) return '<div class="swapcard keep">#'+s.entryId+' · keep as-is '+
-      '<span class="muted">('+s.open+' open, proj '+s.proj+')</span>'+pace+'</div>';
-    const row=(p,sign,cls)=>'<div class="swaprow '+cls+'">'+sign+' '+p.name+
-      (p.offPool?' <span class="offpool" title="not in your pool">◇</span>':'')+
-      ' <span class="muted">$'+p.salary.toLocaleString()+' · '+p.proj+' proj · '+p.own+'%</span></div>';
-    return '<div class="swapcard"><div class="swaphdr">#'+s.entryId+
+    const view = s.before ? '<button class="swaptoggle" data-i="'+i+'">view lineup</button>' : '';
+    if(s.keep) return '<div class="swapcard keep" id="sc'+i+'">'+
+      '<div class="swaphdr"><span class="hdrtext">#'+s.entryId+' · keep as-is '+
+      '<span class="muted">('+s.open+' open, proj '+s.proj+')</span>'+pace+'</span>'+view+'</div>'+
+      '<div class="cmpwrap" id="cw'+i+'" style="display:none"></div></div>';
+    return '<div class="swapcard" id="sc'+i+'">'+
+      '<div class="swaphdr">'+
+      '<input type="checkbox" class="swapchk" data-i="'+i+'" checked title="apply this swap">'+
+      '<span class="hdrtext">#'+s.entryId+
       ' <span class="gain">+'+s.gain+'</span> <span class="muted">'+
       (s.projGain!==undefined?'('+(s.projGain>=0?'+':'')+s.projGain+' proj) ':'')+'→ score '+s.score+
-      ', $'+s.salary.toLocaleString()+'</span>'+pace+'</div>'+
-      s.out.map(p=>row(p,'−','out')).join('')+s.in.map(p=>row(p,'+','in')).join('')+'</div>';
+      ', $'+s.salary.toLocaleString()+'</span>'+pace+'</span>'+view+'</div>'+
+      s.out.map(p=>swapRow(p,'−','out')).join('')+s.in.map(p=>swapRow(p,'+','in')).join('')+
+      '<div class="cmpwrap" id="cw'+i+'" style="display:none"></div></div>';
   }).join('');
   box.innerHTML=html;
-  const dl=$('#swapdl');
-  if(dl) dl.onclick=()=>{
-    const blob=new Blob([lastSwapCsv],{type:'text/csv'});
+  box.querySelectorAll('.swaptoggle').forEach(b=>b.onclick=()=>toggleCmp(+b.dataset.i,b));
+  box.querySelectorAll('.swapchk').forEach(c=>c.onchange=()=>{
+    swapTake[+c.dataset.i]=c.checked;
+    $('#sc'+c.dataset.i).classList.toggle('skipped',!c.checked);
+    paintSwapBar();
+  });
+  paintSwapBar();
+}
+function swapRow(p,sign,cls){
+  return '<div class="swaprow '+cls+'">'+sign+' '+p.name+
+    (p.offPool?' <span class="offpool" title="not in your pool">◇</span>':'')+
+    ' <span class="muted">$'+p.salary.toLocaleString()+' · '+p.proj+' proj · '+p.own+'%</span></div>';
+}
+// Side-by-side: what you entered vs what this would become, whole roster, so a
+// swap is never a name change with no context.
+function cmpTable(title, roster, other){
+  const names=new Set((other||[]).map(p=>p.name));
+  const rows=roster.map(p=>{
+    const diff=!names.has(p.name);
+    return '<tr'+(diff?' class="diff"':'')+'>'+
+      '<td class="slot">'+p.slot+'</td>'+
+      '<td>'+p.name+(p.locked?' <span class="lockmark">🔒</span>':'')+
+        (p.core?' <span class="core-star">★</span>':'')+
+        (p.offPool?' <span class="offpool">◇</span>':'')+'</td>'+
+      '<td class="num">'+p.team+'</td>'+
+      '<td class="num">$'+p.salary.toLocaleString()+'</td>'+
+      '<td class="num">'+(p.scored!=null?p.scored+' pt':p.proj+' pr')+'</td>'+
+      '<td class="num">'+p.own+'%</td></tr>';
+  }).join('');
+  const sal=roster.reduce((a,p)=>a+p.salary,0);
+  const proj=roster.reduce((a,p)=>a+(p.scored!=null?p.scored:p.proj),0);
+  return '<div><h5>'+title+'</h5><table><tbody>'+rows+'</tbody><tfoot><tr>'+
+    '<td class="slot"></td><td>total</td><td class="num"></td>'+
+    '<td class="num">$'+sal.toLocaleString()+'</td>'+
+    '<td class="num">'+proj.toFixed(1)+'</td><td class="num"></td>'+
+    '</tr></tfoot></table></div>';
+}
+function toggleCmp(i,btn){
+  const w=$('#cw'+i), s=swapData.swaps[i];
+  if(w.style.display!=='none'){ w.style.display='none'; btn.textContent='view lineup'; return; }
+  if(!w.innerHTML && s.before){
+    w.innerHTML='<div class="cmp">'+cmpTable('You entered',s.before,s.after)+
+      cmpTable(s.keep?'Unchanged':'Proposed',s.after,s.before)+'</div>';
+  }
+  w.style.display='block'; btn.textContent='hide lineup';
+}
+function paintSwapBar(){
+  const bar=$('#swapbar'); if(!bar||!swapData) return;
+  let take=0, gain=0;
+  swapData.swaps.forEach((s,i)=>{ if(swapTake[i]){ take++; gain+=s.gain||0; } });
+  bar.innerHTML='<b>+'+gain.toFixed(1)+' simulated ceiling across '+take+' lineup'+
+    (take===1?'':'s')+'.</b>'+
+    '<button id="swapdl" class="btn ghost" style="width:auto;margin:0;padding:8px 14px">'+
+    '⬇ Download updated DK file</button>'+
+    '<span class="muted">all '+swapData.entries+' entries — upload straight back to DK</span>'+
+    (take<swapData.changed
+      ? '<span class="muted">'+(swapData.changed-take)+' declined, kept as entered</span>' : '');
+  $('#swapdl').onclick=()=>{
+    const rows=[swapData.csvHeader];
+    swapData.swaps.forEach((s,i)=>{
+      const r = swapTake[i] ? s.rowAfter : s.rowBefore;
+      if(r) rows.push(r);
+    });
+    const blob=new Blob([rows.join('\n')+'\n'],{type:'text/csv'});
     const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
     a.download='DKEntries_lateswap.csv'; a.click();
   };

@@ -1258,6 +1258,36 @@ def _swap_payload(p, scored, pool_names=None):
             "offPool": bool(pool_names) and normalize_name(p.name) not in pool_names}
 
 
+def _roster_payload(roster, slots, scored, locked_names, pool_names, core_names):
+    """The full six in DK slot order, so the UI can show before vs after side by
+    side instead of just the two or three names that moved."""
+    out = []
+    for slot, p in zip(slots, roster):
+        n = normalize_name(p.name)
+        act = scored.get(n)
+        out.append({
+            "slot": slot, "name": p.name, "team": p.team, "pos": p.pos,
+            "salary": p.salary, "proj": round(p.proj, 1),
+            "own": round(p.ownership, 1),
+            "scored": None if act is None else round(act, 1),
+            "locked": n in locked_names,
+            "core": n in (core_names or ()),
+            "offPool": bool(pool_names) and n not in pool_names,
+        })
+    return out
+
+
+def _dk_row(entry, roster, dk_pool):
+    """One re-uploadable DK entries line for this roster."""
+    cells = []
+    for p in roster:
+        info = dk_pool.get(normalize_name(p.name))
+        cells.append(f'"{p.name} ({info["dkId"]})"' if info else f'"{p.name}"')
+    cname = entry["contest"].replace('"', '""')
+    return (f'{entry["entryId"]},"{cname}",{entry["contestId"]},{entry["fee"]},'
+            + ",".join(cells))
+
+
 def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
     """DK entries file + updated LineStar (+ optional contest standings) ->
     recommended swaps and a re-uploadable DK file. See the module note above."""
@@ -1474,23 +1504,30 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
             changed += 1
             gain_total += rec["gain"]
         rec["roster"] = final
+        rec["was"] = lineup
         results.append(rec)
 
     # Re-uploadable DK file: every entry, changed or not, in DK's slot order.
-    lines = ["Entry ID,Contest Name,Contest ID,Entry Fee," + ",".join(slots)]
+    # Each entry also carries its own before/after row, so the UI can let you
+    # decline an individual swap and still emit a complete, valid file.
+    csv_header = "Entry ID,Contest Name,Contest ID,Entry Fee," + ",".join(slots)
+    lines = [csv_header]
     for e, rec in zip(entries, results):
         roster = rec.pop("roster", None)
+        was = rec.pop("was", None)
         if not roster:
             continue
         # Keep UTIL on the latest game so it's the last slot to lock.
         roster = _util_holds_latest(roster, slots, dk["pool"], locked_names)
-        cells = []
-        for p in roster:
-            info = dk["pool"].get(normalize_name(p.name))
-            cells.append(f'"{p.name} ({info["dkId"]})"' if info else f'"{p.name}"')
-        cname = e["contest"].replace('"', '""')
-        lines.append(f'{e["entryId"]},"{cname}",{e["contestId"]},{e["fee"]},'
-                     + ",".join(cells))
+        # `was` is shown exactly as it sits in DK — re-slotting it would
+        # misrepresent what you actually entered.
+        rec["after"] = _roster_payload(roster, slots, scored, locked_names,
+                                       pool_names, core_names)
+        rec["before"] = _roster_payload(list(was), slots, scored, locked_names,
+                                        pool_names, core_names)
+        rec["rowAfter"] = _dk_row(e, roster, dk["pool"])
+        rec["rowBefore"] = _dk_row(e, was, dk["pool"])
+        lines.append(rec["rowAfter"])
     win_score = None
     if field_finals:  # informational: what the top 1% is projected to finish on
         win_score = round(field_finals[int(len(field_finals) * 0.99)], 1)
@@ -1502,6 +1539,7 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
         "changed": changed,
         "gain": round(gain_total, 1),
         "slots": slots,
+        "csvHeader": csv_header,
         "dkCsv": ("\n".join(lines) + "\n") if len(lines) > 1 else None,
         "swaps": results,
     }
