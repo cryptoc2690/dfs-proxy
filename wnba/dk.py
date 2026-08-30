@@ -8,7 +8,6 @@ hard-codes a cap number or a roster slot.
 
 from __future__ import annotations
 
-import csv
 import re
 import unicodedata
 from dataclasses import dataclass, field
@@ -140,52 +139,3 @@ def fantasy_points(stat: dict) -> float:
     elif doubles >= 2:
         fp += DOUBLE_DOUBLE_BONUS
     return round(fp, 2)
-
-
-def load_players(csv_path: str) -> list[Player]:
-    """Parse a DraftKings WNBA salary export (file path) into Player records."""
-    with open(csv_path, newline="", encoding="utf-8-sig") as fh:
-        return _parse_rows(csv.DictReader(fh))
-
-
-def load_players_from_text(text: str) -> list[Player]:
-    """Parse a DraftKings WNBA salary export (raw CSV text) into Player records."""
-    import io
-    return _parse_rows(csv.DictReader(io.StringIO(text.lstrip("﻿"))))
-
-
-def _parse_rows(reader) -> list[Player]:
-    players: list[Player] = []
-    for row in reader:
-            roster_pos = (row.get("Roster Position") or "").upper()
-            # "G/UTIL" -> guard, "F/UTIL" -> forward. Fall back to Position.
-            is_guard = "G" in roster_pos.split("/")[0] if "/" in roster_pos \
-                else "G" in (row.get("Position") or "")
-            game = _parse_game(row.get("Game Info", ""))
-            team = (row.get("TeamAbbrev") or "").strip()
-            opp = ""
-            if "@" in game:
-                a, b = game.split("@", 1)
-                opp = b if a == team else a
-            try:
-                salary = int(float(row.get("Salary") or 0))
-            except ValueError:
-                salary = 0
-            try:
-                avg = float(row.get("AvgPointsPerGame") or 0)
-            except ValueError:
-                avg = 0.0
-            players.append(Player(
-                name=(row.get("Name") or "").strip(),
-                dk_id=(row.get("ID") or "").strip(),
-                salary=salary,
-                team=team,
-                opponent=opp,
-                game=game,
-                is_guard=bool(is_guard),
-                avg_points=avg,
-                status=(row.get("Status") or "").strip(),
-                starting=(row.get("Starting") or "").strip(),
-                game_date=_parse_game_date(row.get("Game Info", "")),
-            ))
-    return players

@@ -462,7 +462,6 @@ def _coach(playable, lineups, options, slate_type, had_minutes, removed_info, po
     return [{"type": t, "text": x} for t, x in notes]
 
 
-HERE = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("PORT", "8000"))
 
 
@@ -792,22 +791,6 @@ def parse_dk_entries(text):
                 games[game] = start.isoformat() if start else None
     return {"slots": slots or ["G", "G", "F", "F", "F", "UTIL"],
             "entries": entries, "pool": pool, "games": games}
-
-
-def dk_locked_games(games):
-    """Games whose tip-off has already passed (ET), i.e. no longer swappable."""
-    from datetime import datetime, timedelta
-    now = datetime.utcnow() - timedelta(hours=4)  # WNBA season -> EDT
-    out = []
-    for g, iso in games.items():
-        if not iso:
-            continue
-        try:
-            if datetime.fromisoformat(iso) <= now:
-                out.append(g)
-        except ValueError:
-            pass
-    return sorted(out)
 
 
 def _util_holds_latest(roster, slots, pool, locked_names=()):
@@ -1421,9 +1404,6 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
         lineup = row["lineup"]
         current = next((l for l in lus if l.metrics.get("isCurrent")), None)
         cur_score = current.metrics["swapScore"] if current else None
-        open_names = {normalize_name(lineup[i].name) for i in range(ROSTER_SIZE)
-                      if normalize_name(lineup[i].name) not in locked_names}
-
         here = {normalize_name(p.name) for p in lineup}
 
         def exposure_ok(lu):
@@ -1438,7 +1418,7 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
             return True
 
         cur_proj = sum(p.proj for p in lineup)
-        pick, why = None, ""
+        pick = None
         for lu in lus:
             if lu.metrics.get("isCurrent"):
                 continue

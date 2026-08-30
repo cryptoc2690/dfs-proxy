@@ -247,7 +247,7 @@ INDEX_HTML = r"""<!doctype html>
 
       <button id="go" class="btn" disabled>Generate lineups</button>
 
-      <details id="swapwrap" style="margin-top:18px">
+      <details style="margin-top:18px">
         <summary style="cursor:pointer;font-weight:600;color:var(--text)">🔄 Late swap — already entered? adjust for news</summary>
         <div style="margin-top:10px">
           <div class="hint">Drop your DK entries export. Locked players stay pinned; every open slot is
