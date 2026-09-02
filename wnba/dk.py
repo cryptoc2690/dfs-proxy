@@ -1,9 +1,9 @@
-"""DraftKings WNBA Classic — contest rules and CSV parsing.
+"""DraftKings WNBA Classic — the ruleset and the Player record.
 
-This module knows nothing about projections or solving. It only turns a
-DraftKings salary export into clean Player records and encodes the DK
+This module knows nothing about projections or solving. It encodes the DK
 WNBA Classic ruleset in one place, so the rest of the codebase never
-hard-codes a cap number or a roster slot.
+hard-codes a cap number or a roster slot, and it defines the Player object
+that flows through the whole pipeline.
 """
 
 from __future__ import annotations
@@ -13,32 +13,14 @@ import unicodedata
 from dataclasses import dataclass, field
 
 # --- DraftKings WNBA Classic ruleset ------------------------------------
-# Roster: 6 players filling F, F, F, G, G, UTIL (confirmed from real contest
-# standings). DK only splits the WNBA into Guards and Forwards (no centers), so
-# every player is G- or F-eligible; the UTIL slot takes either.
+# Roster: 6 players filling G, G, F, F, F, UTIL (DK's own slot order in the
+# entries export). DK only splits the WNBA into Guards and Forwards (no
+# centers), so every player is G- or F-eligible; the UTIL slot takes either.
 SALARY_CAP = 50_000
 ROSTER_SIZE = 6
 MIN_GUARDS = 2    # two dedicated G slots must be filled by guards
 MIN_FORWARDS = 3  # three dedicated F slots must be filled by forwards
 # => the 6th (UTIL) is any -> guards in [2, 3], forwards in [3, 4].
-
-# DraftKings scoring (WNBA == NBA formula, including the DD/TD bonuses).
-SCORING = {
-    "pts": 1.0,
-    "fg3m": 0.5,
-    "reb": 1.25,
-    "ast": 1.5,
-    "stl": 2.0,
-    "blk": 2.0,
-    "turnover": -0.5,
-}
-DOUBLE_DOUBLE_BONUS = 1.5
-TRIPLE_DOUBLE_BONUS = 3.0
-
-# Status values in the DK CSV that mean "will not play" — hard-excluded.
-OUT_STATUSES = {"OUT", "O"}
-# Statuses that mean "playing but risky" — kept, but flagged.
-QUESTIONABLE_STATUSES = {"Q", "GTD", "D", "DTD", "P"}
 
 
 @dataclass
@@ -50,17 +32,13 @@ class Player:
     opponent: str
     game: str            # e.g. "SEA@NYL"
     is_guard: bool       # True => fills G/UTIL, False => fills F/UTIL
-    avg_points: float    # DK "AvgPointsPerGame" — the CSV's only projection input
-    status: str          # "", "OUT", "Q", ...
-    starting: str        # DK "Starting" flag if present
-    game_date: str = ""  # slate date, YYYY-MM-DD, parsed from Game Info
+    avg_points: float    # LineStar "PPG" — the player's season average
+    status: str          # "" or "OUT"
 
-    # Filled in by the projection layer (see projections.py). Kept here so a
-    # Player is the single object that flows through the whole pipeline.
     proj: float = 0.0
     floor: float = 0.0
     ceil: float = 0.0
-    ownership: float = 0.0   # projected ownership %, 0..100 (GPP leverage)
+    ownership: float = 0.0   # projected ownership %, 0..100
     core: bool = False       # flagged as a core play in a game-theory pool
     in_pool: bool = False    # member of the sharp's pool (build constraint set)
     starter: bool = False    # LineStar StartingStatus == 1 (confirmed starter)
@@ -69,7 +47,6 @@ class Player:
     risk: bool = False       # gated: projected minutes below the non-rotation floor
     raw_ceil: float = 0.0    # LineStar's ceiling before the low-minute cap, so the
                              # minutes pass can give it back to rotation players
-    trending: bool = False   # projection well above season baseline -> field hype
     implied: float = 0.0     # team's Vegas implied total (game environment)
     spread: float = 0.0      # team's Vegas spread (+ = underdog)
     notes: list[str] = field(default_factory=list)
@@ -79,36 +56,13 @@ class Player:
         return "G" if self.is_guard else "F"
 
     @property
-    def out(self) -> bool:
-        return self.status.upper() in OUT_STATUSES
-
-    @property
-    def questionable(self) -> bool:
-        return self.status.upper() in QUESTIONABLE_STATUSES
-
-    @property
     def value(self) -> float:
-        """Projected points per $1,000 of salary — the core cash yardstick."""
+        """Projected points per $1,000 of salary."""
         return self.proj / (self.salary / 1000.0) if self.salary else 0.0
-
-    def label(self) -> str:
-        return f"{self.name} ({self.dk_id})"
-
-
-def _parse_game(game_info: str) -> str:
-    """'SEA@NYL 08/05/2026 07:00PM ET' -> 'SEA@NYL'."""
-    m = re.match(r"\s*([A-Z]{2,4}@[A-Z]{2,4})", game_info or "")
-    return m.group(1) if m else (game_info or "").strip()
-
-
-def _parse_game_date(game_info: str) -> str:
-    """'SEA@NYL 08/05/2026 07:00PM ET' -> '2026-08-05'."""
-    m = re.search(r"(\d{2})/(\d{2})/(\d{4})", game_info or "")
-    return f"{m.group(3)}-{m.group(1)}-{m.group(2)}" if m else ""
 
 
 def normalize_name(name: str) -> str:
-    """Fold accents/punctuation/case so DK names match balldontlie names.
+    """Fold accents/punctuation/case so names match across sources.
 
     'Marine Johannès' -> 'marine johannes', "Flau'Jae Johnson" -> 'flaujae johnson'.
     """
@@ -116,26 +70,5 @@ def normalize_name(name: str) -> str:
     n = "".join(c for c in n if not unicodedata.combining(c))
     n = re.sub(r"[.'\-]", "", n.lower())
     n = re.sub(r"\s+", " ", n).strip()
-    # Drop common suffixes that DK/BDL disagree on.
+    # Drop common suffixes that sources disagree on.
     return re.sub(r"\b(jr|sr|ii|iii|iv)\b", "", n).strip()
-
-
-def fantasy_points(stat: dict) -> float:
-    """DraftKings fantasy points from a balldontlie box-score row, including
-    the double-double / triple-double bonuses (the piece the NBA proxy omits)."""
-    pts = stat.get("pts") or 0
-    reb = stat.get("reb") or 0
-    ast = stat.get("ast") or 0
-    stl = stat.get("stl") or 0
-    blk = stat.get("blk") or 0
-    to = stat.get("turnover") or 0
-    fg3 = stat.get("fg3m") or 0
-    fp = (pts * SCORING["pts"] + fg3 * SCORING["fg3m"] + reb * SCORING["reb"]
-          + ast * SCORING["ast"] + stl * SCORING["stl"] + blk * SCORING["blk"]
-          + to * SCORING["turnover"])
-    doubles = sum(1 for v in (pts, reb, ast, stl, blk) if v >= 10)
-    if doubles >= 3:
-        fp += TRIPLE_DOUBLE_BONUS
-    elif doubles >= 2:
-        fp += DOUBLE_DOUBLE_BONUS
-    return round(fp, 2)

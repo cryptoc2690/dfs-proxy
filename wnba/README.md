@@ -23,42 +23,49 @@ reconcile and no external API:
 | LineStar column | Used for |
 |---|---|
 | `Projected` | projection |
-| `Floor` / `Ceiling` | outcome band (sanity-checked; falls back to a projection-anchored band if a value looks wrong) |
-| `ProjOwn` | real projected ownership → GPP leverage |
-| `StartingStatus` | starter (1) gets a small construction lean; 0-proj / inactive is excluded |
+| `PPG` | season average |
+| `Floor` / `Ceiling` | the simulator's outcome band (sanity-checked; falls back to a projection-anchored band if a value looks wrong) |
+| `ProjOwn` | real projected ownership |
+| `Scored` | 0 pre-lock; live/final actual points mid-slate → what late swap runs on |
+| `StartingStatus` | starter (1) / bench (2); 0-proj / inactive (4) is excluded |
 | `Position` | G/F mapping (PG/SG → G, SF/PF → F) |
 | `Salary`, `Team`, `VersusStr` | cap, stacking game keys, home/away |
+| `Vegas`, `VegasImplied` | spread and team implied total → which offences are worth stacking |
 
-LineStar's own player IDs are **not** DraftKings IDs, so lineups export **by
-name** for manual entry.
+LineStar's own player IDs are **not** DraftKings IDs. For a re-uploadable file,
+drop a **DK entries export** (`DKEntries*.csv`) as well — it carries the real DK
+IDs alongside your Entry IDs.
 
 ## The ruleset
 
-DK WNBA Classic: **$50,000 cap, 6 players — F, F, F, G, G, UTIL** (2 guards, 3
-forwards, 1 flex). Scoring is the NBA formula plus double-double +1.5 /
-triple-double +3.
+DK WNBA Classic: **$50,000 cap, 6 players — G, G, F, F, F, UTIL** (2 guards, 3
+forwards, 1 flex), and a roster must span **at least two games**. Scoring is the
+NBA formula plus double-double +1.5 / triple-double +3.
 
 ## How it builds lineups
 
 1. **Clean the pool** — drop 0-projection players (out / inactive) and,
    dynamically, the minutes-punts: keep players by *upside* (ceiling), with the
    cutoff scaling to slate depth.
-2. **Build** a large pool of valid, salary-legal, game-stacked lineups, with a
-   small lean toward confirmed starters and a salary-reserve that adapts to
-   whether the slate is stars-and-scrubs or balanced.
+2. **Build** a large pool of valid, salary-legal lineups. A share of them are
+   *seeded* with a correlation stack (a high-implied-total team, or a big game)
+   rather than hoping one falls out of projection weighting; the salary reserve
+   adapts to whether the slate is stars-and-scrubs or balanced.
 3. **Simulate** thousands of slates (Beta-PERT outcomes + a shared per-game
    multiplier, so stacking pays off) and rank by ceiling.
-4. **Leverage-adjust** on *over-ownership* (ownership per point of ceiling)
-   using LineStar's projected ownership, so the set fades unbacked chalk without
-   fading good chalk.
-5. **Select** N under a per-player exposure cap **and** a pairwise-overlap cap,
-   so the lineups are genuinely different.
+4. **Ownership tilt** — off by default. Repeated reviews found fading is -EV at
+   this field size, so the slider starts neutral and only fades if you ask.
+5. **Select** N under a per-player exposure cap, a pairwise-overlap cap, a
+   pool-level team cap, and a per-core exposure floor, so the lineups are
+   genuinely different *and* still built around your conviction plays.
 
 ## Settings & inputs (all optional except the file)
 
-- **Lineups**, **min game stack**, **max exposure**, **fade chalk (leverage)**.
-- **Game-theory cores** (type-ahead): flag a sharp's core plays — small edge,
-  treated as chalk for leverage, diversified across the set, counted in-pool.
+- **Lineups**, **min game stack**, **stack seeking**, **max exposure**,
+  **fade chalk (leverage)**.
+- **Game-theory cores** (type-ahead): flag a sharp's core plays. No projection
+  edge — a core earns its place through a guaranteed exposure floor, so a
+  conviction pick can never get squeezed to 1-of-N.
 - **His full pool** (type-ahead) + **off-pool allowed per lineup** (0 / 1 / 2):
   a hard build constraint. At 0 every player comes from the pool; at 1–2 the app
   may spend a slot off-pool, but only when it makes a genuinely better lineup.

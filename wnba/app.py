@@ -72,11 +72,12 @@ def _parse_versus(vs, team):
 def parse_linestar(text):
     """Parse a LineStar projections export into Player records.
 
-    Projection, floor, ceiling and projected ownership all come straight from
-    the file. Floor/ceiling are sanity-checked against the projection (LineStar
-    occasionally ships a 0 floor or a ceiling barely above the projection); when
-    they look wrong we fall back to a projection-anchored band so the leverage
-    math — which divides by ceiling — still behaves.
+    Projection, season PPG, floor, ceiling and projected ownership all come
+    straight from the file. Floor/ceiling are sanity-checked against the
+    projection (LineStar occasionally ships a 0 floor or a ceiling barely above
+    the projection); when they look wrong we fall back to a projection-anchored
+    band, because those two numbers are the simulator's outcome band and a
+    broken one distorts every lineup the player appears in.
     """
     import csv as _csv
     import io
@@ -94,7 +95,7 @@ def parse_linestar(text):
         p = Player(
             name=name, dk_id=f"ls-{i}", salary=int(_f(d.get("Salary"))),
             team=team, opponent=opp, game=game, is_guard=is_guard,
-            avg_points=_f(d.get("PPG")), status="", starting="",
+            avg_points=_f(d.get("PPG")), status="",
         )
         p.starter = str(d.get("StartingStatus") or "").strip() == "1"
         p.implied = _f(d.get("VegasImplied"))
@@ -129,10 +130,9 @@ def parse_linestar(text):
         p.proj = round(proj, 1)
         p.ceil = round(ceil, 1)
         p.floor = round(floor, 1)
-        # Floor a playable player's ownership at 1%: leverage keys on ownership
-        # per point of ceiling, so a blank/0 ProjOwn would otherwise read as the
-        # most contrarian play on the board (free leverage) purely from missing
-        # data, not from being genuinely under-owned.
+        # Floor a playable player's ownership at 1%: a blank/0 ProjOwn would
+        # otherwise read as the most contrarian play on the board purely from
+        # missing data, not from being genuinely under-owned.
         own = _f(d.get("ProjOwn"))
         p.ownership = own if own > 0 else 1.0
         p.notes.append("LineStar" if p.starter else "LineStar · bench")
@@ -488,7 +488,8 @@ def run_optimize(csv_text: str, options: dict) -> dict:
     removed_info = _apply_removals(players, _parse_names(options.get("remove")))
     removed = [r["name"] for r in removed_info]
 
-    # Cores + pool. Cores get a small projection edge and count as in-pool; the
+    # Cores + pool. Cores count as in-pool and earn their place through exposure
+    # levers only (min_cores + the exposure floor), never a projection edge; the
     # pool itself is a build constraint enforced in the engine (max_off_pool).
     core_names = _parse_names(options.get("cores"))
     pool_names = _parse_names(options.get("pool"))
@@ -518,8 +519,8 @@ def run_optimize(csv_text: str, options: dict) -> dict:
                 "source": source_label}
 
     cores = [p for p in playable if p.core]
-    # A core is the sharp's conviction play — it only ever gets an UPWARD nudge
-    # (the projection edge above) and a guaranteed exposure floor in the engine.
+    # A core is the sharp's conviction play — it gets a guaranteed exposure floor
+    # in the engine and is never nudged on projection.
     # It's never faded or demoted for grading "weak": the tool grades each core in
     # the coach report so the call is conscious, but the machine never overrides
     # the sharp's pick (that's what buried DiJonai at 1-of-N). Everyone else earns
@@ -594,7 +595,7 @@ def run_optimize(csv_text: str, options: dict) -> dict:
             "game": p.game, "proj": round(p.proj, 1), "floor": round(p.floor, 1),
             "ceil": round(p.ceil, 1), "own": round(p.ownership, 1),
             "min": round(p.minutes, 0), "stuffer": round(p.stuffer, 1), "risk": p.risk,
-            "trending": p.trending, "core": p.core, "starter": p.starter,
+            "core": p.core, "starter": p.starter,
             "notes": "; ".join(p.notes),
         } for p in sorted(playable, key=lambda p: -p.proj)],
         "lineups": [{
