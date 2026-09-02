@@ -257,16 +257,43 @@ INDEX_HTML = r"""<!doctype html>
         without capping the whole board.</div>
     </div>
     <div>
-      <label>Fade chalk (leverage) — <span id="levv">0.00</span></label>
-      <input id="lev" class="slider" type="range" min="0" max="100" value="0">
-      <div class="hint">Off by default. Two reviews found fading chalk is −EV at this field
-        size — the chalkiest bucket had the highest top-1% rate. Raise it only if you
-        specifically want differentiation.</div>
+      <label>Ownership lean — <span id="levv">+0.35</span> <span class="muted">(− fade · + consensus)</span></label>
+      <input id="lev" class="slider" type="range" min="-100" max="100" value="35">
+      <div class="hint">Leans <b>toward</b> the field by default. Sorted by within-slate
+        ownership, the chalkiest fifth hit the top 1% at 3.0% and cashed 36% against 0.4%
+        and 10% for the least-owned, in 19 of 23 contests — and our own lineups averaged the
+        42nd ownership percentile against the winning tier's 70th. Kept modest because
+        ownership is a proxy for consensus quality, not an edge by itself.</div>
       <label>Stack seeking — <span id="stkv">50</span>% of lineups</label>
       <input id="stk" class="slider" type="range" min="0" max="100" value="50">
       <div class="hint">Builds this share AROUND a correlation stack: 3 from a high-implied
         team, or 5 from the biggest game (which must clear 178 combined). Low-total stacks
         are avoided — those finish worse than not stacking at all.</div>
+      <label>Sub-10%-owned players allowed per lineup</label>
+      <select id="sub10">
+        <option value="1" selected>1 — the default the data supports</option>
+        <option value="0">0 — none at all</option>
+        <option value="2">2</option>
+        <option value="off">No limit</option>
+      </select>
+      <div class="hint">58% of top-1% lineups carried none, against 37% of the field and 30%
+        of ours, and each extra one lowered cash and top-1% even at matched projection.
+        Cores are always exempt — your conviction play is never what gets cut.</div>
+      <label>Two-game slate shape rules</label>
+      <select id="slaterules">
+        <option value="on" selected>On — no 3-3 split, majority in the higher-owned game</option>
+        <option value="off">Off</option>
+      </select>
+      <div class="hint">Only bites on a two-game slate. 4-2 beat the balanced 3-3 on cash in
+        7 of 7 slates, and loading the higher-owned game won 7 of 7 (29.8% vs 12.3%).</div>
+      <label>Late swap fires on</label>
+      <select id="newsonly">
+        <option value="on" selected>News only — a scratch, a benching, a projection cut</option>
+        <option value="off">Anything that scores better (re-optimise freely)</option>
+      </select>
+      <div class="hint">Swaps forced by news gained 24.5 points an entry and went 15 for 15.
+        Re-optimising slots nobody had said anything about averaged 3.4 with 15 of 29
+        positive — noise — and one such night cost 125 points across 8 entries.</div>
     </div>
     <div class="boardsum" id="boardsum"></div>
   </div>
@@ -338,12 +365,13 @@ const GROUPS = [['core','Cores'],['pool','Pool'],['remove','Removed'],['cap','Ca
 // ---- settings ----
 const setSummary = () => {
   $('#setsum').textContent = 'Settings — ' + $('#n').value + ' lineups · ' +
-    $('#exp').value + '% max exposure · leverage ' + (+$('#lev').value/100).toFixed(2) +
+    $('#exp').value + '% max exposure · own lean ' + fmtLean($('#lev').value) +
     ' · stack seeking ' + $('#stk').value + '%';
   $('#d-set').textContent = $('#n').value + ' lineups · ' + $('#exp').value + '% cap';
 };
 $('#exp').addEventListener('input', e => { $('#expv').textContent = e.target.value; setSummary(); });
-$('#lev').addEventListener('input', e => { $('#levv').textContent = (e.target.value/100).toFixed(2); setSummary(); });
+const fmtLean = v => (v >= 0 ? '+' : '') + (v/100).toFixed(2);
+$('#lev').addEventListener('input', e => { $('#levv').textContent = fmtLean(e.target.value); setSummary(); });
 $('#stk').addEventListener('input', e => { $('#stkv').textContent = e.target.value; setSummary(); });
 $('#cappct').addEventListener('input', e => $('#capv').textContent = e.target.value);
 $('#n').addEventListener('input', setSummary);
@@ -500,6 +528,7 @@ async function runSwap(){
       body:JSON.stringify({csv:csvText, dk:swapText, contest:conText,
         options:{maxExposure:(+$('#exp').value)/100,
                  cores:[...sel.core].join('\n'), pool:[...sel.pool].join('\n'),
+                 newsOnly:$('#newsonly').value,
                  minutes:minText}})});
     const data=await res.json();
     if(data.error) showErr(data.error); else renderSwaps(data);
@@ -520,8 +549,12 @@ function renderSwaps(d){
   const fieldTxt = d.field
     ? ' · field '+d.field.toLocaleString()+(d.winScore?', ~'+d.winScore+' projected to win':'')
     : ' · no contest file — position estimated from projections';
+  const mode = d.newsOnly
+    ? ' · <b>news only</b>'+(d.newsCount?' — '+d.newsCount+' player(s) changed':' — nothing has changed')
+      +(d.hadBaseline?'':', no logged build to compare against so only scratches are detected')
+    : ' · re-optimising freely (news-only off)';
   let html='<div class="coach-h">🔄 Late swap — '+d.changed+' of '+d.entries+
-    ' lineups to adjust · '+d.lockedPlayers+' locked'+fieldTxt+'</div>';
+    ' lineups to adjust · '+d.lockedPlayers+' locked'+fieldTxt+mode+'</div>';
   if(d.dkCsv){
     html+='<div class="note" id="swapbar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"></div>';
   }
@@ -535,9 +568,10 @@ function renderSwaps(d){
         ? ' · banked <b>'+s.banked+'</b> vs '+s.expected+' expected ('+(s.pace>=0?'+':'')+s.pace+') · '+aggrTag(s.aggression)
         : '');
     const view = s.before ? '<button class="swaptoggle" data-i="'+i+'">view lineup</button>' : '';
+    const why = s.hold ? ' <span class="muted">— '+s.hold+'</span>' : '';
     if(s.keep) return '<div class="swapcard keep" id="sc'+i+'">'+
       '<div class="swaphdr"><span class="hdrtext">#'+s.entryId+' · keep as-is '+
-      '<span class="muted">('+s.open+' open, proj '+s.proj+')</span>'+pace+'</span>'+view+'</div>'+
+      '<span class="muted">('+s.open+' open, proj '+s.proj+')</span>'+why+pace+'</span>'+view+'</div>'+
       '<div class="cmpwrap" id="cw'+i+'" style="display:none"></div></div>';
     return '<div class="swapcard" id="sc'+i+'">'+
       '<div class="swaphdr">'+
@@ -626,7 +660,8 @@ async function run(){
   $('#err').style.display='none'; $('#note').style.display='none';
   const options = {
     n:+$('#n').value, stack:+$('#stack').value,
-    maxExposure:(+$('#exp').value)/100, leverage:(+$('#lev').value)/100,
+    maxExposure:(+$('#exp').value)/100, ownLean:(+$('#lev').value)/100,
+    maxSub10:$('#sub10').value, slateRules:$('#slaterules').value,
     stackShare:(+$('#stk').value)/100,
     cores:[...sel.core].join('\n'), pool:[...sel.pool].join('\n'),
     remove:[...sel.remove].join('\n'), maxOffPool:+$('#offpool').value,

@@ -44,6 +44,8 @@ class Player:
     starter: bool = False    # LineStar StartingStatus == 1 (confirmed starter)
     minutes: float = 0.0     # projected minutes (from the daily-projections file)
     stuffer: float = 0.0     # DK pts from NON-scoring cats (reb/ast/stl/blk) = floor
+    ls_proj: float = 0.0     # LineStar's raw projection, before the blend
+    daily_dk: float = 0.0    # DK points implied by the daily file's stat line
     risk: bool = False       # gated: projected minutes below the non-rotation floor
     raw_ceil: float = 0.0    # LineStar's ceiling before the low-minute cap, so the
                              # minutes pass can give it back to rotation players

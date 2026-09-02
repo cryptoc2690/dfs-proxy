@@ -16,6 +16,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from dk import ROSTER_SIZE, SALARY_CAP, Player, normalize_name
+from engine import CEILING_WEIGHT, STUD_SALARY, SUB10_OWN
 from engine import build_gpp as optimize_gpp
 
 
@@ -128,6 +129,7 @@ def parse_linestar(text):
         if floor <= 0 or floor < proj * 0.35 or floor >= proj:
             floor = round(proj * 0.6, 1)
         p.proj = round(proj, 1)
+        p.ls_proj = p.proj          # kept raw; blend_projections moves p.proj
         p.ceil = round(ceil, 1)
         p.floor = round(floor, 1)
         # Floor a playable player's ownership at 1%: a blank/0 ProjOwn would
@@ -213,6 +215,7 @@ def apply_daily_projections(players, text):
             continue
         p.minutes = d["minutes"]
         p.stuffer = d["stuffer"]
+        p.daily_dk = d["compdk"]
         p.risk = p.minutes < GATE_MINUTES  # gate flag: genuine non-rotation only
         # Real rotation minutes -> the ceiling wasn't a low-minute artifact, so
         # give back what the parse-time cap took (up to the looser multiple).
@@ -226,14 +229,75 @@ def apply_daily_projections(players, text):
     return True
 
 
-# ---------------- recency / ownership nudge (REMOVED) ----------------
-# There used to be a nudge here that inflated the projected ownership of players
-# trending above their season average, on the theory that the field over-owns
-# them. A 7-slate review tested the premise directly and it failed both halves:
-# "hot" players (projection >= 1.20x season PPG) drew LESS ownership than
-# projected (14.4% -> 13.5% actual), and they under-produced their projection by
-# 1.5 points. The rule was inflating ownership for players who neither got owned
-# up nor delivered, which then fed the leverage tilt and faded them further.
+# ---------------- projection blend ----------------
+# The 24-contest review's single biggest finding about OUR tool: we were
+# maximising the weakest signal available. Ranked by how well a lineup-level sum
+# predicts finish (Spearman vs finish percentile, negative = better):
+#
+#   realised ownership   -0.32     daily-file DK sum    -0.29
+#   projected ownership  -0.23     season PPG sum       -0.22
+#   LineStar projection  -0.19     LineStar ceiling     -0.17
+#
+# We sat at the 70th percentile of LineStar projection sum but the 49th of season
+# PPG and the 47th of projected ownership — i.e. we were near the top of the one
+# column that predicts least, and average on the ones that predict more. The
+# three add INDEPENDENTLY in a joint model, so this isn't a choice between them.
+#
+# At player level LineStar is still the best single point forecast (MAE 6.78 vs
+# 7.57 for season average), but it is optimistic by +0.9 on the players the field
+# actually rosters, and it over-reacts relative to the season baseline:
+#
+#   LineStar >= PPG + 3  ->  misses by 2.2 (negative in 17 of 23 slates), and
+#                            this is the MOST-owned bucket in the field
+#   LineStar <= PPG - 3  ->  beats by 3.1 (positive in 23 of 23 slates)
+#
+# Averaging the two removes that bias without hurting correlation (r 0.753 both
+# ways). It also fixes, for free, the exposure mistake the review pinned on us:
+# we ran +8.9 points of ownership ABOVE the field on "role bump" chalk (LineStar
+# well over season average) while sitting 3.1 BELOW the field on everything else.
+# Blending is the whole correction — we deliberately do NOT also add a separate
+# role-bump penalty, because that would double-count one belief twice, which is
+# the exact error that got the core projection edge deleted.
+PPG_WEIGHT = 0.5        # season average's share of the blend
+DAILY_DISAGREE = 2.0    # daily-vs-LineStar gap that earns the daily file a vote
+
+
+def blend_projections(players):
+    """Move p.proj from LineStar's raw number to a blend of the signals that
+    actually predict finish. Floor and ceiling ride along on the same ratio, so
+    LineStar's outcome SHAPE is preserved and only its level moves.
+
+    Run after apply_daily_projections, which is what fills in daily_dk."""
+    moved = 0
+    for p in players:
+        if p.proj <= 0 or p.ls_proj <= 0:
+            continue
+        ls, ppg, daily = p.ls_proj, p.avg_points, p.daily_dk
+        blend = ls
+        if ppg > 0:
+            blend = (1 - PPG_WEIGHT) * ls + PPG_WEIGHT * ppg
+        # The daily file only gets a vote where it DISAGREES with LineStar; that
+        # disagreement is directional, not noise. When the daily file sits 2-6
+        # points below LineStar, LineStar came in 3.3 too high (19 of 21 slates);
+        # when it sits 6+ above, LineStar came in 4.3 too low (15 of 21). The
+        # truth lands between the two, so a third vote is exactly right.
+        if daily > 0 and abs(daily - ls) >= DAILY_DISAGREE:
+            blend = (blend * 2 + daily) / 3.0
+        blend = max(blend, 0.1)
+        ratio = blend / ls
+        p.proj = round(blend, 1)
+        p.floor = round(p.floor * ratio, 1)
+        p.ceil = round(p.ceil * ratio, 1)
+        if p.raw_ceil:
+            p.raw_ceil = p.raw_ceil * ratio
+        if abs(p.proj - ls) >= 1.5:
+            moved += 1
+            p.notes.append(f"blend {p.proj:.1f} (LS {ls:.1f}"
+                           + (f", PPG {ppg:.1f}" if ppg > 0 else "")
+                           + (f", daily {daily:.1f}" if daily > 0 and
+                              abs(daily - ls) >= DAILY_DISAGREE else "") + ")")
+    return moved
+
 
 # ---------------- slate helpers ----------------
 def _slate_date(players):
@@ -301,7 +365,10 @@ _SLOTS = ["G", "G", "F", "F", "F", "UTIL"]
 def _slots_payload(slots):
     return [{"slot": s, "name": p.name, "team": p.team, "pos": p.pos,
              "salary": p.salary, "proj": round(p.proj, 1), "core": p.core,
-             "pool": p.in_pool, "starter": p.starter, "risk": p.risk and not p.core}
+             "pool": p.in_pool, "starter": p.starter, "risk": p.risk and not p.core,
+             # ownership and game are now construction rules, not just colour —
+             # show them where the lineup is shown
+             "own": round(p.ownership, 1), "game": p.game}
             for s, p in zip(_SLOTS, slots)]
 
 
@@ -341,6 +408,40 @@ def _coach(playable, lineups, options, slate_type, had_minutes, removed_info, po
     rel = ("on — sub-14-min non-rotation bodies gated out of the build"
            if had_minutes else "OFF — add the daily-projections CSV to turn it on")
     notes.append(("info", f"Baseline: {slate_type} slate, {n} lineups, minutes gate {rel}."))
+
+    # Where the set landed on the two things the 24-contest review said were
+    # costing us most: ownership position and sub-10%-owned bodies.
+    if lineups:
+        avg_own = sum(lu.total_own for lu in lineups) / len(lineups)
+        thin = sum(1 for lu in lineups for p in lu.players if p.ownership < SUB10_OWN)
+        zero_thin = sum(1 for lu in lineups
+                        if not any(p.ownership < SUB10_OWN for p in lu.players))
+        notes.append(("info",
+            f"Ownership read: your set averages {round(avg_own)}% total projected ownership, "
+            f"{zero_thin} of {n} lineups carry no sub-10%-owned player, and there are {thin} "
+            f"such players across the set. The winning tier ran ZERO of them in 58% of lineups "
+            f"against 37% for the field — that's the gap the review said was costing you most."))
+        studless = sum(1 for lu in lineups
+                       if not any(p.salary >= STUD_SALARY for p in lu.players))
+        if studless:
+            notes.append(("warn",
+                f"{studless} of {n} lineups have no ${STUD_SALARY:,}+ player — the slate may not "
+                f"have enough of them. Zero-stud lineups reach the top 1% at a third the rate."))
+
+    two_game = len({p.game for p in playable if p.game}) == 2
+    if two_game and lineups:
+        splits = {}
+        for lu in lineups:
+            g = {}
+            for p in lu.players:
+                g[p.game] = g.get(p.game, 0) + 1
+            splits[max(g.values())] = splits.get(max(g.values()), 0) + 1
+        shape = ", ".join(f"{k}-{ROSTER_SIZE - k}: {v}" for k, v in sorted(splits.items()))
+        notes.append(("info",
+            f"Two-game slate, so the shape rules are on ({shape}). The balanced 3-3 split is the "
+            f"worst construction measured (cash 17% vs 29% for 5-1) and the majority sits in the "
+            f"higher-owned game, which paid in 7 of 7 slates. Your whole set leans on that game — "
+            f"that's the trade the data asks for, but if it lays an egg the set goes with it."))
 
     cores = [p for p in playable if p.core]
 
@@ -483,6 +584,11 @@ def run_optimize(csv_text: str, options: dict) -> dict:
     if had_minutes:
         source_label += " + minutes"
 
+    # Blend LineStar with season PPG (and the daily file where it disagrees).
+    # This is the projection the rest of the build runs on — see blend_projections.
+    blended = blend_projections(players)
+    source_label += " · blended"
+
     # Manual removals (late scratch / missed shootaround the projection hasn't
     # caught). Zero them and flow their minutes/usage to teammates.
     removed_info = _apply_removals(players, _parse_names(options.get("remove")))
@@ -551,11 +657,13 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         # maxPerTeam only for a deliberate shootout stack.
         max_per_team=_int(options.get("maxPerTeam"), 3),
         max_exposure=_float(options.get("maxExposure"), 0.6),
-        # Ownership tilt, OFF by default. Two reviews now say fading is -EV at
-        # this field size: chalk won 6 of 7 slates in the latest one and the
-        # winning lineups consistently out-owned ours. The slider still fades if
-        # you want it to; it just no longer does so unasked.
-        leverage=_float(options.get("leverage"), 0.0),
+        # Ownership lean. POSITIVE leans toward the field's consensus, negative
+        # fades it. Three reviews running have said fading is -EV here, and the
+        # 24-contest study measured our lineups at the 42nd within-slate
+        # ownership percentile against the top-1% tier's 70th — we were on the
+        # wrong side of the field, not merely neutral. Kept modest on purpose:
+        # ownership is a proxy for consensus quality, not an edge of its own.
+        own_lean=_float(options.get("ownLean"), 0.35),
         n_sims=_int(options.get("sims"), 5000),
         cores=cores,
         # Anchor rule: every lineup built around at least this many cores (which
@@ -565,17 +673,24 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         max_overlap=_int(options.get("maxOverlap"), 4),
         max_off_pool=max_off_pool,
         stars_and_scrubs=(slate_type == "stars-and-scrubs"),
-        # Don't leave money on the table. Re-scored on the objective that
-        # actually pays (P(top 1%), not median finish), unspent salary hurts
-        # roughly 3x more than the median numbers implied: <=$300 left -> 1.87%
-        # top-1%, $300-700 -> 0.62%, $1,500+ -> 0.00%. Relaxes if the slate
-        # can't field enough lineups at this floor.
-        max_leftover=_int(options.get("maxLeftover"), 300),
+        # Salary floor, deliberately loose. The earlier read (<=$300 left ->
+        # 1.87% top-1%, $1,500+ -> 0.00%) did not survive a control for
+        # projection: the leftover coefficient goes from +0.029 pct_rank per
+        # $1k to -0.001 once lineup projection is held fixed. Leaving money on
+        # the table is a SYMPTOM of a weak lineup, not a cause, so this stays
+        # only as a junk filter and no longer spends candidate diversity.
+        max_leftover=_int(options.get("maxLeftover"), 700),
         # Seed a share of lineups with a correlation stack — high-implied-total
         # team 3-stacks and 4-5 man stacks of the biggest game. Projection
         # weighting alone produced these ~3 times in 20.
         stack_share=_float(options.get("stackShare"), 0.5),
         player_caps=player_caps,
+        # Cap on sub-10%-owned players per lineup, and the two-game shape rules.
+        # Both are review-driven hard constraints; both are switchable because
+        # the tool advises, it doesn't overrule.
+        max_sub10=(None if str(options.get("maxSub10")) == "off"
+                   else _int(options.get("maxSub10"), 1)),
+        slate_rules=str(options.get("slateRules", "on")) != "off",
     )
 
     result = {
@@ -645,6 +760,10 @@ def _lineup_log(lu, med_implied, game_totals):
         "proj": lu.proj,
         "ceiling": round(lu.metrics.get("ceiling", 0), 1),
         "totalOwn": lu.total_own,
+        # the two counts the review split hardest on, logged so the next one
+        # doesn't have to reconstruct them from the DK export
+        "subTenOwned": sum(1 for p in lu.players if p.ownership < SUB10_OWN),
+        "studs": sum(1 for p in lu.players if p.salary >= STUD_SALARY),
         "teamStack": teams[top_team],
         "stackTeam": top_team,
         "stackImplied": round(implied, 1),
@@ -684,9 +803,19 @@ def _log_build(result, players, lineups, options):
             "games": result.get("slate", {}).get("games", []),
             "slateType": result.get("slateType"),
             "medianImplied": round(med, 1),
+            # Which projection produced this build. Every review has asked for
+            # it: without it a change in results can be described across builds
+            # but never attributed to the input that caused it.
+            "projection": {
+                "source": result.get("source"),
+                "ppgWeight": PPG_WEIGHT,
+                "dailyDisagree": DAILY_DISAGREE,
+                "ceilingWeight": CEILING_WEIGHT,
+            },
             "options": {k: options.get(k) for k in (
-                "n", "leverage", "stackShare", "maxPerTeam", "maxLeftover",
-                "maxExposure", "minCores", "maxOverlap", "stack") if k in options},
+                "n", "ownLean", "stackShare", "maxPerTeam", "maxLeftover",
+                "maxExposure", "minCores", "maxOverlap", "stack",
+                "maxSub10", "slateRules") if k in options},
             "cores": [p.name for p in players if p.core],
             "pool": [p.name for p in players if p.in_pool],
             "removed": result.get("removed", []),
@@ -905,11 +1034,20 @@ def run_dk_fill(dk_text, lineups_names):
 
 
 # ---------------- late swap ----------------
-# Re-optimize already-entered lineups mid-slate. Locked players are fixed
-# constraints; the open slots plus whatever salary they leave are just a smaller
+# React to lineup news on already-entered lineups mid-slate. Locked players are
+# fixed constraints; the open slots plus whatever salary they leave are a smaller
 # instance of the problem the main engine already solves, so we score candidate
-# rosters with the SAME Monte-Carlo simulator rather than by raw projection —
-# GPP is won on lineup upside, not on the safest median.
+# rosters with the SAME Monte-Carlo simulator rather than by raw projection.
+#
+# "React to news" is the whole design, and it is narrower than what this used to
+# do. The 24-contest review measured both halves of the old behaviour: swaps
+# forced by a scratch or a benching gained 24.5 points an entry and were positive
+# 15 times out of 15, while re-optimising slots nobody had said anything about
+# averaged 3.4 with 15 of 29 positive — statistically nothing, and on one night
+# it cost 125 points across 8 entries. So by default a lineup is left alone
+# unless something changed about a player in it, and even then only that player
+# (plus one spare slot, so the replacement can be afforded) is allowed to move.
+# See SWAP_NEWS_PROJ_DROP for how "changed" is decided.
 #
 # The one addition over a normal build is position awareness. By late swap, the
 # locked players have already scored (LineStar's `Scored` column carries live
@@ -1217,7 +1355,7 @@ def _score_rosters(rosters, players, aggression, n_sims, seed, early_names=()):
     """
     from engine import Lineup, simulate_and_score
     lus = [Lineup(list(r)) for r in rosters]
-    simulate_and_score(lus, players, sims=n_sims, leverage=0.0, seed=seed)
+    simulate_and_score(lus, players, sims=n_sims, own_lean=0.0, seed=seed)
     k = max(0.0, aggression - 0.5) * SWAP_OWN_TILT
     early = set(early_names or ())
     for lu in lus:
@@ -1261,6 +1399,75 @@ def _roster_payload(roster, slots, scored, locked_names, pool_names, core_names)
     return out
 
 
+# News-driven swapping only.
+#
+# This is the sharpest result the 24-contest review produced about late swap,
+# and it says most of what this tool was doing had no edge:
+#
+#   swaps forced by news (OUT / benched / projection cut)
+#       +24.5 pts per entry, positive 15 of 15, cash 3 -> 9
+#   discretionary re-optimisation of un-started slots, no status change
+#       +3.4 pts per entry, 15 of 29 positive, p=0.49 — indistinguishable
+#       from noise, and one such night cost 125 points across 8 entries
+#
+# The mechanism is clear from the player side: LineStar-bench players who
+# actually started scored 2.1x their projection (+11.6) and expected starters who
+# sat lost 13.5, and every one of the 44 starter-flag disagreements happened in a
+# game AFTER the first tip. So the whole edge is reacting to lineup news inside
+# the swap window; re-shuffling players nobody has said anything about is churn.
+#
+# We hold a lineup unless something actually changed about a player in it. The
+# switch exists because the tool advises rather than overrules — but it defaults
+# to the side the data is on.
+SWAP_NEWS_PROJ_DROP = 0.25   # share of projection lost that counts as news
+SWAP_NEWS_MIN_DROP = 4.0     # ...and at least this many points, so noise is out
+
+
+def _news_baseline(slate_date):
+    """{norm name: proj} from the most recent logged build for this slate.
+
+    Uses the build log rather than asking for the pre-lock file again: the log is
+    already written on every build and is the only record of what we believed at
+    lock time."""
+    out = {}
+    try:
+        with open(LOG_PATH, encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if slate_date and rec.get("slate") != slate_date:
+                    continue
+                for lu in rec.get("lineups", []):
+                    for p in lu.get("players", []):
+                        nm = normalize_name(p.get("name", ""))
+                        if nm:
+                            out[nm] = p.get("proj", 0.0)
+    except OSError:
+        return {}
+    return out
+
+
+def _news_names(players, baseline):
+    """Players something has actually been said about since the build.
+
+    Ruled out is detectable from the fresh file alone; a projection cut needs the
+    logged baseline, so it only fires when a build for this slate was logged."""
+    news = {}
+    for p in players:
+        nm = normalize_name(p.name)
+        if p.proj <= 0 or p.status == "OUT":
+            news[nm] = "ruled out"
+            continue
+        was = baseline.get(nm, 0.0)
+        if was > 0:
+            drop = was - p.proj
+            if drop >= SWAP_NEWS_MIN_DROP and drop >= was * SWAP_NEWS_PROJ_DROP:
+                news[nm] = f"projection cut {was:.0f} to {p.proj:.0f}"
+    return news
+
+
 def _dk_row(entry, roster, dk_pool):
     """One re-uploadable DK entries line for this roster."""
     cells = []
@@ -1278,9 +1485,10 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
     options = options or {}
     players = parse_linestar((csv_text or "").strip())
     scored = parse_linestar_scored((csv_text or "").strip())
-    # Mirror the build's pipeline so the same player is judged the same way in
-    # both places: the minutes gate, then the recency ownership nudge.
+    # Mirror the build's pipeline exactly, so the same player is judged the same
+    # way in both places: minutes gate, then the projection blend.
     apply_daily_projections(players, options.get("minutes") or "")
+    blend_projections(players)
     if sum(1 for p in players if p.proj > 0) < ROSTER_SIZE:
         return {"error": "Drop your UPDATED LineStar CSV — it carries the new "
                          "projections and the live scores late swap needs."}
@@ -1324,6 +1532,11 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
         pool_names |= core_names
     for p in players:   # the minutes gate exempts cores, same as the build
         p.core = normalize_name(p.name) in core_names
+    # What has actually changed since the build. Everything downstream keys off
+    # this: no news about a lineup means the lineup is left alone.
+    news_only = str(options.get("newsOnly", "on")) != "off"
+    baseline = _news_baseline(_slate_date(players))
+    news = _news_names(players, baseline)
     # Players in the next game to tip: filling a slot from there costs optionality.
     starts = sorted({p["start"] for p in dk["pool"].values()
                      if p.get("start") and not p.get("locked")})
@@ -1342,12 +1555,15 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
             ranked.append(None)
             continue
         # A core is a conviction play — late swap protects it rather than
-        # treating it as an anonymous name to be optimized away. It only becomes
-        # releasable if the projection says it's genuinely broken (ruled out).
+        # treating it as an anonymous name to be optimized away. It becomes
+        # releasable only when there is actual news about it: ruled out, or a
+        # projection cut big enough to count. That is the one case where holding
+        # the sharp's pick is holding a player nobody expects to play.
         open_idx = [i for i in range(ROSTER_SIZE)
                     if normalize_name(lineup[i].name) not in locked_names
                     and not (normalize_name(lineup[i].name) in core_names
-                             and lineup[i].proj > 0)]
+                             and lineup[i].proj > 0
+                             and normalize_name(lineup[i].name) not in news)]
         locked_players = [lineup[i] for i in range(ROSTER_SIZE) if i not in open_idx]
         banked, expected, deficit, wdef = _pace_read(locked_players, scored)
         # Real standing beats the proxy: if the contest file gave us this entry,
@@ -1364,7 +1580,25 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
             rank = me["rank"]
         else:
             aggr = _aggression(wdef)
-        rosters = _enumerate_rosters(lineup, players, locked_names, open_idx, slots)
+        # Which slots we are actually willing to move. In news-only mode the
+        # answer is "the ones something was said about, plus one spare to make
+        # the salary work" — and that has to shape the ENUMERATION, not filter
+        # it afterwards, because the top combinations by projection all move
+        # several slots at once and the focused ones never make the shortlist.
+        news_idx = [i for i in open_idx
+                    if normalize_name(lineup[i].name) in news]
+        if news_only and news_idx:
+            spare = [i for i in open_idx if i not in news_idx]
+            open_sets = [news_idx] + [news_idx + [j] for j in spare]
+        else:
+            open_sets = [open_idx]
+        rosters, seen_r = [], set()
+        for oset in open_sets:
+            for r in _enumerate_rosters(lineup, players, locked_names, oset, slots):
+                key = frozenset(normalize_name(p.name) for p in r)
+                if key not in seen_r:
+                    seen_r.add(key)
+                    rosters.append(r)
         if not rosters:
             rosters = [list(lineup)]
         lus = _score_rosters(rosters, players, aggr, n_sims, seed=len(base_rows),
@@ -1375,12 +1609,19 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
                 normalize_name(p.name) for p in lu.players) == cur
         lus.sort(key=lambda l: -l.metrics["swapScore"])
         ranked.append(lus)
+        # News about anyone still movable in THIS lineup. A cored player is
+        # normally held out of open_idx, but news about a core is exactly the case
+        # where it should be released, so check the whole roster's open slots.
+        why = [f"{lineup[i].name}: {news[normalize_name(lineup[i].name)]}"
+               for i in range(ROSTER_SIZE)
+               if normalize_name(lineup[i].name) not in locked_names
+               and normalize_name(lineup[i].name) in news]
         base_rows.append({
             "entryId": e["entryId"], "open": len(open_idx),
             "banked": round(banked, 1), "expected": round(expected, 1),
             "pace": round(deficit, 1), "aggression": round(aggr, 2),
             "rank": rank, "projFinal": None if proj_final is None else round(proj_final, 1),
-            "lineup": lineup,
+            "lineup": lineup, "news": why,
         })
 
     # Pass 2: commit lineup by lineup under a portfolio exposure cap, so the set
@@ -1420,10 +1661,22 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
 
         cur_proj = sum(p.proj for p in lineup)
         pick = None
-        for lu in lus:
+        # Nothing has been said about anyone in this lineup, so there is nothing
+        # to react to. Re-optimising here is the move the data scored at noise.
+        held = news_only and not row["news"] and row["open"] > 0
+        # And when there IS news, react to the news — don't let one scratch
+        # license a rebuild of the whole roster. The measured edge is in
+        # replacing the player something was said about; every additional slot
+        # that moves alongside it is discretionary re-optimisation, which
+        # measured at noise. One spare slot is allowed because a straight
+        # one-for-one swap often can't be afforded under the cap.
+        move_cap = (len(row["news"]) + 1) if news_only else ROSTER_SIZE
+        for lu in ([] if held else lus):
             if lu.metrics.get("isCurrent"):
                 continue
             if lu.salary > SALARY_CAP:
+                continue
+            if len(here - {normalize_name(p.name) for p in lu.players}) > move_cap:
                 continue
             if not exposure_ok(lu):
                 continue
@@ -1469,6 +1722,10 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
             "proj": round(sum(p.proj for p in final), 1),
             "score": round((pick or current).metrics["swapScore"], 1) if (pick or current) else None,
             "keep": pick is None,
+            "news": row["news"],
+            # why we are holding, so a "keep" is never a silent shrug
+            "hold": ("no news on anyone still movable" if held
+                     else None if pick else "no move clears the gain threshold"),
         }
         if pick:
             # Never report a change without the diff that explains it — the UI
@@ -1519,6 +1776,9 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
         "entries": len(entries),
         "changed": changed,
         "gain": round(gain_total, 1),
+        "newsOnly": news_only,
+        "newsCount": len(news),
+        "hadBaseline": bool(baseline),
         "slots": slots,
         "csvHeader": csv_header,
         "dkCsv": ("\n".join(lines) + "\n") if len(lines) > 1 else None,
