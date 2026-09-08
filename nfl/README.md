@@ -6,20 +6,23 @@ file you can upload straight back to DK. Pure Python, no installs.
 ## Run it
 
 ```
-python3 nfl/app.py \
-  --proj  Stokastic_Projections_NE_SEA.csv \
-  --field Stokastic_NE_@_SEA_Lineups.csv \
-  --dk    DKEntries.csv \
-  --n 150 --split 75 \
-  --entries-at-build 56000 --field-cap 237812 \
-  --out upload.csv
+cd ~/Desktop/dfs-proxy && git pull && python3 nfl/app.py
 ```
 
-Then upload `upload.csv` to DraftKings.
+That opens a page in your browser. Drop the three files in, press **Build
+lineups**, then **Download DK file** and upload it to DraftKings. Same shape as
+the WNBA tool, different program — `wnba/app.py` will never show NFL.
+
+There is also a command-line path for scripted runs:
+
+```
+python3 nfl/app.py --proj proj.csv --field lineups.csv --dk DKEntries.csv \
+  --n 150 --split 75 --entries-at-build 56000 --field-cap 237812 --out upload.csv
+```
 
 ## The four files
 
-| Flag | File | Needed? |
+| Drop slot / flag | File | Needed? |
 |---|---|---|
 | `--proj` | Stokastic **projections** export (one row per player) | **Yes** |
 | `--field` | Stokastic **lineups** export (~9,000 rows) | Strongly recommended |

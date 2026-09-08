@@ -1,15 +1,23 @@
-"""NFL Showdown build — read the files, make the lineups, write the upload.
+"""NFL Showdown — server, builder and DK upload writer.
 
-    python3 nfl/app.py --proj stok_proj.csv --field stok_lineups.csv \
-        --dk DKEntries.csv --n 150 --split 75 --out upload.csv
+Run it with no arguments and it opens the drop-your-files page, the same way
+the WNBA tool does:
 
-Everything is optional except --proj. Without --dk you get a preview but no
-uploadable file (only DK's export carries your Entry IDs and DK's player IDs).
-Without --field you lose the duplication model and the opponent set, which is
-the one component that cannot be built cold-start — so supply it when you can.
+    python3 nfl/app.py
 
-`--split K` runs the A/B: K entries from our builder, the rest re-ranked from
-the vendor pool, tagged in the log. A split inside ONE contest is the only
+Or drive it from the command line for scripted runs:
+
+    python3 nfl/app.py --proj proj.csv --field lineups.csv --dk DKEntries.csv \
+        --n 150 --split 75 --out upload.csv
+
+Only the projections file is strictly required. Without the DK entries export
+there is no uploadable file — that export is the only thing carrying your Entry
+IDs and DK's per-slot player IDs. Without the vendor lineup pool you lose the
+opponent set and the duplication model, which is the one component that cannot
+be built with no results history.
+
+`split` runs the A/B: that many entries from our builder, the rest re-ranked out
+of the vendor pool, tagged in the log. Splitting inside ONE contest is the only
 design that removes slate luck from the comparison.
 """
 
@@ -19,16 +27,20 @@ import argparse
 import json
 import os
 import sys
+import webbrowser
 from datetime import datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import engine as E
-from dk import ROSTER_SIZE, SALARY_CAP, Lineup, normalize_name
+from dk import SALARY_CAP, normalize_name
+from gui import INDEX_HTML
 from sources import read_dk_entries, read_field, read_projections, read_sharp
 
 LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "logs", "nfl_builds.jsonl")
+PORT = int(os.environ.get("PORT", "8010"))
 
 
 def _read(path):
@@ -38,21 +50,29 @@ def _read(path):
         return fh.read()
 
 
-def _apply_sharp(players, pool_names, core_names):
-    for p in players:
-        n = normalize_name(p.name)
-        p.core = n in core_names
-        p.in_pool = p.core or (n in pool_names)
-    return (sum(1 for p in players if p.core),
-            sum(1 for p in players if p.in_pool))
+def _f(v, d=0.0):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return d
+
+
+def _i(v, d=0):
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return d
 
 
 def _attach_dk_ids(players, dk):
-    """Swap in DK's real player IDs. Names are the only bridge between
-    Stokastic and DK here, and the brief lists exactly which ones break, so
-    report the misses loudly rather than shipping a file with wrong IDs."""
+    """Swap in DK's real player IDs.
+
+    Showdown lists every player twice under two different ids — once as CPT at
+    1.5x salary, once as FLEX — so both are carried and the writer picks by
+    slot. A flex id in the captain cell is a file DK will not accept.
+    """
     if not dk or not dk.get("pool"):
-        return 0, []
+        return 0, [], []
     hit, miss, no_cpt = 0, [], []
     for p in players:
         rec = dk["pool"].get(normalize_name(p.name))
@@ -62,14 +82,13 @@ def _attach_dk_ids(players, dk):
             if not p.cpt_dk_id and p.proj > 0:
                 no_cpt.append(p.name)
             hit += 1
-        else:
+        elif p.proj > 0:
             miss.append(p.name)
     return hit, miss, no_cpt
 
 
-def _dk_rows(entries, lineups, contest_hdr):
-    """One re-uploadable DK line per entry, captain first."""
-    lines = [contest_hdr]
+def _dk_rows(entries, lineups, header):
+    lines = [header]
     for e, lu in zip(entries, lineups):
         cells = [f'"{p.name.strip()} ({p.upload_id(i == 0)})"'
                  for i, p in enumerate([lu.cpt] + lu.flex)]
@@ -82,21 +101,21 @@ def _dk_rows(entries, lineups, contest_hdr):
 def _log(lineups, meta):
     """One JSON line per ENTRY, not per build.
 
-    The `source` field is what makes the whole comparison possible; without it
-    logged at build time there is no way to answer whether the custom builder
-    earned its complexity. Structure fields are logged so a later review can
-    test the mechanism (was it the 5-1 splits?) and not just the outcome.
+    The source arm is what makes the comparison possible; without it recorded at
+    build time there is no way to answer whether the custom builder earned its
+    complexity. The structure fields are logged so a later review can test the
+    mechanism — was it the lopsided splits? — and not just the outcome.
     """
     try:
         os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
         ts = datetime.now().astimezone().isoformat(timespec="seconds")
+        ids = meta.get("entry_ids") or []
         with open(LOG_PATH, "a", encoding="utf-8") as fh:
             for i, lu in enumerate(lineups):
-                rec = {
+                fh.write(json.dumps({
                     "ts": ts, "slate": meta.get("slate"), "format": "showdown",
                     "contest_id": meta.get("contest_id"),
-                    "entry_id": meta.get("entry_ids", [None] * len(lineups))[i]
-                                if i < len(meta.get("entry_ids", [])) else None,
+                    "entry_id": ids[i] if i < len(ids) else None,
                     "source": lu.source,
                     "captain": lu.cpt.name, "captain_id": lu.cpt.dk_id,
                     "players": [{"name": p.name, "id": p.dk_id, "pos": p.pos,
@@ -112,245 +131,355 @@ def _log(lineups, meta):
                     "metrics": lu.metrics,
                     "settings": meta.get("settings", {}),
                     "contest_state": meta.get("contest_state", {}),
-                }
-                fh.write(json.dumps(rec) + "\n")
+                }) + "\n")
     except Exception as exc:                     # never let logging break a build
         print(f"  ! log write failed: {exc}", file=sys.stderr)
 
 
-def main(argv=None):
-    ap = argparse.ArgumentParser(description="DK NFL Showdown builder")
-    ap.add_argument("--proj", required=True, help="Stokastic projections CSV")
-    ap.add_argument("--field", help="Stokastic lineups CSV (the opponent field)")
-    ap.add_argument("--dk", help="DK entries export (needed for an upload file)")
-    ap.add_argument("--pool", help="sharp's pool, one name per line")
-    ap.add_argument("--cores", help="sharp's cores, one name per line")
-    ap.add_argument("--n", type=int, default=150)
-    ap.add_argument("--split", type=int, default=0,
-                    help="how many of --n come from OUR builder; rest from vendor")
-    ap.add_argument("--sims", type=int, default=4000)
-    ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--own-lean", type=float, default=E.OWN_LEAN,
-                    help="positive leans toward the field (showdown default)")
-    ap.add_argument("--captain-cap", type=float, default=E.CAPTAIN_CAP)
-    ap.add_argument("--min-captains", type=int, default=E.MIN_CAPTAINS)
-    ap.add_argument("--player-cap", type=float, default=E.PLAYER_CAP)
-    ap.add_argument("--max-leftover", type=int, default=E.MAX_LEFTOVER,
-                    help="most salary a lineup may leave unspent")
-    ap.add_argument("--min-proj", type=float, default=E.MIN_PROJ,
-                    help="a roster spot must project at least this much")
-    ap.add_argument("--max-off-pool", type=int, default=None,
-                    help="max non-pool players per lineup (needs --pool)")
-    ap.add_argument("--entries-at-build", type=int, default=None,
-                    help="contest entries so far — fill %% is a real edge, log it")
-    ap.add_argument("--field-cap", type=int, default=None)
-    ap.add_argument("--expect-entries", type=int, default=None,
-                    help="your read of the FINAL field size; scales duplication "
-                         "because the vendor pool models a capped field")
-    ap.add_argument("--out", default="nfl_upload.csv")
-    a = ap.parse_args(argv)
+def _lineup_payload(lu):
+    return {
+        "source": lu.source, "split": lu.split_label(),
+        "salary": lu.salary, "leftover": SALARY_CAP - lu.salary,
+        "proj": lu.proj, "ownSum": lu.own_sum,
+        "win": round(lu.metrics.get("win", 0.0), 5),
+        "dupes": round(lu.metrics.get("dupes", 0.0), 2),
+        "players": [{"slot": "CPT" if i == 0 else "FLEX", "name": p.name.strip(),
+                     "team": p.team, "pos": p.pos,
+                     "salary": p.cpt_salary() if i == 0 else p.salary,
+                     "proj": round(p.proj * (1.5 if i == 0 else 1.0), 1),
+                     "own": round(p.cpt_own if i == 0 else p.ownership, 1),
+                     "core": p.core, "pool": p.in_pool}
+                    for i, p in enumerate([lu.cpt] + lu.flex)],
+    }
 
-    print("== reading ==")
-    players, rep = read_projections(_read(a.proj))
+
+def run_build(proj_text, field_text="", dk_text="", options=None):
+    """The whole build. Returns plain dicts, so the CLI and the page share it."""
+    o = options or {}
+    notes = []
+
+    def say(kind, text):
+        notes.append({"type": kind, "text": text})
+
+    players, rep = read_projections(proj_text or "")
     if rep.get("error"):
-        print(f"  projections: {rep['error']}")
-        if rep.get("headers"):
-            print(f"  headers seen: {rep['headers']}")
-        return 2
-    print(f"  projections: {rep['players']} players from {rep['rows']} rows")
-    print(f"    matched: {', '.join(f'{k}<-{v}' for k, v in rep['matched'].items())}")
+        return {"error": f"Projections file: {rep['error']}",
+                "headers": rep.get("headers")}
+    say("info", f"Projections: {rep['players']} players read. Columns matched — "
+                + ", ".join(f"{k} from “{v}”" for k, v in rep["matched"].items()))
     if rep["unmatched"]:
-        print(f"    NOT FOUND (degrading): {', '.join(rep['unmatched'])}")
+        say("info", "Not present, so skipped: " + ", ".join(rep["unmatched"]))
 
     teams = sorted({p.team for p in players if p.team})
-    print(f"  teams: {teams}")
     if len(teams) != 2:
-        print("  ! showdown expects exactly 2 teams — check the file/filters")
-    # Fill in opponents when the file didn't carry them.
+        say("warn", f"Expected exactly two teams for a showdown, found {teams}.")
     if len(teams) == 2:
         for p in players:
             if not p.opponent and p.team:
                 p.opponent = teams[1] if p.team == teams[0] else teams[0]
 
-    dk = read_dk_entries(_read(a.dk)) if a.dk else None
+    dk = read_dk_entries(dk_text) if (dk_text or "").strip() else None
     if dk:
         hit, miss, no_cpt = _attach_dk_ids(players, dk)
-        print(f"  DK entries: {len(dk['entries'])} entries, "
-              f"{len(dk['pool'])} pool players, {hit} IDs matched")
+        say("good", f"DK entries: {len(dk['entries'])} entries, {hit} player IDs matched.")
         if miss:
-            print(f"    ! {len(miss)} unmatched by name: {', '.join(miss[:8])}"
-                  + (" ..." if len(miss) > 8 else ""))
+            say("warn", f"{len(miss)} projected players had no DK match by name: "
+                        + ", ".join(miss[:8]) + (" …" if len(miss) > 8 else ""))
         if no_cpt:
-            print(f"    ! no CAPTAIN id for: {', '.join(no_cpt[:8])} — these "
-                  f"cannot be captained in the upload file")
+            say("warn", "No CAPTAIN id for " + ", ".join(no_cpt[:6])
+                        + " — they cannot be captained in the upload file.")
 
     by_id = {p.dk_id: p for p in players}
     by_name = {normalize_name(p.name): p for p in players}
-    field, frep = ([], {})
-    if a.field:
-        field, frep = read_field(_read(a.field), by_id=by_id, by_name=by_name)
+    field, frep = [], {}
+    if (field_text or "").strip():
+        field, frep = read_field(field_text, by_id=by_id, by_name=by_name)
         if frep.get("error"):
-            print(f"  field: {frep['error']} — headers {frep.get('headers')}")
+            say("warn", f"Vendor lineup file: {frep['error']}")
         else:
-            print(f"  field: {frep['parsed']} of {frep['rows']} vendor lineups "
-                  f"parsed ({frep.get('unresolved_rosters', 0)} unresolved), "
-                  f"slots {frep['cpt_col']} + {len(frep['flex_cols'])} flex")
+            say("good", f"Vendor pool: {frep['parsed']:,} of {frep['rows']:,} "
+                        f"lineups read as the opponent field.")
 
-    pool_names = read_sharp(_read(a.pool)) if a.pool else set()
-    core_names = read_sharp(_read(a.cores)) if a.cores else set()
-    ncore, npool = _apply_sharp(players, pool_names, core_names)
+    pool_names = read_sharp(o.get("pool") or "")
+    core_names = read_sharp(o.get("cores") or "")
+    for p in players:
+        n = normalize_name(p.name)
+        p.core = n in core_names
+        p.in_pool = p.core or (n in pool_names)
     if pool_names or core_names:
-        print(f"  sharp: {ncore} cores, {npool} in pool")
+        say("info", f"Sharp's sheet: {sum(1 for p in players if p.core)} cores, "
+                    f"{sum(1 for p in players if p.in_pool)} in pool.")
 
-    # --- the arithmetic check that catches the per-slot ownership trap -----
-    # Showdown reports ownership per ROSTER SLOT, and the six slots are split
-    # across two columns: the flex column sums to 500% (five slots) and the
-    # captain column to 100% (one). Together 600%. Reading either one as "total
-    # ownership" silently corrupts every leverage and duplication figure, which
-    # is why this prints on every run rather than living in a comment.
+    # The arithmetic check for the per-slot ownership trap. Showdown reports
+    # ownership per ROSTER SLOT across two columns on different denominators:
+    # flex sums to 500% (five slots), captain to 100% (one). Neither one is
+    # "total ownership", and reading the wrong one silently corrupts every
+    # leverage and duplication figure — so this runs on every build.
     flex_own = sum(p.ownership for p in players)
     cpt_own = sum(p.cpt_own for p in players)
-    print(f"  ownership: flex {flex_own:.0f}% + captain {cpt_own:.0f}% "
-          f"= {flex_own + cpt_own:.0f}% across six slots")
-    if not (450 <= flex_own <= 650 and 550 <= flex_own + cpt_own <= 650):
-        print("    ! expected flex ~500% and flex+captain ~600%. Check which")
-        print("    ! ownership column was read — they are different quantities.")
+    ok_own = 450 <= flex_own <= 650 and 550 <= flex_own + cpt_own <= 650
+    say("good" if ok_own else "warn",
+        f"Ownership: {flex_own:.0f}% across the five flex slots + {cpt_own:.0f}% "
+        f"captain = {flex_own + cpt_own:.0f}% over six slots."
+        + ("" if ok_own else " Expected about 500 + 100. Check which ownership "
+                             "column was read — they are different quantities."))
 
-    print("\n== simulating ==")
-    mat = E.simulate(players, sims=a.sims, seed=a.seed)
-    bar, sampled = E.field_bar(field, mat, a.sims, seed=a.seed) if field else (None, 0)
-    if bar:
-        srt = sorted(bar)
-        print(f"  field bar from {sampled} opponents: "
-              f"median {srt[len(srt)//2]:.1f}, p10 {srt[len(srt)//10]:.1f}")
-    else:
-        print("  no field file — ranking on simulated score alone, no win rate")
+    sims = _i(o.get("sims"), 4000)
+    seed = _i(o.get("seed"), 0)
+    n = max(1, _i(o.get("n"), 150))
+    split = _i(o.get("split"), 0)
+
+    mat = E.simulate(players, sims=sims, seed=seed)
+    bar, sampled = E.field_bar(field, mat, sims, seed=seed) if field else (None, 0)
     idx = E.dupe_index(field) if field else {}
     modelled = E.field_size(field) if field else 0
-    dupe_scale = 1.0
-    if modelled and a.expect_entries:
-        dupe_scale = max(1.0, a.expect_entries / modelled)
-    if field:
-        print(f"  vendor pool: {len(idx):,} distinct lineups modelling "
-              f"{modelled:,.0f} opponent entries")
-        if a.expect_entries:
-            print(f"  expecting {a.expect_entries:,} real entries -> "
-                  f"duplication scaled x{dupe_scale:.2f}")
-        elif a.field_cap and modelled < a.field_cap * 0.9:
-            print(f"  ! contest holds up to {a.field_cap:,}. If it fills past "
-                  f"{modelled:,.0f}, duplication here is understated — pass "
-                  f"--expect-entries with your read of the final field.")
+    expect = _i(o.get("expectEntries"), 0)
+    field_cap = _i(o.get("fieldCap"), 0)
+    dupe_scale = max(1.0, expect / modelled) if (modelled and expect) else 1.0
 
-    n_mine = a.n if a.split == 0 else min(a.split, a.n)
-    n_vendor = a.n - n_mine
+    if bar:
+        srt = sorted(bar)
+        say("info", f"Score to beat, from {sampled:,} sampled opponents: "
+                    f"{srt[len(srt) // 2]:.0f} median.")
+        say("info", f"Vendor pool models {modelled:,.0f} opponent entries in "
+                    f"{len(idx):,} distinct lineups.")
+        if expect:
+            say("info", f"Scaling duplication ×{dupe_scale:.2f} for an expected "
+                        f"{expect:,}-entry field.")
+        elif field_cap and modelled < field_cap * 0.9:
+            say("warn", f"This contest holds up to {field_cap:,} but the vendor "
+                        f"pool models {modelled:,.0f}. If it fills past that, "
+                        f"duplication below is understated — put your read of "
+                        f"the final field size in “expected entries”.")
+    else:
+        say("warn", "No vendor lineup file, so there is no opponent field: "
+                    "lineups are ranked on simulated score alone, with no win "
+                    "rate and no real duplication estimate.")
+
+    n_mine = n if split <= 0 else min(split, n)
+    n_vendor = n - n_mine
     chosen = []
 
     if n_mine:
-        print(f"\n== building {n_mine} (ours) ==")
         cands = E.build_candidates(
             players, max(4000, n_mine * 30), teams=teams,
-            rng=__import__("random").Random(a.seed),
-            max_off_pool=a.max_off_pool, max_leftover=a.max_leftover,
-            min_proj=a.min_proj,
+            rng=__import__("random").Random(seed),
+            max_off_pool=(None if o.get("maxOffPool") in (None, "", "off")
+                          else _i(o.get("maxOffPool"), 0)),
+            max_leftover=_i(o.get("maxLeftover"), E.MAX_LEFTOVER),
+            min_proj=_f(o.get("minProj"), E.MIN_PROJ),
         )
-        print(f"  candidates: {len(cands)}")
         if not cands:
-            print("  ! built nothing — check salaries/teams in the projections file")
-            return 3
+            return {"error": "Built no legal lineups. Check the salaries and "
+                             "teams in the projections file.", "notes": notes}
         if bar:
-            E.rank(cands, mat, bar, a.sims, idx, own_lean=a.own_lean,
+            E.rank(cands, mat, bar, sims, idx,
+                   own_lean=_f(o.get("ownLean"), E.OWN_LEAN),
                    dupe_scale=dupe_scale)
         else:
             for lu in cands:
-                sc = E.score_lineup(lu, mat, a.sims)
-                lu.metrics = {"mean": round(sum(sc) / a.sims, 2),
-                              "dupes": round(E.estimated_dupes(lu, idx, scale=dupe_scale), 2)}
-                lu.metrics["score"] = lu.metrics["mean"] / (1 + lu.metrics["dupes"])
+                sc = E.score_lineup(lu, mat, sims)
+                d = E.estimated_dupes(lu, idx, scale=dupe_scale)
+                lu.metrics = {"mean": round(sum(sc) / sims, 2), "dupes": round(d, 2)}
+                lu.metrics["score"] = lu.metrics["mean"] / (1 + d)
             cands.sort(key=lambda l: -l.metrics["score"])
-        mine = E.select(cands, n_mine, captain_cap=a.captain_cap,
-                        min_captains=a.min_captains, player_cap=a.player_cap,
-                        split_targets=E.SPLIT_TARGETS)
-        chosen += mine
+        chosen += E.select(cands, n_mine,
+                           captain_cap=_f(o.get("captainCap"), E.CAPTAIN_CAP),
+                           min_captains=_i(o.get("minCaptains"), E.MIN_CAPTAINS),
+                           player_cap=_f(o.get("playerCap"), E.PLAYER_CAP),
+                           split_targets=E.SPLIT_TARGETS)
+        say("info", f"Built {len(chosen)} lineups from {len(cands):,} candidates.")
 
     if n_vendor:
-        print(f"\n== taking {n_vendor} (vendor, re-ranked) ==")
         if not field:
-            print("  ! --split needs --field; skipping the vendor arm")
+            say("warn", "The vendor half of the split needs the vendor lineup "
+                        "file; skipping it.")
         else:
             chosen += E.vendor_arm(field, n_vendor, players_by_id=by_id,
-                                   captain_cap=a.captain_cap,
-                                   min_captains=a.min_captains,
-                                   player_cap=a.player_cap,
+                                   captain_cap=_f(o.get("captainCap"), E.CAPTAIN_CAP),
+                                   min_captains=_i(o.get("minCaptains"), E.MIN_CAPTAINS),
+                                   player_cap=_f(o.get("playerCap"), E.PLAYER_CAP),
                                    dupe_scale=dupe_scale)
 
     if not chosen:
-        print("no lineups produced")
-        return 3
+        return {"error": "No lineups produced.", "notes": notes}
 
-    # --- report -----------------------------------------------------------
-    print(f"\n== {len(chosen)} lineups ==")
-    splits, caps, arms = {}, {}, {}
-    for lu in chosen:
-        splits[lu.split_label()] = splits.get(lu.split_label(), 0) + 1
-        caps[lu.cpt.name] = caps.get(lu.cpt.name, 0) + 1
-        arms[lu.source] = arms.get(lu.source, 0) + 1
-    print(f"  arms:     {splits and arms}")
-    print(f"  splits:   {dict(sorted(splits.items(), reverse=True))}")
-    print(f"  captains: {len(caps)} distinct, top = "
-          + ", ".join(f"{k} {v}" for k, v in
-                      sorted(caps.items(), key=lambda kv: -kv[1])[:5]))
-    sal = [lu.salary for lu in chosen]
-    print(f"  salary:   {min(sal)}-{max(sal)}")
-    own = [lu.own_sum for lu in chosen]
-    print(f"  own sum:  {sum(own)/len(own):.0f} avg")
-    dup = [lu.metrics.get("dupes", 0) for lu in chosen]
-    print(f"  est dupes: {sum(dup)/len(dup):.2f} avg, {max(dup):.1f} max")
+    entries_at_build = _i(o.get("entriesAtBuild"), 0)
+    fill = (round(100.0 * entries_at_build / field_cap, 1)
+            if entries_at_build and field_cap else None)
+    if fill is not None:
+        say("good" if fill < 84.1 else "info",
+            f"Contest is {fill}% full. Break-even fill on a guaranteed pool is "
+            f"84.1%" + (" — every entry is worth more than it costs."
+                        if fill < 84.1 else "."))
 
-    print("\n  top 5:")
-    for lu in chosen[:5]:
-        m = lu.metrics
-        print(f"   {lu.split_label()} CPT {lu.cpt.name:<22} "
-              f"${lu.salary} proj {lu.proj:6.1f} own {lu.own_sum:5.1f} "
-              f"win {m.get('win', 0):.4f} dup {m.get('dupes', 0):.1f}")
-        print(f"        " + ", ".join(f"{p.name}({p.team})" for p in lu.flex))
-
-    # --- upload file -------------------------------------------------------
     meta = {
         "slate": datetime.now().astimezone().date().isoformat(),
-        "settings": {"n": a.n, "split": a.split, "sims": a.sims,
-                     "own_lean": a.own_lean, "captain_cap": a.captain_cap,
-                     "min_captains": a.min_captains, "player_cap": a.player_cap,
-                     "max_off_pool": a.max_off_pool, "seed": a.seed},
-        "contest_state": {"entries_at_build": a.entries_at_build,
-                          "field_cap": a.field_cap,
-                          "expect_entries": a.expect_entries,
+        "settings": {"n": n, "split": split, "sims": sims, "seed": seed,
+                     "ownLean": _f(o.get("ownLean"), E.OWN_LEAN),
+                     "captainCap": _f(o.get("captainCap"), E.CAPTAIN_CAP),
+                     "minCaptains": _i(o.get("minCaptains"), E.MIN_CAPTAINS),
+                     "playerCap": _f(o.get("playerCap"), E.PLAYER_CAP),
+                     "minProj": _f(o.get("minProj"), E.MIN_PROJ)},
+        "contest_state": {"entries_at_build": entries_at_build or None,
+                          "field_cap": field_cap or None,
+                          "expect_entries": expect or None,
                           "vendor_field_modelled": modelled,
-                          "dupe_scale": round(dupe_scale, 3),
-                          "fill_pct": (round(100.0 * a.entries_at_build / a.field_cap, 2)
-                                       if a.entries_at_build and a.field_cap else None)},
+                          "dupe_scale": round(dupe_scale, 3), "fill_pct": fill},
     }
-    if dk and dk["entries"]:
-        entries = dk["entries"][:len(chosen)]
-        if len(entries) < len(chosen):
-            print(f"\n  ! DK file has {len(entries)} entries but {len(chosen)} "
-                  f"lineups were built — writing {len(entries)}")
-            chosen = chosen[:len(entries)]
-        hdr = "Entry ID,Contest Name,Contest ID,Entry Fee," + ",".join(dk["slots"])
-        with open(a.out, "w", encoding="utf-8") as fh:
-            fh.write(_dk_rows(entries, chosen, hdr))
-        print(f"\n  wrote {a.out} ({len(chosen)} entries)")
-        meta["entry_ids"] = [e["entry_id"] for e in entries]
-        meta["contest_id"] = entries[0]["contest_id"]
-    else:
-        print("\n  no --dk file, so no uploadable CSV was written")
 
-    if meta["contest_state"]["fill_pct"] is not None:
-        f = meta["contest_state"]["fill_pct"]
-        print(f"  contest fill at build: {f}% "
-              f"({'OVERLAY — pool is guaranteed' if f < 84.1 else 'no overlay'})")
+    dk_csv = None
+    if dk and dk["entries"]:
+        ents = dk["entries"][:len(chosen)]
+        if len(ents) < len(chosen):
+            say("warn", f"The DK file has {len(ents)} entries but {len(chosen)} "
+                        f"lineups were built — writing the first {len(ents)}.")
+            chosen = chosen[:len(ents)]
+        header = "Entry ID,Contest Name,Contest ID,Entry Fee," + ",".join(dk["slots"])
+        dk_csv = _dk_rows(ents, chosen, header)
+        meta["entry_ids"] = [e["entry_id"] for e in ents]
+        meta["contest_id"] = ents[0]["contest_id"]
+    else:
+        say("warn", "No DK entries file, so there is no uploadable CSV — that "
+                    "export is the only source of your Entry IDs and DK's "
+                    "per-slot player IDs.")
 
     _log(chosen, meta)
-    print(f"  logged {len(chosen)} entries to {LOG_PATH}")
+
+    arms, splits, caps = {}, {}, {}
+    for lu in chosen:
+        arms[lu.source] = arms.get(lu.source, 0) + 1
+        splits[lu.split_label()] = splits.get(lu.split_label(), 0) + 1
+        caps[lu.cpt.name.strip()] = caps.get(lu.cpt.name.strip(), 0) + 1
+    return {
+        "notes": notes,
+        "teams": teams,
+        "summary": {
+            "n": len(chosen), "arms": arms,
+            "splits": dict(sorted(splits.items(), reverse=True)),
+            "captains": len(caps),
+            "topCaptains": sorted(caps.items(), key=lambda kv: -kv[1])[:6],
+            "salaryLo": min(lu.salary for lu in chosen),
+            "salaryHi": max(lu.salary for lu in chosen),
+            "projAvg": round(sum(lu.proj for lu in chosen) / len(chosen), 1),
+            "ownAvg": round(sum(lu.own_sum for lu in chosen) / len(chosen), 1),
+            "dupeAvg": round(sum(lu.metrics.get("dupes", 0) for lu in chosen)
+                             / len(chosen), 2),
+            "fill": fill,
+        },
+        "lineups": [_lineup_payload(lu) for lu in chosen],
+        "dkCsv": dk_csv,
+        "logPath": LOG_PATH,
+    }
+
+
+# ---------------- server ----------------
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def _send(self, code, body, ctype="application/json"):
+        data = body.encode() if isinstance(body, str) else body
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        if self.path in ("/", "/index.html"):
+            self._send(200, INDEX_HTML, "text/html; charset=utf-8")
+        else:
+            self._send(404, json.dumps({"error": "not found"}))
+
+    def do_POST(self):
+        if self.path != "/api/build":
+            return self._send(404, json.dumps({"error": "not found"}))
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            p = json.loads(self.rfile.read(length) or b"{}")
+            if not (p.get("proj") or "").strip():
+                return self._send(400, json.dumps(
+                    {"error": "Drop the Stokastic projections CSV first."}))
+            result = run_build(p.get("proj") or "", p.get("field") or "",
+                               p.get("dk") or "", p.get("options") or {})
+            self._send(400 if result.get("error") else 200, json.dumps(result))
+        except Exception as exc:                             # noqa: BLE001
+            self._send(500, json.dumps({"error": str(exc)}))
+
+
+def serve():
+    srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    url = f"http://127.0.0.1:{PORT}/"
+    print(f"NFL Showdown optimizer — {url}")
+    print("Drop your files in the browser. Ctrl-C here to stop.")
+    try:
+        webbrowser.open(url)
+    except Exception:                                        # noqa: BLE001
+        pass
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        print("\nstopped")
+    return 0
+
+
+# ---------------- command line ----------------
+def main(argv=None):
+    ap = argparse.ArgumentParser(description="DK NFL Showdown builder")
+    ap.add_argument("--proj", help="Stokastic projections CSV")
+    ap.add_argument("--field", help="Stokastic lineups CSV (the opponent field)")
+    ap.add_argument("--dk", help="DK entries export (needed for an upload file)")
+    ap.add_argument("--pool", help="sharp's pool, one name per line")
+    ap.add_argument("--cores", help="sharp's cores, one name per line")
+    ap.add_argument("--n", type=int, default=150)
+    ap.add_argument("--split", type=int, default=0)
+    ap.add_argument("--sims", type=int, default=4000)
+    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--own-lean", type=float, default=E.OWN_LEAN)
+    ap.add_argument("--captain-cap", type=float, default=E.CAPTAIN_CAP)
+    ap.add_argument("--min-captains", type=int, default=E.MIN_CAPTAINS)
+    ap.add_argument("--player-cap", type=float, default=E.PLAYER_CAP)
+    ap.add_argument("--max-leftover", type=int, default=E.MAX_LEFTOVER)
+    ap.add_argument("--min-proj", type=float, default=E.MIN_PROJ)
+    ap.add_argument("--max-off-pool", type=int, default=None)
+    ap.add_argument("--entries-at-build", type=int, default=None)
+    ap.add_argument("--field-cap", type=int, default=None)
+    ap.add_argument("--expect-entries", type=int, default=None)
+    ap.add_argument("--out", default="nfl_upload.csv")
+    a = ap.parse_args(argv)
+
+    if not a.proj:                    # no files named -> open the page
+        return serve()
+
+    res = run_build(_read(a.proj), _read(a.field), _read(a.dk), {
+        "pool": _read(a.pool), "cores": _read(a.cores),
+        "n": a.n, "split": a.split, "sims": a.sims, "seed": a.seed,
+        "ownLean": a.own_lean, "captainCap": a.captain_cap,
+        "minCaptains": a.min_captains, "playerCap": a.player_cap,
+        "maxLeftover": a.max_leftover, "minProj": a.min_proj,
+        "maxOffPool": a.max_off_pool, "entriesAtBuild": a.entries_at_build,
+        "fieldCap": a.field_cap, "expectEntries": a.expect_entries,
+    })
+    for note in res.get("notes", []):
+        print(f"  [{note['type']}] {note['text']}")
+    if res.get("error"):
+        print(f"\nERROR: {res['error']}")
+        return 2
+    s = res["summary"]
+    print(f"\n== {s['n']} lineups ==")
+    print(f"  arms      {s['arms']}")
+    print(f"  splits    {s['splits']}")
+    print(f"  captains  {s['captains']} distinct, top "
+          + ", ".join(f"{k} {v}" for k, v in s["topCaptains"][:5]))
+    print(f"  salary    {s['salaryLo']}-{s['salaryHi']}")
+    print(f"  proj avg  {s['projAvg']}   own avg {s['ownAvg']}   "
+          f"dupes avg {s['dupeAvg']}")
+    if res.get("dkCsv"):
+        with open(a.out, "w", encoding="utf-8") as fh:
+            fh.write(res["dkCsv"])
+        print(f"\n  wrote {a.out}")
+    print(f"  logged to {res['logPath']}")
     return 0
 
 
