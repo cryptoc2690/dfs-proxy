@@ -256,6 +256,23 @@ def run_build(proj_text, field_text="", dk_text="", options=None):
                     "lineups are ranked on simulated score alone, with no win "
                     "rate and no real duplication estimate.")
 
+    # The sharp's pool is a real build constraint when one is given. On a ~40
+    # player showdown board a hard filter is defensible; the brief argued
+    # against it only for main slates, where intersecting a 25-name sheet with a
+    # 300-player board over-constrains badly.
+    raw_off = o.get("maxOffPool")
+    if not pool_names:
+        off_pool = None
+    elif raw_off in (None, "", "off"):
+        off_pool = 0
+    else:
+        off_pool = _i(raw_off, 0)
+    if pool_names:
+        say("info", "Pool is a build constraint: "
+                    + ("every player must come from it."
+                       if not off_pool else
+                       f"up to {off_pool} off-pool player(s) per lineup."))
+
     n_mine = n if split <= 0 else min(split, n)
     n_vendor = n - n_mine
     chosen = []
@@ -264,8 +281,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None):
         cands = E.build_candidates(
             players, max(4000, n_mine * 30), teams=teams,
             rng=__import__("random").Random(seed),
-            max_off_pool=(None if o.get("maxOffPool") in (None, "", "off")
-                          else _i(o.get("maxOffPool"), 0)),
+            max_off_pool=off_pool,
             max_leftover=_i(o.get("maxLeftover"), E.MAX_LEFTOVER),
             min_proj=_f(o.get("minProj"), E.MIN_PROJ),
         )
@@ -283,11 +299,20 @@ def run_build(proj_text, field_text="", dk_text="", options=None):
                 lu.metrics = {"mean": round(sum(sc) / sims, 2), "dupes": round(d, 2)}
                 lu.metrics["score"] = lu.metrics["mean"] / (1 + d)
             cands.sort(key=lambda l: -l.metrics["score"])
+        # Every core the sharp set is guaranteed a share of the entries, so a
+        # conviction pick cannot be squeezed out by the tool's own preferences.
+        core_ids = [p.dk_id for p in players if p.core and p.proj > 0]
+        floors = None
+        if core_ids:
+            per = max(1, -(-n_mine // (len(core_ids) + 1)))
+            floors = {cid: per for cid in core_ids}
+            say("info", f"Each of your {len(core_ids)} core(s) is guaranteed at "
+                        f"least {per} of {n_mine} lineups.")
         chosen += E.select(cands, n_mine,
                            captain_cap=_f(o.get("captainCap"), E.CAPTAIN_CAP),
                            min_captains=_i(o.get("minCaptains"), E.MIN_CAPTAINS),
                            player_cap=_f(o.get("playerCap"), E.PLAYER_CAP),
-                           split_targets=E.SPLIT_TARGETS)
+                           split_targets=E.SPLIT_TARGETS, core_floors=floors)
         say("info", f"Built {len(chosen)} lineups from {len(cands):,} candidates.")
 
     if n_vendor:
@@ -320,7 +345,9 @@ def run_build(proj_text, field_text="", dk_text="", options=None):
                      "captainCap": _f(o.get("captainCap"), E.CAPTAIN_CAP),
                      "minCaptains": _i(o.get("minCaptains"), E.MIN_CAPTAINS),
                      "playerCap": _f(o.get("playerCap"), E.PLAYER_CAP),
-                     "minProj": _f(o.get("minProj"), E.MIN_PROJ)},
+                     "minProj": _f(o.get("minProj"), E.MIN_PROJ),
+                     "maxOffPool": off_pool,
+                     "cores": sorted(core_names), "pool": sorted(pool_names)},
         "contest_state": {"entries_at_build": entries_at_build or None,
                           "field_cap": field_cap or None,
                           "expect_entries": expect or None,
@@ -373,6 +400,51 @@ def run_build(proj_text, field_text="", dk_text="", options=None):
     }
 
 
+def _describe(kind, text):
+    """Read a dropped file just far enough to say what it is.
+
+    A drop slot that silently accepts anything is worse than no slot at all —
+    you find out at build time, or not at all. Each file is checked against what
+    that slot actually needs and the answer goes straight back to the page.
+    """
+    text = text or ""
+    if not text.strip():
+        return {"ok": False, "msg": "that file is empty"}
+    try:
+        if kind == "proj":
+            players, rep = read_projections(text)
+            if rep.get("error"):
+                return {"ok": False,
+                        "msg": f"not a projections export ({rep['error']})"}
+            live = [p for p in players if p.proj > 0]
+            teams = sorted({p.team for p in live if p.team})
+            if not live:
+                return {"ok": False, "msg": "no projected players in that file"}
+            return {"ok": True, "msg": f"{len(live)} players, {' @ '.join(teams)}"}
+        if kind == "field":
+            entries, rep = read_field(text)
+            if rep.get("error"):
+                return {"ok": False,
+                        "msg": f"not a lineups export ({rep['error']})"}
+            return {"ok": True, "msg": f"{rep['rows']:,} opponent lineups"}
+        if kind == "dk":
+            dk = read_dk_entries(text)
+            n_e, n_p = len(dk["entries"]), len(dk["pool"])
+            if not n_p:
+                return {"ok": False, "msg": "no player pool found — is this the "
+                                            "DK entries export?"}
+            if not n_e:
+                return {"ok": False, "msg": f"{n_p} players but no entries — "
+                                            f"enter the contest on DK first, "
+                                            f"then download again"}
+            cpt = sum(1 for v in dk["pool"].values() if v["cpt_dk_id"])
+            return {"ok": True, "msg": f"{n_e} entries, {n_p} players "
+                                       f"({cpt} with captain IDs)"}
+    except Exception as exc:                                 # noqa: BLE001
+        return {"ok": False, "msg": f"could not read that file: {exc}"}
+    return {"ok": False, "msg": "unknown file kind"}
+
+
 # ---------------- server ----------------
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
@@ -393,11 +465,36 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, json.dumps({"error": "not found"}))
 
     def do_POST(self):
-        if self.path != "/api/build":
+        if self.path not in ("/api/build", "/api/players", "/api/check"):
             return self._send(404, json.dumps({"error": "not found"}))
         try:
             length = int(self.headers.get("Content-Length", "0"))
             p = json.loads(self.rfile.read(length) or b"{}")
+
+            # The page asks for the slate's players as soon as the projections
+            # file lands, so the pool and core boxes can type-ahead. Parsed
+            # server-side deliberately: the column matching already lives here
+            # and a second implementation in JS would drift from it.
+            if self.path == "/api/players":
+                players, rep = read_projections(p.get("proj") or "")
+                if rep.get("error"):
+                    return self._send(400, json.dumps({"error": rep["error"]}))
+                return self._send(200, json.dumps({
+                    "teams": sorted({q.team for q in players if q.team}),
+                    "players": [{"name": q.name.strip(), "team": q.team,
+                                 "pos": q.pos, "salary": q.salary,
+                                 "proj": round(q.proj, 1),
+                                 "own": round(q.ownership, 1)}
+                                for q in sorted(players, key=lambda x: -x.proj)
+                                if q.proj > 0],
+                }))
+
+            # Confirm a dropped file is the thing the slot expects, so a wrong
+            # or unreadable file says so instead of sitting there looking loaded.
+            if self.path == "/api/check":
+                return self._send(200, json.dumps(
+                    _describe(p.get("kind") or "", p.get("text") or "")))
+
             if not (p.get("proj") or "").strip():
                 return self._send(400, json.dumps(
                     {"error": "Drop the Stokastic projections CSV first."}))

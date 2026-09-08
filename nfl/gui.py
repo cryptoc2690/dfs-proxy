@@ -88,6 +88,26 @@ INDEX_HTML = r"""<!doctype html>
   #welcome{color:var(--muted);font-size:14px;line-height:1.7;max-width:760px}
   #welcome code{background:var(--panel2);padding:2px 6px;border-radius:5px;
     font-size:12.5px}
+  .fslot.bad b{color:#e08080}
+  .fslot.bad .fstate{color:#e08080}
+
+  /* ---- type-ahead picker ---- */
+  .pick{position:relative}
+  .chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+  .chip{background:var(--chip);border:1px solid var(--line);border-radius:14px;
+    padding:2px 9px;font-size:12.5px;cursor:pointer;user-select:none}
+  .chip:hover{border-color:#e08080;color:#e08080}
+  .chip::after{content:" \00d7";color:var(--muted);font-size:11px}
+  .chip.core{border-color:var(--accent2);color:#ffb27a}
+  .menu{position:absolute;z-index:40;left:0;right:0;top:100%;margin-top:3px;
+    background:var(--panel2);border:1px solid var(--line);border-radius:9px;
+    max-height:230px;overflow:auto;display:none;box-shadow:0 8px 22px rgba(0,0,0,.5)}
+  .menu.open{display:block}
+  .menu div{padding:7px 10px;cursor:pointer;font-size:13px;display:flex;gap:8px}
+  .menu div:hover,.menu div.sel{background:#2a3340}
+  .menu .mt{color:var(--muted);font-size:11.5px;margin-left:auto;
+    font-variant-numeric:tabular-nums}
+  .picknote{font-size:11.5px;color:var(--muted);margin-top:5px}
 </style>
 </head>
 <body>
@@ -152,10 +172,34 @@ INDEX_HTML = r"""<!doctype html>
       <input id="minproj" type="number" value="2" step="0.5">
     </div>
     <div>
-      <label>Sharp's pool — one name per line</label>
-      <textarea id="pool" placeholder="Jaxon Smith-Njigba&#10;Drake Maye&#10;..."></textarea>
-      <label>Sharp's cores — one name per line</label>
-      <textarea id="cores" placeholder="one per line"></textarea>
+      <label>Sharp's pool</label>
+      <div class="pick">
+        <input id="poolin" type="text" autocomplete="off" disabled
+               placeholder="drop the projections file first">
+        <div class="menu" id="poolmenu"></div>
+      </div>
+      <div class="chips" id="poolchips"></div>
+      <div class="picknote" id="poolnote"></div>
+      <label>Players from outside the pool, per lineup</label>
+      <select id="offpool">
+        <option value="0" selected>0 — build only from the pool</option>
+        <option value="1">1 — allow one</option>
+        <option value="2">2 — allow two</option>
+        <option value="off">No limit</option>
+      </select>
+      <div class="picknote">Only applies if you picked a pool. A hard filter is
+        defensible here because the whole showdown board is ~40 players.</div>
+    </div>
+    <div>
+      <label>Sharp's cores</label>
+      <div class="pick">
+        <input id="corein" type="text" autocomplete="off" disabled
+               placeholder="drop the projections file first">
+        <div class="menu" id="coremenu"></div>
+      </div>
+      <div class="chips" id="corechips"></div>
+      <div class="picknote">Type a few letters, click or press Enter. Cores count
+        as in-pool automatically. Click a chip to remove it.</div>
     </div>
   </div>
 </details>
@@ -184,39 +228,177 @@ INDEX_HTML = r"""<!doctype html>
 <script>
 const $ = s => document.querySelector(s);
 const files = {proj:null, field:null, dk:null};
-let result = null;
+let result = null, roster = [];
+
+// The browser must not navigate away when a file is dropped anywhere else.
+['dragover','drop'].forEach(ev =>
+  window.addEventListener(ev, e => e.preventDefault()));
 
 function slot(key, el){
-  const set = (name, ok) => {
-    el.classList.toggle('loaded', !!ok);
-    el.classList.toggle('req', !ok);
-    el.querySelector('.fstate').textContent = ok ? name : el.dataset.empty;
+  const state = el.querySelector('.fstate');
+  const empty = state.textContent;
+  // A REAL input, in the DOM. A detached one built on the fly does not reliably
+  // open the picker in Safari, which is why this slot appeared to do nothing.
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.csv,text/csv,text/plain';
+  input.style.display = 'none';
+  el.appendChild(input);
+
+  const mark = (cls, msg) => {
+    el.classList.remove('loaded','req','bad');
+    if(cls) el.classList.add(cls);
+    state.textContent = msg;
     $('#go').disabled = !files.proj;
   };
-  el.dataset.empty = el.querySelector('.fstate').textContent;
+
   const read = f => {
-    if(!f) return;
+    if(!f){ return; }
+    state.textContent = 'reading ' + f.name + '…';
     const r = new FileReader();
-    r.onload = e => { files[key] = e.target.result; set(f.name, true); };
+    r.onerror = () => mark('bad', 'could not read that file');
+    r.onload = async e => {
+      const text = e.target.result;
+      try {
+        const res = await fetch('/api/check', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({kind:key, text:text})
+        });
+        const d = await res.json();
+        if(d.ok){
+          files[key] = text;
+          mark('loaded', '✓ ' + f.name + ' — ' + d.msg);
+          if(key === 'proj') loadRoster(text);
+        } else {
+          files[key] = null;
+          mark('bad', '✗ ' + f.name + ' — ' + d.msg);
+        }
+      } catch(err){
+        files[key] = text;               // server unreachable: keep it anyway
+        mark('loaded', '✓ ' + f.name);
+      }
+    };
     r.readAsText(f);
   };
-  el.addEventListener('click', () => {
-    const i = document.createElement('input');
-    i.type='file'; i.accept='.csv,text/csv';
-    i.onchange = () => read(i.files[0]);
-    i.click();
-  });
+
+  input.addEventListener('change', () => { read(input.files[0]); input.value=''; });
+  el.addEventListener('click', e => { if(e.target !== input) input.click(); });
   ['dragenter','dragover'].forEach(ev => el.addEventListener(ev, e => {
-    e.preventDefault(); el.classList.add('over');
+    e.preventDefault(); e.stopPropagation(); el.classList.add('over');
   }));
-  ['dragleave','drop'].forEach(ev => el.addEventListener(ev, e => {
+  ['dragleave','dragend'].forEach(ev => el.addEventListener(ev, e => {
     e.preventDefault(); el.classList.remove('over');
   }));
-  el.addEventListener('drop', e => read(e.dataTransfer.files[0]));
+  el.addEventListener('drop', e => {
+    e.preventDefault(); e.stopPropagation(); el.classList.remove('over');
+    const dt = e.dataTransfer;
+    read(dt.files && dt.files[0]);
+  });
+  mark('req', empty);
 }
 slot('proj', $('#s_proj'));
 slot('field', $('#s_field'));
 slot('dk', $('#s_dk'));
+
+// ---- type-ahead pickers, enabled once the slate is known ----
+const sel = {pool:new Set(), core:new Set()};
+
+async function loadRoster(text){
+  try{
+    const res = await fetch('/api/players', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({proj:text})
+    });
+    const d = await res.json();
+    if(d.error) return;
+    roster = d.players || [];
+    $('#slate').textContent = (d.teams||[]).join(' @ ') + ' · showdown';
+    ['poolin','corein'].forEach(id => {
+      const el = $('#'+id);
+      el.disabled = false;
+      el.placeholder = 'type a name — ' + roster.length + ' players';
+    });
+  }catch(e){ /* picker just stays disabled */ }
+}
+
+function picker(kind, inputId, menuId, chipsId){
+  const input = $('#'+inputId), menu = $('#'+menuId), chips = $('#'+chipsId);
+  let hits = [], cur = -1;
+
+  const draw = () => {
+    chips.innerHTML = [...sel[kind]].map(n =>
+      '<span class="chip'+(kind==='core'?' core':'')+'" data-n="'+esc(n)+'">'
+      + esc(n)+'</span>').join('');
+    chips.querySelectorAll('.chip').forEach(c =>
+      c.addEventListener('click', () => { sel[kind].delete(c.dataset.n); draw(); }));
+    if(kind === 'pool'){
+      const n = sel.pool.size + sel.core.size;
+      $('#poolnote').textContent = n
+        ? n + ' player(s) in the pool (cores included automatically)'
+        : 'Leave empty to build from the whole slate.';
+    }
+  };
+
+  const close = () => { menu.classList.remove('open'); cur = -1; };
+
+  const show = () => {
+    const q = input.value.trim().toLowerCase();
+    if(!q){ close(); return; }
+    // Rank a match on the start of a NAME above one buried mid-word, so "dr"
+    // offers Drake before Rhamondre. Within a tier, higher projection first —
+    // roster already arrives sorted that way.
+    const score = p => {
+      const n = p.name.toLowerCase();
+      if(n.startsWith(q)) return 0;
+      if(n.split(/[\s.'-]+/).some(w => w.startsWith(q))) return 1;
+      return 2;
+    };
+    hits = roster
+      .filter(p => p.name.toLowerCase().includes(q) && !sel[kind].has(p.name))
+      .map((p,i) => [score(p), i, p])
+      .sort((a,b) => a[0]-b[0] || a[1]-b[1])
+      .slice(0, 8).map(x => x[2]);
+    if(!hits.length){ close(); return; }
+    menu.innerHTML = hits.map((p,i) =>
+      '<div data-i="'+i+'"'+(i===cur?' class="sel"':'')+'>'
+      + '<span>'+esc(p.name)+'</span>'
+      + '<span class="mt">'+p.team+' '+p.pos+' · $'+p.salary.toLocaleString()
+      + ' · '+p.proj.toFixed(1)+'</span></div>').join('');
+    menu.classList.add('open');
+    menu.querySelectorAll('div[data-i]').forEach(d =>
+      d.addEventListener('mousedown', e => {
+        e.preventDefault(); add(hits[+d.dataset.i]);
+      }));
+  };
+
+  const add = p => {
+    if(!p) return;
+    sel[kind].add(p.name);
+    if(kind === 'core') sel.pool.delete(p.name);   // a core is already in-pool
+    input.value = ''; close(); draw();
+    if(kind === 'core') pickers.pool.draw();
+    input.focus();
+  };
+
+  input.addEventListener('input', () => { cur = -1; show(); });
+  input.addEventListener('focus', show);
+  input.addEventListener('blur', () => setTimeout(close, 120));
+  input.addEventListener('keydown', e => {
+    if(e.key === 'ArrowDown' || e.key === 'ArrowUp'){
+      e.preventDefault();
+      if(!hits.length) return;
+      cur = (cur + (e.key === 'ArrowDown' ? 1 : hits.length - 1)) % hits.length;
+      show();
+    } else if(e.key === 'Enter'){
+      e.preventDefault(); add(hits[cur >= 0 ? cur : 0]);
+    } else if(e.key === 'Escape'){ close(); }
+  });
+  draw();
+  return {draw};
+}
+const pickers = {};
+pickers.pool = picker('pool', 'poolin', 'poolmenu', 'poolchips');
+pickers.core = picker('core', 'corein', 'coremenu', 'corechips');
 
 $('#lean').addEventListener('input', e => {
   const v = e.target.value/100;
@@ -245,7 +427,8 @@ $('#go').addEventListener('click', async () => {
           entriesAtBuild: num('#entries',0),
           fieldCap: num('#cap',0),
           expectEntries: num('#expect',0),
-          pool: $('#pool').value, cores: $('#cores').value
+          maxOffPool: $('#offpool').value,
+          pool: [...sel.pool].join('\n'), cores: [...sel.core].join('\n')
         }
       })
     });

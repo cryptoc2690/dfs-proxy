@@ -27,7 +27,7 @@ python3 nfl/app.py --proj proj.csv --field lineups.csv --dk DKEntries.csv \
 | `--proj` | Stokastic **projections** export (one row per player) | **Yes** |
 | `--field` | Stokastic **lineups** export (~9,000 rows) | Strongly recommended |
 | `--dk` | Your **DK entries export** for the contest | Yes, for an uploadable file |
-| `--pool` / `--cores` | The sharp's pool and cores, one name per line | Optional |
+| Settings panel | The sharp's pool and cores — type-ahead, click to add | Optional |
 
 Pull the two Stokastic files **in the same session**. Their exports carry
 separate ownership snapshots and the research brief measured them disagreeing by
@@ -36,6 +36,22 @@ up to 9.8 points on a single lineup when pulled hours apart.
 Get the DK entries file by entering or reserving your 150 entries on DK first,
 then downloading. It is the only file carrying your Entry IDs and DK's player
 IDs, and without it there is nothing to upload.
+
+Each drop slot checks the file before accepting it and says what it found —
+"150 entries, 68 players" — or why it was rejected. A file in the wrong slot is
+refused rather than silently taken.
+
+## Pool and cores
+
+Once the projections file lands, the pool and core boxes turn into type-ahead
+pickers over that slate's players: type a few letters, click or press Enter,
+click a chip to remove. Cores count as in-pool automatically.
+
+A pool becomes a real build constraint — by default every player must come from
+it, which is defensible here because the whole showdown board is about 40
+players. Each core is guaranteed a share of the entries, and that guarantee is
+applied *after* every other filter, so a core can never be squeezed out by the
+tool's own preferences. That failure has happened before in the WNBA tool.
 
 ## What `--field` is actually for
 

@@ -484,9 +484,48 @@ def rank(lineups, mat, bar, sims, dupes_idx, own_lean=OWN_LEAN, dupe_scale=1.0):
     return lineups
 
 
+def _enforce_core_floors(chosen, pool, floors):
+    """Top up under-exposed cores to their floor.
+
+    Carried over from the WNBA engine, where the lesson was learned the hard
+    way: a filter upstream of this once cut every lineup holding a low-owned
+    core, and the core landed in one entry out of ten. A core is the user's own
+    conviction, so it outranks the tool's preferences — but this is best-effort
+    and stops rather than looping when no legal swap exists.
+    """
+    chosen = list(chosen)
+    picked = {id(c) for c in chosen}
+
+    def held(cid):
+        return sum(1 for lu in chosen if cid in lu.ids())
+
+    for cid, need in floors.items():
+        while held(cid) < need:
+            cand = next((c for c in pool
+                         if cid in c.ids() and id(c) not in picked), None)
+            if cand is None:
+                break
+            drop = None
+            for lu in reversed(chosen):          # weakest first
+                if cid in lu.ids():
+                    continue
+                safe = all(oid not in lu.ids() or held(oid) - 1 >= oneed
+                           for oid, oneed in floors.items() if oid != cid)
+                if safe:
+                    drop = lu
+                    break
+            if drop is None:
+                break
+            chosen.remove(drop)
+            picked.discard(id(drop))
+            chosen.append(cand)
+            picked.add(id(cand))
+    return chosen
+
+
 def select(lineups, n, *, captain_cap=CAPTAIN_CAP, min_captains=MIN_CAPTAINS,
            player_cap=PLAYER_CAP, max_overlap=MAX_OVERLAP,
-           split_targets=None):
+           split_targets=None, core_floors=None):
     """Pick the final N under coverage rules rather than diversification ones.
 
     150 showdown entries are worth roughly two independent bets — mean pairwise
@@ -587,7 +626,12 @@ def select(lineups, n, *, captain_cap=CAPTAIN_CAP, min_captains=MIN_CAPTAINS,
             chosen.append(lu)
             cpt_ct[lu.cpt.dk_id] = 1
             have.add(lu.cpt.dk_id)
-    return chosen[:n]
+    chosen = chosen[:n]
+    # Cores last, so they override every preference above them rather than being
+    # filtered out before they are ever considered.
+    if core_floors:
+        chosen = _enforce_core_floors(chosen, lineups, core_floors)[:n]
+    return chosen
 
 
 def vendor_arm(field_entries, n, *, players_by_id, captain_cap=CAPTAIN_CAP,
