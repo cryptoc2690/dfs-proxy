@@ -49,6 +49,16 @@ class Player:
     notes: list[str] = field(default_factory=list)
 
     @property
+    def game(self) -> str:
+        """'DET@GB' — the two teams, ordered, so both sides share one key.
+
+        Showdown has a single game and this is constant; on a main slate it is
+        what keeps twelve games from moving together in the simulation.
+        """
+        a, b = self.team or "", self.opponent or ""
+        return "@".join(sorted([a, b])) if a and b else (a or b)
+
+    @property
     def is_dst(self) -> bool:
         return self.pos == "DST"
 

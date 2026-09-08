@@ -206,20 +206,29 @@ def read_field(text, by_id=None, by_name=None):
     headers = rows[0]
     norm = [_norm_header(h) for h in headers]
 
-    # Roster columns by POSITION: the captain column, then the flex columns.
+    # Roster columns by POSITION. Whichever columns actually hold
+    # 'Name (12345678)' cells ARE the roster, which handles both shapes without
+    # naming either: showdown heads them CPT + five FLEX, classic heads them
+    # QB/RB/RB/WR/WR/WR/TE/FLEX/DST.
+    looks = [i for i in range(len(headers))
+             if sum(1 for r in rows[1:40]
+                    if i < len(r) and re.search(r"\(\d{5,}\)", r[i] or "")) > 20]
     cpt_i = next((i for i, h in enumerate(norm) if h in ("cpt", "captain")), None)
-    flex_i = [i for i, h in enumerate(norm) if h.startswith("flex")]
-    if cpt_i is None or len(flex_i) < 5:
-        # Fall back to whichever columns actually hold 'Name (12345678)' cells.
-        looks = [i for i in range(len(headers))
-                 if sum(1 for r in rows[1:40]
-                        if i < len(r) and re.search(r"\(\d{5,}\)", r[i] or "")) > 20]
-        if len(looks) >= 6:
-            cpt_i, flex_i = looks[0], looks[1:6]
-    if cpt_i is None or len(flex_i) < 5:
-        return [], {"error": "could not find CPT + 5 FLEX columns",
+    if cpt_i is not None and looks:
+        flex_i = [i for i in looks if i != cpt_i]
+    elif looks:
+        cpt_i, flex_i = None, looks          # classic: no captain
+    else:
+        return [], {"error": "no roster columns found (no 'Name (id)' cells)",
                     "headers": headers}
-    flex_i = flex_i[:5]
+    if cpt_i is not None:
+        flex_i = flex_i[:5]
+        if len(flex_i) < 5:
+            return [], {"error": "could not find CPT + 5 FLEX columns",
+                        "headers": headers}
+    elif len(flex_i) < 6:
+        return [], {"error": f"only {len(flex_i)} roster columns found",
+                    "headers": headers}
 
     def col(*names):
         for n in names:
@@ -234,7 +243,10 @@ def read_field(text, by_id=None, by_name=None):
     ci = {"dupes": col("dupes"), "win": col("win%", "win"),
           "top10": col("top10%", "top10"), "cash": col("cash%", "cash"),
           "roi": col("simulatedroi", "roi"), "ownsum": col("ownsum"),
-          "stack": col("stack"), "salary": col("salary")}
+          # "Stack Type" ("QB + 2 | 1 OPP") before the bare "Stack" column,
+          # which holds the stacked TEAM. A prefix match on "stack" alone finds
+          # the team and calls it a shape.
+          "stack": col("stacktype", "stack"), "salary": col("salary")}
 
     by_id = by_id or {}
     by_name = by_name or {}
@@ -253,9 +265,9 @@ def read_field(text, by_id=None, by_name=None):
     for r in rows[1:]:
         if not r or len(r) <= max(flex_i):
             continue
-        cpt = resolve(r[cpt_i])
+        cpt = resolve(r[cpt_i]) if cpt_i is not None else None
         flex = [resolve(r[i]) for i in flex_i]
-        if cpt is None or any(p is None for p in flex):
+        if (cpt_i is not None and cpt is None) or any(p is None for p in flex):
             unresolved += 1
             continue
         si = ci.get("stack")
@@ -266,8 +278,9 @@ def read_field(text, by_id=None, by_name=None):
             "roi": num(r, "roi"), "own_sum": num(r, "ownsum"),
             "stack": (r[si].strip() if si is not None and si < len(r) else ""),
         })
-    return entries, {"cpt_col": headers[cpt_i],
+    return entries, {"cpt_col": headers[cpt_i] if cpt_i is not None else None,
                      "flex_cols": [headers[i] for i in flex_i],
+                     "format": "showdown" if cpt_i is not None else "classic",
                      "rows": len(rows) - 1, "parsed": len(entries),
                      "unresolved_rosters": unresolved}
 
@@ -291,10 +304,19 @@ def read_dk_entries(text):
                     pi = i
                     break
             # deliberately no `continue`: this row can also be a real entry
-        if (r[0] or "").strip() == "Entry ID" and len(r) > 6:
-            slots = [c.strip() for c in r[4:10] if c.strip()]
-        elif (r[0] or "").strip().isdigit() and len(r) > 6:
-            cells = [c for c in r[4:10] if (c or "").strip()]
+        if (r[0] or "").strip() == "Entry ID" and len(r) > 5:
+            # Roster columns run from index 4 until the first blank header.
+            # Read the COUNT rather than assuming: showdown is 6 (CPT + 5 FLEX)
+            # and classic is 9 (QB/RB/RB/WR/WR/WR/TE/FLEX/DST), and a hard-coded
+            # six silently truncates every classic lineup to its first six slots.
+            slots = []
+            for c in r[4:]:
+                if not (c or "").strip():
+                    break
+                slots.append(c.strip())
+        elif (r[0] or "").strip().isdigit() and len(r) > 5:
+            width = len(slots) or 6
+            cells = [c for c in r[4:4 + width] if (c or "").strip()]
             entries.append({
                 "entry_id": r[0].strip(),
                 "contest": (r[1] or "").strip(),

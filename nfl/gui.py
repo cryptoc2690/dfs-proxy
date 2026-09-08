@@ -6,7 +6,7 @@ INDEX_HTML = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NFL Showdown Optimizer</title>
+<title>NFL Optimizer</title>
 <style>
   :root{
     --bg:#0e1116; --panel:#171b22; --panel2:#1e232c; --line:#2a313c;
@@ -108,12 +108,16 @@ INDEX_HTML = r"""<!doctype html>
   .menu .mt{color:var(--muted);font-size:11.5px;margin-left:auto;
     font-variant-numeric:tabular-nums}
   .picknote{font-size:11.5px;color:var(--muted);margin-top:5px}
+  .sd-only,.cl-only{display:none}
+  body.sd .sd-only,body.cl .cl-only{display:block}
+  .trio{display:flex;gap:6px}
+  .trio input{text-align:right}
 </style>
 </head>
 <body>
 <header>
   <span class="ball"></span>
-  <h1>NFL Showdown Optimizer</h1>
+  <h1 id="title">NFL Optimizer</h1>
   <span class="sub" id="slate">drop your files below</span>
 </header>
 
@@ -141,11 +145,17 @@ INDEX_HTML = r"""<!doctype html>
       <label>Ownership lean — <span id="lv">+0.35</span>
         <span style="color:var(--muted)">(&minus; fade · + consensus)</span></label>
       <input id="lean" type="range" min="-100" max="100" value="35" style="width:100%">
-      <div class="hint">Positive by default. At matched projection, chalk wins in
-        showdown — the small player pool means fading it is just playing worse
-        players. This is the opposite of the right setting on a main slate.</div>
+      <div class="hint sd-only">Positive by default. At matched projection, chalk
+        wins in showdown — the small player pool means fading it is just playing
+        worse players. This is the opposite of the right setting on a main
+        slate.</div>
+      <div class="hint cl-only">Neutral by default. Ranking on win probability
+        already fades chalk hard on a main slate all by itself — these lineups
+        land near the field's 12th ownership percentile with this at zero — so
+        there is nothing left for a negative lean to do. Move it if your read
+        says otherwise.</div>
     </div>
-    <div>
+    <div class="sd-only">
       <label>Max share on one captain — <span id="cv">28</span>%</label>
       <input id="ccap" type="range" min="10" max="60" value="28" style="width:100%">
       <label>Fewest distinct captains</label>
@@ -154,11 +164,35 @@ INDEX_HTML = r"""<!doctype html>
         Their own field puts about a fifth of its captaincies on one player and
         uses only ~23 captains across 8,000+ lineups.</div>
     </div>
+    <div class="cl-only">
+      <label>Stack shape — share of lineups at QB+3 / QB+2 / QB+1</label>
+      <div class="trio">
+        <input id="st3" type="number" value="45" min="0" max="100">
+        <input id="st2" type="number" value="40" min="0" max="100">
+        <input id="st1" type="number" value="15" min="0" max="100">
+      </div>
+      <label>Bring-back (a player from your QB's opponent) — <span id="bv">15</span>%</label>
+      <input id="bb" type="range" min="0" max="60" value="15" style="width:100%">
+      <div class="hint">Stacking is the main lever on a main slate: each extra
+        pass-catcher with your QB is worth about +31% relative win probability at
+        matched projection, and the field builds QB+3 under 5% of the time. A
+        bring-back does the opposite — it raises the floor and cuts the tail, so
+        it is kept as a small insurance block.</div>
+    </div>
+    <div class="cl-only">
+      <label>Max share on one QB — <span id="qv">35</span>%</label>
+      <input id="qbcap" type="range" min="10" max="100" value="35" style="width:100%">
+      <label>Max share on one defense — <span id="dv">30</span>%</label>
+      <input id="dstcap" type="range" min="10" max="100" value="30" style="width:100%">
+      <div class="hint">QB exposure IS stack exposure — the QB decides the whole
+        correlation structure of the lineup — so it binds tighter than the
+        player cap.</div>
+    </div>
     <div>
       <label>Contest entries so far</label>
       <input id="entries" type="number" placeholder="from the DK contest page">
       <label>Contest max entries</label>
-      <input id="cap" type="number" value="237812">
+      <input id="cap" type="number" placeholder="from the DK contest page">
       <div class="hint">The pool is guaranteed, so if the contest fills under
         84.1% every entry is worth more than it costs. This is bigger than
         anything else on this page and it is free to check.</div>
@@ -166,8 +200,9 @@ INDEX_HTML = r"""<!doctype html>
     <div>
       <label>Expected FINAL field size</label>
       <input id="expect" type="number" placeholder="leave blank if unsure">
-      <div class="hint">Their pool models a capped 50,000 opponents. If the real
-        contest fills past that, duplication is understated by the ratio.</div>
+      <div class="hint">Their pool models a capped set of opponents — 50,000 for
+        showdown, 10,000 on a main slate. If the real contest fills past that,
+        duplication is understated by the ratio.</div>
       <label>Min projection for a roster spot</label>
       <input id="minproj" type="number" value="2" step="0.5">
     </div>
@@ -187,8 +222,12 @@ INDEX_HTML = r"""<!doctype html>
         <option value="2">2 — allow two</option>
         <option value="off">No limit</option>
       </select>
-      <div class="picknote">Only applies if you picked a pool. A hard filter is
-        defensible here because the whole showdown board is ~40 players.</div>
+      <div class="picknote sd-only">Only applies if you picked a pool. A hard
+        filter is defensible here because the whole showdown board is ~40
+        players.</div>
+      <div class="picknote cl-only">Only applies if you picked a pool. On a main
+        slate a sheet that cannot cover all nine roster seats is treated as a
+        shortlist instead of a filter, and the build says so.</div>
     </div>
     <div>
       <label>Sharp's cores</label>
@@ -221,6 +260,8 @@ INDEX_HTML = r"""<!doctype html>
     <p>Their lineup file is not a list of picks — it is a model of your
       opponents. We use it to score against and to estimate duplication, and
       build our own lineups on top.</p>
+    <p><b>Showdown or main slate is worked out from your files</b>, so the same
+      three slots handle both. The settings below change to match.</p>
   </div>
   <div id="out"></div>
 </main>
@@ -228,7 +269,26 @@ INDEX_HTML = r"""<!doctype html>
 <script>
 const $ = s => document.querySelector(s);
 const files = {proj:null, field:null, dk:null};
-let result = null, roster = [];
+let result = null, roster = [], fmt = 'showdown', fmtFromDk = false;
+
+// Showdown and classic are different games, not two sizes of one, so the page
+// has to say which it is reading. The DK entries export is authoritative — its
+// roster columns literally spell out the format — and the projections file is
+// the fallback, since a showdown board is one game and a main slate a dozen.
+function setFmt(f, fromDk){
+  if(fmtFromDk && !fromDk) return;        // never downgrade off the DK answer
+  fmt = f; if(fromDk) fmtFromDk = true;
+  document.body.classList.toggle('sd', f === 'showdown');
+  document.body.classList.toggle('cl', f === 'classic');
+  $('#title').textContent = f === 'showdown' ? 'NFL Showdown Optimizer'
+                                             : 'NFL Main Slate Optimizer';
+  // The ownership lean genuinely points opposite ways in the two formats, so
+  // the default follows the format until the user touches the slider.
+  if(!leanTouched){
+    $('#lean').value = f === 'showdown' ? 35 : 0;
+    $('#lean').dispatchEvent(new Event('input'));
+  }
+}
 
 // The browser must not navigate away when a file is dropped anywhere else.
 ['dragover','drop'].forEach(ev =>
@@ -268,6 +328,7 @@ function slot(key, el){
         if(d.ok){
           files[key] = text;
           mark('loaded', '✓ ' + f.name + ' — ' + d.msg);
+          if(d.format) setFmt(d.format, key === 'dk');
           if(key === 'proj') loadRoster(text);
         } else {
           files[key] = null;
@@ -312,7 +373,8 @@ async function loadRoster(text){
     const d = await res.json();
     if(d.error) return;
     roster = d.players || [];
-    $('#slate').textContent = (d.teams||[]).join(' @ ') + ' · showdown';
+    if(d.format) setFmt(d.format, false);
+    $('#slate').textContent = slateLabel(d.teams||[]);
     ['poolin','corein'].forEach(id => {
       const el = $('#'+id);
       el.disabled = false;
@@ -400,11 +462,22 @@ const pickers = {};
 pickers.pool = picker('pool', 'poolin', 'poolmenu', 'poolchips');
 pickers.core = picker('core', 'corein', 'coremenu', 'corechips');
 
+function slateLabel(teams){
+  if(fmt === 'showdown') return teams.join(' @ ') + ' · showdown';
+  return teams.length + ' teams · ' + Math.round(teams.length/2) + ' games · main slate';
+}
+
+let leanTouched = false;
 $('#lean').addEventListener('input', e => {
   const v = e.target.value/100;
   $('#lv').textContent = (v>=0?'+':'') + v.toFixed(2);
 });
+$('#lean').addEventListener('change', () => { leanTouched = true; });
 $('#ccap').addEventListener('input', e => { $('#cv').textContent = e.target.value; });
+$('#qbcap').addEventListener('input', e => { $('#qv').textContent = e.target.value; });
+$('#dstcap').addEventListener('input', e => { $('#dv').textContent = e.target.value; });
+$('#bb').addEventListener('input', e => { $('#bv').textContent = e.target.value; });
+setFmt('showdown', false);
 
 const num = (sel, d) => { const v = parseFloat($(sel).value); return isNaN(v) ? d : v; };
 
@@ -420,9 +493,14 @@ $('#go').addEventListener('click', async () => {
         proj: files.proj, field: files.field, dk: files.dk,
         options: {
           n: num('#n',150), split: num('#split',75),
-          ownLean: num('#lean',35)/100,
+          format: fmt,
+          ownLean: num('#lean',0)/100,
           captainCap: num('#ccap',28)/100,
           minCaptains: num('#mincpt',10),
+          qbCap: num('#qbcap',35)/100,
+          dstCap: num('#dstcap',30)/100,
+          bringBack: num('#bb',15)/100,
+          stackTargets: '3:'+num('#st3',45)+',2:'+num('#st2',40)+',1:'+num('#st1',15),
           minProj: num('#minproj',2),
           entriesAtBuild: num('#entries',0),
           fieldCap: num('#cap',0),
@@ -451,33 +529,43 @@ function render(d){
     $('#out').innerHTML = h; return;
   }
   const s = d.summary;
-  $('#slate').textContent = (d.teams||[]).join(' @ ') + ' · showdown';
+  if(d.format) setFmt(d.format, true);
+  $('#slate').textContent = slateLabel(d.teams||[]);
   const arms = Object.entries(s.arms).map(([k,v]) => k+' '+v).join(' / ');
   const splits = Object.entries(s.splits).map(([k,v]) => k+' '+v).join('  ');
+  const sd = d.format !== 'classic';
   h += '<div class="cards">'
     + card(s.n, 'lineups ('+arms+')')
-    + card(splits, 'team splits')
-    + card(s.captains, 'distinct captains')
+    + card(splits, s.shapeLabel || 'shape')
+    + card(s.captains, 'distinct ' + (s.headLabel || 'captains'))
     + card('$'+s.salaryLo.toLocaleString()+'–'+s.salaryHi.toLocaleString(), 'salary used')
     + card(s.projAvg, 'avg projection')
     + card(s.ownAvg, 'avg ownership sum')
     + card(s.dupeAvg, 'avg expected duplicates')
     + (s.fill!=null ? card(s.fill+'%', 'contest full') : '')
     + '</div>';
-  h += '<div style="font-size:12.5px;color:var(--muted);margin-bottom:6px">Top captains: '
+  h += '<div style="font-size:12.5px;color:var(--muted);margin-bottom:6px">Top '
+     + (s.headLabel || 'captains') + ': '
      + s.topCaptains.map(c => esc(c[0])+' '+c[1]).join(' · ') + '</div>';
   h += '<div class="tblwrap"><table><thead><tr>'
-     + '<th>#</th><th>arm</th><th>split</th><th>captain</th><th>flex</th>'
+     + '<th>#</th><th>arm</th><th>' + (sd ? 'split' : 'stack') + '</th>'
+     + (sd ? '<th>captain</th><th>flex</th>' : '<th>QB</th><th>rest of the roster</th>')
      + '<th class="num">salary</th><th class="num">proj</th>'
      + '<th class="num">own</th><th class="num">win%</th><th class="num">dupes</th>'
      + '</tr></thead><tbody>';
+  const who = p => esc(p.name)
+    + ' <span style="color:var(--muted)">('+p.team+(sd?'':' '+p.slot)+')</span>';
   d.lineups.forEach((l,i) => {
-    const cpt = l.players[0], flex = l.players.slice(1);
+    // Showdown leads with the captain; classic leads with the QB, because that
+    // is the seat the whole lineup is built around in each format.
+    const lead = sd ? l.players[0]
+                    : (l.players.find(p => p.slot === 'QB') || l.players[0]);
+    const rest = l.players.filter(p => p !== lead);
     h += '<tr><td class="num">'+(i+1)+'</td>'
       + '<td><span class="arm '+l.source+'">'+l.source+'</span></td>'
-      + '<td>'+l.split+'</td>'
-      + '<td class="cpt">'+esc(cpt.name)+' <span style="color:var(--muted)">('+cpt.team+')</span></td>'
-      + '<td>'+flex.map(p => esc(p.name)+' <span style="color:var(--muted)">('+p.team+')</span>').join(', ')+'</td>'
+      + '<td>'+esc(l.split)+'</td>'
+      + '<td class="cpt">'+who(lead)+'</td>'
+      + '<td>'+rest.map(who).join(', ')+'</td>'
       + '<td class="num">'+l.salary.toLocaleString()+'</td>'
       + '<td class="num">'+l.proj.toFixed(1)+'</td>'
       + '<td class="num">'+l.ownSum.toFixed(0)+'</td>'
@@ -507,7 +595,8 @@ $('#dl').addEventListener('click', () => {
   const b = new Blob([result.dkCsv], {type:'text/csv'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(b);
-  a.download = 'DKEntries_showdown_upload.csv';
+  a.download = 'DKEntries_' + (fmt === 'classic' ? 'main' : 'showdown')
+             + '_upload.csv';
   a.click();
 });
 </script>

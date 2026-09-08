@@ -35,13 +35,37 @@ from dk import CAPTAIN_MULT, ROSTER_SIZE, SALARY_CAP, Lineup, Player
 # they are the first thing to re-fit once real results exist.
 GAME_SD = 0.10      # the whole game runs hot or cold (pace, total)
 TEAM_SD = 0.14      # one offense outperforms
-PASS_SD = 0.18      # that offense does it through the air -> QB + receivers
-RUSH_SD = 0.18      # ...or on the ground -> the backfield
+PASS_SD = 0.30      # that offense does it through the air -> QB + receivers
+RUSH_SD = 0.26      # ...or on the ground -> the backfield
 RB_PASS_SHARE = 0.35   # an RB's night is part passing game, part rushing game
 DST_OPP = -0.85     # a defense moves opposite the offense it faces
+DST_OPP_PASS = -0.60  # ...and especially opposite its passing game
 DST_OWN = 0.20      # ...and mildly with its own (blowouts create turnovers)
 K_TEAM = 0.45       # kickers ride their offense weakly and partly anti-correlate
                     # with its touchdowns (a stalled drive is what makes a FG)
+
+# Within-team substitution. Everything above is SHARED, so on its own it makes
+# every teammate rise together — which is how two running backs splitting one
+# backfield ended up positively correlated in this model, the exact opposite of
+# the truth. These add a zero-sum shock inside a team's position group: targets
+# and carries are a fixed budget, so one player's extra share is another's
+# missing share. This is the one place the WNBA reallocation logic does apply.
+SUB_SD_RB = 0.65    # carries substitute hard — the strongest negative pair
+SUB_SD_REC = 0.30   # targets compete, but a good passing day feeds everyone
+#
+# What these settle at, measured on a synthetic two-team game (30k sims):
+#
+#   QB -> own WR/TE      +0.30    DST -> opposing QB   -0.23
+#   QB -> own RB         +0.16    DST -> own QB        +0.02
+#   own RB -> own RB     -0.16    different game        0.00
+#   own WR -> own WR     +0.10
+#
+# The receiver pair staying slightly positive is deliberate rather than a miss:
+# a good passing day genuinely lifts every target-earner, and the competition
+# for targets only partly offsets it. The backfield is the pair that has to come
+# out clearly negative, because two backs really are splitting one budget.
+# Every number above is JUDGEMENT, not measurement — there is no NFL results
+# history yet. They are the first thing to re-fit once there is.
 
 BOOM_VALUE_MULT = 5.0    # Stokastic's Boom is P(score > 5x salary/1000)
 
@@ -78,18 +102,30 @@ def _gamma_draw(mean, sd, rng):
     return _gamma(shape, rng) * scale
 
 
+def _sub_group(p):
+    """Which within-team budget this player competes for, if any."""
+    if p.pos == "RB":
+        return "RB"
+    if p.pos in ("WR", "TE"):
+        return "REC"
+    return None
+
+
 def _player_factors(p, teams):
     """How much of each shared factor this player rides. Returns
-    (game, own_team, own_pass, own_rush, opp_team) exposures."""
+    (game, own_team, own_pass, own_rush, opp_team, opp_pass) exposures."""
     if p.is_dst:
-        return (0.5, DST_OWN, 0.0, 0.0, DST_OPP)
+        # Points allowed IS the opponent's scoring, so a defense is close to the
+        # mechanical opposite of the offense it faces — and most of all of that
+        # offense's passing game.
+        return (0.5, DST_OWN, 0.0, 0.0, DST_OPP, DST_OPP_PASS)
     if p.pos == "K":
-        return (0.8, K_TEAM, 0.0, 0.0, 0.0)
+        return (0.8, K_TEAM, 0.0, 0.0, 0.0, 0.0)
     if p.is_qb:
-        return (1.0, 1.0, 1.0, 0.0, 0.0)
+        return (1.0, 1.0, 1.0, 0.0, 0.0, 0.0)
     if p.pos == "RB":
-        return (1.0, 1.0, RB_PASS_SHARE, 1.0 - RB_PASS_SHARE, 0.0)
-    return (1.0, 1.0, 1.0, 0.0, 0.0)          # WR / TE
+        return (1.0, 1.0, RB_PASS_SHARE, 1.0 - RB_PASS_SHARE, 0.0, 0.0)
+    return (1.0, 1.0, 1.0, 0.0, 0.0, 0.0)     # WR / TE
 
 
 def simulate(players, sims=4000, seed=0):
@@ -106,28 +142,60 @@ def simulate(players, sims=4000, seed=0):
     rng = random.Random(seed)
     teams = sorted({p.team for p in players if p.team})
     tidx = {t: i for i, t in enumerate(teams)}
-
-    # Shared factors, drawn once per sim and reused by every player.
-    game = [max(0.25, 1 + GAME_SD * rng.gauss(0, 1)) for _ in range(sims)]
+    # One factor PER GAME, not one for the slate. On a showdown there is a
+    # single game and this is the old behaviour; on a main slate a single shared
+    # factor would make all twelve games run hot or cold together, which would
+    # both understate lineup variance and invent correlation between players who
+    # never share a field.
+    games = sorted({p.game for p in players if p.game})
+    gidx = {g: i for i, g in enumerate(games)}
+    game_f = [[max(0.25, 1 + GAME_SD * rng.gauss(0, 1)) for _ in range(sims)]
+              for _ in games]
     team_f, pass_f, rush_f = [], [], []
     for _ in teams:
         team_f.append([max(0.2, 1 + TEAM_SD * rng.gauss(0, 1)) for _ in range(sims)])
         pass_f.append([max(0.2, 1 + PASS_SD * rng.gauss(0, 1)) for _ in range(sims)])
         rush_f.append([max(0.2, 1 + RUSH_SD * rng.gauss(0, 1)) for _ in range(sims)])
 
+    # Zero-sum share shocks inside each team's backfield and receiving corps.
+    # Drawing one value per member and subtracting the group mean makes it pure
+    # redistribution: the group's total is untouched, but who gets it moves.
+    sub = {}
+    groups = {}
+    for p in players:
+        g = _sub_group(p)
+        if g and p.proj > 0 and p.team:
+            groups.setdefault((p.team, g), []).append(p)
+    for (tm, g), members in groups.items():
+        if len(members) < 2:
+            continue
+        width = SUB_SD_RB if g == "RB" else SUB_SD_REC
+        draws = [[rng.gauss(0, 1) for _ in members] for _ in range(sims)]
+        for s in range(sims):
+            row = draws[s]
+            mean = sum(row) / len(row)
+            for m, z in zip(members, row):
+                sub.setdefault(m.dk_id, [1.0] * sims)[s] = max(
+                    0.15, 1 + width * (z - mean))
+
     out = {}
     for p in players:
         if p.proj <= 0:
             out[p.dk_id] = [0.0] * sims
             continue
-        gx, tx, px, rx, ox = _player_factors(p, teams)
+        gx, tx, px, rx, ox, opx = _player_factors(p, teams)
         ti = tidx.get(p.team, 0)
         oi = tidx.get(p.opponent, 1 - ti if len(teams) > 1 else 0)
+        gi = gidx.get(p.game, 0)
+        game = game_f[gi]
 
         # Systematic relative variance this player is exposed to.
+        gsub = _sub_group(p)
+        sub_w = (SUB_SD_RB if gsub == "RB" else SUB_SD_REC) if p.dk_id in sub else 0.0
         sys_var = ((gx * GAME_SD) ** 2 + (tx * TEAM_SD) ** 2
                    + (px * PASS_SD) ** 2 + (rx * RUSH_SD) ** 2
-                   + (ox * TEAM_SD) ** 2)
+                   + (ox * TEAM_SD) ** 2 + (opx * PASS_SD) ** 2
+                   + sub_w ** 2)
         sys_sd = math.sqrt(sys_var) * p.proj
         total_sd = p.sd if p.sd > 0 else 0.9 * p.proj
         # Whatever variance the shared factors do not account for is the
@@ -148,6 +216,7 @@ def simulate(players, sims=4000, seed=0):
             hi_mean = thresh * 1.25
             lo_mean = (p.proj - boom_p * hi_mean) / (1 - boom_p)
             use_mix = lo_mean > 0.15 * p.proj
+        sub_row = sub.get(p.dk_id)
         row = []
         for s in range(sims):
             mult = (game[s] ** gx)
@@ -159,6 +228,10 @@ def simulate(players, sims=4000, seed=0):
                 mult *= rush_f[ti][s] ** (rx * damp)
             if ox and len(teams) > 1:
                 mult *= team_f[oi][s] ** (ox * damp)
+            if opx and len(teams) > 1:
+                mult *= pass_f[oi][s] ** (opx * damp)
+            if sub_row is not None:
+                mult *= sub_row[s] ** damp
             if use_mix and rng.random() < boom_p:
                 base = _gamma_draw(hi_mean, idio_sd, rng)
             elif use_mix:
@@ -317,7 +390,15 @@ def build_candidates(players, n, *, teams, split_targets=None, rng=None,
         pool = [p for p in players if p.proj > 0 and p.salary > 0]
     if len(pool) < ROSTER_SIZE or len(teams) < 2:
         return []
-    cpt_pool = cpt_pool or pool
+    # The sharp's pool binds DURING construction, not as a filter afterwards.
+    # As a post-filter it merely wastes tries here (a 25-name sheet against a
+    # 40-player board passes about one build in sixteen) and fails outright on a
+    # main slate, so both builders enforce it the same way.
+    def allowed(p, off):
+        return (max_off_pool is None or p.in_pool or p.core
+                or off < max_off_pool)
+
+    cpt_pool = [p for p in (cpt_pool or pool) if allowed(p, 0)] or pool
     splits = list(split_targets.items())
     out, seen = [], set()
     # No single captain may take more than this share of the CANDIDATE pool, so
@@ -359,6 +440,7 @@ def build_candidates(players, n, *, teams, split_targets=None, rng=None,
             continue
         picked = [cpt]
         used = {cpt.dk_id}
+        off = 0 if (cpt.in_pool or cpt.core) else 1
         left = {cpt.team: need[cpt.team] - 1,
                 minor if cpt.team == major else major:
                     need[minor if cpt.team == major else major]}
@@ -384,6 +466,8 @@ def build_candidates(players, n, *, teams, split_targets=None, rng=None,
                     continue
                 if left.get(p.team, 0) <= 0:
                     continue
+                if not allowed(p, off):
+                    continue
                 if salary + p.salary > SALARY_CAP:
                     continue
                 # leave enough room for the remaining slots
@@ -402,6 +486,8 @@ def build_candidates(players, n, *, teams, split_targets=None, rng=None,
             used.add(p.dk_id)
             salary += p.salary
             left[p.team] -= 1
+            if not (p.in_pool or p.core):
+                off += 1
         if not ok or len(picked) != ROSTER_SIZE:
             continue
         if not _dst_ok(picked):
@@ -425,7 +511,9 @@ def build_candidates(players, n, *, teams, split_targets=None, rng=None,
                 budget = worst.salary + spare
                 better = [q for q in pool
                           if q.dk_id not in used and q.team == worst.team
-                          and q.salary <= budget and q.proj > worst.proj]
+                          and q.salary <= budget and q.proj > worst.proj
+                          and allowed(q, off - (0 if (worst.in_pool or worst.core)
+                                                else 1))]
                 if not better:
                     break
                 up = max(better, key=lambda q: q.proj)
