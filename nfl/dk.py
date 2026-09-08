@@ -27,16 +27,22 @@ PASS_CATCHERS = {"WR", "TE", "RB"}   # RB only partially — see engine.PASS_SHA
 @dataclass
 class Player:
     name: str
-    dk_id: str
+    dk_id: str           # DK's FLEX id
     pos: str             # QB / RB / WR / TE / K / DST
     team: str
     opponent: str
     salary: int          # FLEX salary; captain costs round(salary * 1.5)
-    proj: float          # blended projection, FLEX basis
-    ownership: float     # projected FLEX+CPT total ownership %, 0..100
+    proj: float          # projection, FLEX basis
+    ownership: float     # projected ownership across the five FLEX slots
+                         # (Stokastic's column sums to 500%, not 600%)
+    # DK's CAPTAIN id — a DIFFERENT number for the same player. Showdown lists
+    # every player twice, once per slot, at 1.5x salary as captain. Writing the
+    # flex id into the captain cell produces a file DK will not accept. Filled
+    # in from the DK entries export, which is the only source that carries it.
+    cpt_dk_id: str = ""
     sd: float = 0.0      # outcome standard deviation
     boom: float = 0.0    # P(score > 5x salary/1000), %
-    cpt_own: float = 0.0 # projected ownership AS captain, %
+    cpt_own: float = 0.0 # projected ownership AS captain, % (sums to 100%)
     cpt_optimal: float = 0.0  # how often they captain the sim's optimal lineup, %
     core: bool = False
     in_pool: bool = False
@@ -52,6 +58,12 @@ class Player:
 
     def cpt_salary(self) -> int:
         return int(round(self.salary * CAPTAIN_MULT))
+
+    def upload_id(self, as_captain: bool) -> str:
+        """The id DK expects for the slot this player is filling."""
+        if as_captain and self.cpt_dk_id:
+            return self.cpt_dk_id
+        return self.dk_id
 
 
 class Lineup:

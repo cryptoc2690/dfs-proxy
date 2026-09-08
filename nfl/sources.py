@@ -190,32 +190,51 @@ FIELD_COLUMNS = {
 def read_field(text, by_id=None, by_name=None):
     """Their lineup pool. -> (entries, report)
 
-    Each entry: {"cpt": Player|None, "flex": [Player], "dupes": float,
-                 "win": float, "roi": float, "raw": {...}}
-    Player slots are resolved against the projections pool when one is supplied,
-    so the field and our own builds share objects.
-    """
-    rdr = csv.DictReader(io.StringIO((text or "").lstrip("﻿")))
-    rows = list(rdr)
-    if not rows:
-        return [], {"error": "empty file"}
-    headers = list(rows[0].keys())
-    cols, _ = _match_columns(headers, FIELD_COLUMNS)
+    Read POSITIONALLY, not through DictReader. The export's roster columns are
+    literally headed `CPT,FLEX,FLEX,FLEX,FLEX,FLEX`, and a dict keyed on header
+    name silently keeps only the last of five identically-named columns — so
+    every lineup would resolve to one flex player instead of five, and the whole
+    field model would come back empty without erroring.
 
-    # Roster columns: a CPT column plus FLEX columns, in file order. Fall back to
-    # any column whose cells look like 'Name (12345678)'.
-    roster_cols = [h for h in headers
-                   if re.search(r"\b(cpt|captain|flex|util|player\s*\d)\b",
-                                h or "", re.I)]
-    if len(roster_cols) < 6:
-        roster_cols = [h for h in headers
-                       if sum(1 for r in rows[:40]
-                              if re.search(r"\(\d{5,}\)", str(r.get(h) or ""))) > 20]
-    cpt_col = next((h for h in roster_cols
-                    if re.search(r"\b(cpt|captain)\b", h or "", re.I)), None)
-    if cpt_col is None and roster_cols:
-        cpt_col = roster_cols[0]          # DK/Stokastic both put the captain first
-    flex_cols = [h for h in roster_cols if h != cpt_col]
+    Each entry: {"cpt": Player|None, "flex": [Player], "dupes", "win", ...}
+    Slots resolve against the projections pool, so the field and our own builds
+    share Player objects.
+    """
+    rows = list(csv.reader(io.StringIO((text or "").lstrip("﻿"))))
+    if len(rows) < 2:
+        return [], {"error": "empty file"}
+    headers = rows[0]
+    norm = [_norm_header(h) for h in headers]
+
+    # Roster columns by POSITION: the captain column, then the flex columns.
+    cpt_i = next((i for i, h in enumerate(norm) if h in ("cpt", "captain")), None)
+    flex_i = [i for i, h in enumerate(norm) if h.startswith("flex")]
+    if cpt_i is None or len(flex_i) < 5:
+        # Fall back to whichever columns actually hold 'Name (12345678)' cells.
+        looks = [i for i in range(len(headers))
+                 if sum(1 for r in rows[1:40]
+                        if i < len(r) and re.search(r"\(\d{5,}\)", r[i] or "")) > 20]
+        if len(looks) >= 6:
+            cpt_i, flex_i = looks[0], looks[1:6]
+    if cpt_i is None or len(flex_i) < 5:
+        return [], {"error": "could not find CPT + 5 FLEX columns",
+                    "headers": headers}
+    flex_i = flex_i[:5]
+
+    def col(*names):
+        for n in names:
+            if n in norm:
+                return norm.index(n)
+        for n in names:
+            for i, h in enumerate(norm):
+                if h.startswith(n):
+                    return i
+        return None
+
+    ci = {"dupes": col("dupes"), "win": col("win%", "win"),
+          "top10": col("top10%", "top10"), "cash": col("cash%", "cash"),
+          "roi": col("simulatedroi", "roi"), "ownsum": col("ownsum"),
+          "stack": col("stack"), "salary": col("salary")}
 
     by_id = by_id or {}
     by_name = by_name or {}
@@ -226,25 +245,30 @@ def read_field(text, by_id=None, by_name=None):
             return by_id[pid]
         return by_name.get(normalize_name(name))
 
+    def num(r, key):
+        i = ci.get(key)
+        return _f(r[i]) if i is not None and i < len(r) else 0.0
+
     entries, unresolved = [], 0
-    for r in rows:
-        cpt = resolve(r.get(cpt_col)) if cpt_col else None
-        flex = [resolve(r.get(c)) for c in flex_cols]
+    for r in rows[1:]:
+        if not r or len(r) <= max(flex_i):
+            continue
+        cpt = resolve(r[cpt_i])
+        flex = [resolve(r[i]) for i in flex_i]
         if cpt is None or any(p is None for p in flex):
             unresolved += 1
+            continue
+        si = ci.get("stack")
         entries.append({
-            "cpt": cpt,
-            "flex": [p for p in flex if p is not None],
-            "dupes": _f(r.get(cols.get("dupes", ""))) if "dupes" in cols else 0.0,
-            "win": _f(r.get(cols.get("win", ""))) if "win" in cols else 0.0,
-            "top10": _f(r.get(cols.get("top10", ""))) if "top10" in cols else 0.0,
-            "cash": _f(r.get(cols.get("cash", ""))) if "cash" in cols else 0.0,
-            "roi": _f(r.get(cols.get("roi", ""))) if "roi" in cols else 0.0,
-            "own_sum": _f(r.get(cols.get("ownsum", ""))) if "ownsum" in cols else 0.0,
-            "stack": (r.get(cols.get("stack", ""), "") or "").strip() if "stack" in cols else "",
+            "cpt": cpt, "flex": flex,
+            "dupes": num(r, "dupes"), "win": num(r, "win"),
+            "top10": num(r, "top10"), "cash": num(r, "cash"),
+            "roi": num(r, "roi"), "own_sum": num(r, "ownsum"),
+            "stack": (r[si].strip() if si is not None and si < len(r) else ""),
         })
-    return entries, {"matched": cols, "roster_cols": roster_cols,
-                     "cpt_col": cpt_col, "rows": len(rows),
+    return entries, {"cpt_col": headers[cpt_i],
+                     "flex_cols": [headers[i] for i in flex_i],
+                     "rows": len(rows) - 1, "parsed": len(entries),
                      "unresolved_rosters": unresolved}
 
 
@@ -280,12 +304,20 @@ def read_dk_entries(text):
             })
         if pi is not None and len(r) > pi + 5 and (r[pi + 2] or "").strip().isdigit():
             name = (r[pi + 1] or "").strip()
-            pool[normalize_name(name)] = {
-                "dk_id": (r[pi + 2] or "").strip(),
-                "name": name,
-                "roster_pos": (r[pi + 3] or "").strip().upper(),
-                "salary": int(_f(r[pi + 4])),
-            }
+            key = normalize_name(name)
+            slot = (r[pi + 3] or "").strip().upper()
+            # Showdown lists every player TWICE — once as CPT at 1.5x salary and
+            # once as FLEX — under two different DK ids. Keep both. Keying on
+            # name alone would let whichever row came last win, and a flex id in
+            # the captain cell is a file DK will not accept.
+            rec = pool.setdefault(key, {"name": name, "dk_id": "", "cpt_dk_id": "",
+                                        "salary": 0, "cpt_salary": 0})
+            if slot == "CPT":
+                rec["cpt_dk_id"] = (r[pi + 2] or "").strip()
+                rec["cpt_salary"] = int(_f(r[pi + 4]))
+            else:
+                rec["dk_id"] = (r[pi + 2] or "").strip()
+                rec["salary"] = int(_f(r[pi + 4]))
     return {"slots": slots or ["CPT", "FLEX", "FLEX", "FLEX", "FLEX", "FLEX"],
             "entries": entries, "pool": pool}
 

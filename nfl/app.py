@@ -53,22 +53,26 @@ def _attach_dk_ids(players, dk):
     report the misses loudly rather than shipping a file with wrong IDs."""
     if not dk or not dk.get("pool"):
         return 0, []
-    hit, miss = 0, []
+    hit, miss, no_cpt = 0, [], []
     for p in players:
         rec = dk["pool"].get(normalize_name(p.name))
         if rec:
-            p.dk_id = rec["dk_id"]
+            p.dk_id = rec["dk_id"] or p.dk_id
+            p.cpt_dk_id = rec["cpt_dk_id"]
+            if not p.cpt_dk_id and p.proj > 0:
+                no_cpt.append(p.name)
             hit += 1
         else:
             miss.append(p.name)
-    return hit, miss
+    return hit, miss, no_cpt
 
 
 def _dk_rows(entries, lineups, contest_hdr):
     """One re-uploadable DK line per entry, captain first."""
     lines = [contest_hdr]
     for e, lu in zip(entries, lineups):
-        cells = [f'"{p.name} ({p.dk_id})"' for p in [lu.cpt] + lu.flex]
+        cells = [f'"{p.name.strip()} ({p.upload_id(i == 0)})"'
+                 for i, p in enumerate([lu.cpt] + lu.flex)]
         cname = (e["contest"] or "").replace('"', '""')
         lines.append(f'{e["entry_id"]},"{cname}",{e["contest_id"]},{e["fee"]},'
                      + ",".join(cells))
@@ -133,11 +137,16 @@ def main(argv=None):
     ap.add_argument("--player-cap", type=float, default=E.PLAYER_CAP)
     ap.add_argument("--max-leftover", type=int, default=E.MAX_LEFTOVER,
                     help="most salary a lineup may leave unspent")
+    ap.add_argument("--min-proj", type=float, default=E.MIN_PROJ,
+                    help="a roster spot must project at least this much")
     ap.add_argument("--max-off-pool", type=int, default=None,
                     help="max non-pool players per lineup (needs --pool)")
     ap.add_argument("--entries-at-build", type=int, default=None,
                     help="contest entries so far — fill %% is a real edge, log it")
     ap.add_argument("--field-cap", type=int, default=None)
+    ap.add_argument("--expect-entries", type=int, default=None,
+                    help="your read of the FINAL field size; scales duplication "
+                         "because the vendor pool models a capped field")
     ap.add_argument("--out", default="nfl_upload.csv")
     a = ap.parse_args(argv)
 
@@ -165,21 +174,27 @@ def main(argv=None):
 
     dk = read_dk_entries(_read(a.dk)) if a.dk else None
     if dk:
-        hit, miss = _attach_dk_ids(players, dk)
+        hit, miss, no_cpt = _attach_dk_ids(players, dk)
         print(f"  DK entries: {len(dk['entries'])} entries, "
               f"{len(dk['pool'])} pool players, {hit} IDs matched")
         if miss:
             print(f"    ! {len(miss)} unmatched by name: {', '.join(miss[:8])}"
                   + (" ..." if len(miss) > 8 else ""))
+        if no_cpt:
+            print(f"    ! no CAPTAIN id for: {', '.join(no_cpt[:8])} — these "
+                  f"cannot be captained in the upload file")
 
     by_id = {p.dk_id: p for p in players}
     by_name = {normalize_name(p.name): p for p in players}
     field, frep = ([], {})
     if a.field:
         field, frep = read_field(_read(a.field), by_id=by_id, by_name=by_name)
-        print(f"  field: {frep.get('rows', 0)} vendor lineups, "
-              f"captain col = {frep.get('cpt_col')}, "
-              f"{frep.get('unresolved_rosters', 0)} unresolved")
+        if frep.get("error"):
+            print(f"  field: {frep['error']} — headers {frep.get('headers')}")
+        else:
+            print(f"  field: {frep['parsed']} of {frep['rows']} vendor lineups "
+                  f"parsed ({frep.get('unresolved_rosters', 0)} unresolved), "
+                  f"slots {frep['cpt_col']} + {len(frep['flex_cols'])} flex")
 
     pool_names = read_sharp(_read(a.pool)) if a.pool else set()
     core_names = read_sharp(_read(a.cores)) if a.cores else set()
@@ -187,13 +202,19 @@ def main(argv=None):
     if pool_names or core_names:
         print(f"  sharp: {ncore} cores, {npool} in pool")
 
-    # --- the arithmetic check that catches the captain trap ---------------
-    tot_own = sum(p.ownership for p in players)
-    print(f"  ownership sums to {tot_own:.1f}% "
-          f"({'looks like all six slots' if 550 <= tot_own <= 650 else 'CHECK THIS'})")
-    if not (550 <= tot_own <= 650):
-        print("    ! showdown total ownership should land near 600% (six slots).")
-        print("    ! near 100% means you read the CAPTAIN-only column.")
+    # --- the arithmetic check that catches the per-slot ownership trap -----
+    # Showdown reports ownership per ROSTER SLOT, and the six slots are split
+    # across two columns: the flex column sums to 500% (five slots) and the
+    # captain column to 100% (one). Together 600%. Reading either one as "total
+    # ownership" silently corrupts every leverage and duplication figure, which
+    # is why this prints on every run rather than living in a comment.
+    flex_own = sum(p.ownership for p in players)
+    cpt_own = sum(p.cpt_own for p in players)
+    print(f"  ownership: flex {flex_own:.0f}% + captain {cpt_own:.0f}% "
+          f"= {flex_own + cpt_own:.0f}% across six slots")
+    if not (450 <= flex_own <= 650 and 550 <= flex_own + cpt_own <= 650):
+        print("    ! expected flex ~500% and flex+captain ~600%. Check which")
+        print("    ! ownership column was read — they are different quantities.")
 
     print("\n== simulating ==")
     mat = E.simulate(players, sims=a.sims, seed=a.seed)
@@ -205,7 +226,20 @@ def main(argv=None):
     else:
         print("  no field file — ranking on simulated score alone, no win rate")
     idx = E.dupe_index(field) if field else {}
-    print(f"  distinct vendor lineups indexed: {len(idx)}")
+    modelled = E.field_size(field) if field else 0
+    dupe_scale = 1.0
+    if modelled and a.expect_entries:
+        dupe_scale = max(1.0, a.expect_entries / modelled)
+    if field:
+        print(f"  vendor pool: {len(idx):,} distinct lineups modelling "
+              f"{modelled:,.0f} opponent entries")
+        if a.expect_entries:
+            print(f"  expecting {a.expect_entries:,} real entries -> "
+                  f"duplication scaled x{dupe_scale:.2f}")
+        elif a.field_cap and modelled < a.field_cap * 0.9:
+            print(f"  ! contest holds up to {a.field_cap:,}. If it fills past "
+                  f"{modelled:,.0f}, duplication here is understated — pass "
+                  f"--expect-entries with your read of the final field.")
 
     n_mine = a.n if a.split == 0 else min(a.split, a.n)
     n_vendor = a.n - n_mine
@@ -217,18 +251,20 @@ def main(argv=None):
             players, max(4000, n_mine * 30), teams=teams,
             rng=__import__("random").Random(a.seed),
             max_off_pool=a.max_off_pool, max_leftover=a.max_leftover,
+            min_proj=a.min_proj,
         )
         print(f"  candidates: {len(cands)}")
         if not cands:
             print("  ! built nothing — check salaries/teams in the projections file")
             return 3
         if bar:
-            E.rank(cands, mat, bar, a.sims, idx, own_lean=a.own_lean)
+            E.rank(cands, mat, bar, a.sims, idx, own_lean=a.own_lean,
+                   dupe_scale=dupe_scale)
         else:
             for lu in cands:
                 sc = E.score_lineup(lu, mat, a.sims)
                 lu.metrics = {"mean": round(sum(sc) / a.sims, 2),
-                              "dupes": round(E.estimated_dupes(lu, idx), 2)}
+                              "dupes": round(E.estimated_dupes(lu, idx, scale=dupe_scale), 2)}
                 lu.metrics["score"] = lu.metrics["mean"] / (1 + lu.metrics["dupes"])
             cands.sort(key=lambda l: -l.metrics["score"])
         mine = E.select(cands, n_mine, captain_cap=a.captain_cap,
@@ -244,7 +280,8 @@ def main(argv=None):
             chosen += E.vendor_arm(field, n_vendor, players_by_id=by_id,
                                    captain_cap=a.captain_cap,
                                    min_captains=a.min_captains,
-                                   player_cap=a.player_cap)
+                                   player_cap=a.player_cap,
+                                   dupe_scale=dupe_scale)
 
     if not chosen:
         print("no lineups produced")
@@ -286,6 +323,9 @@ def main(argv=None):
                      "max_off_pool": a.max_off_pool, "seed": a.seed},
         "contest_state": {"entries_at_build": a.entries_at_build,
                           "field_cap": a.field_cap,
+                          "expect_entries": a.expect_entries,
+                          "vendor_field_modelled": modelled,
+                          "dupe_scale": round(dupe_scale, 3),
                           "fill_pct": (round(100.0 * a.entries_at_build / a.field_cap, 2)
                                        if a.entries_at_build and a.field_cap else None)},
     }

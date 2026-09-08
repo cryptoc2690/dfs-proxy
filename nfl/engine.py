@@ -210,6 +210,19 @@ def win_rate(scores, bar, sims):
 
 
 # --- duplication ---------------------------------------------------------
+def field_size(field_entries):
+    """How many opponent entries the vendor pool actually models.
+
+    Their generator is capped — 50,000 for showdown on the Max package — while
+    this contest holds up to 237,812. If it fills past what the pool models,
+    every duplication figure is understated by the ratio, so the caller can
+    scale. At the fill levels seen so far the two happen to be close, which is
+    luck rather than design.
+    """
+    return sum(1.0 + (e.get("dupes") or 0.0) for e in field_entries
+               if e.get("cpt") is not None)
+
+
 def dupe_index(field_entries):
     """{lineup key: how many field entries hold exactly this roster}.
 
@@ -227,11 +240,11 @@ def dupe_index(field_entries):
     return idx
 
 
-def estimated_dupes(lu, idx, own_fallback=True):
+def estimated_dupes(lu, idx, own_fallback=True, scale=1.0):
     """How many opponents we expect to be holding this exact roster."""
     hit = idx.get(lu.key())
     if hit is not None:
-        return hit - 1.0 if hit >= 1 else 0.0
+        return max(0.0, (hit - 1.0) * scale)
     if not own_fallback:
         return 0.0
     # Not in the vendor pool at all -> the field is unlikely to build it. Use a
@@ -240,7 +253,7 @@ def estimated_dupes(lu, idx, own_fallback=True):
     for pl in lu.flex:
         p *= max(pl.ownership, 0.1) / 100.0
     p *= max(lu.cpt.cpt_own or lu.cpt.ownership / 3.0, 0.1) / 100.0
-    return p * 50_000.0
+    return p * 50_000.0 * scale
 
 
 # --- construction --------------------------------------------------------
@@ -250,7 +263,15 @@ SPLIT_TARGETS = {"5-1": 0.45, "4-2": 0.40, "3-3": 0.15}
 # duplicated, which is worth something when 70% of showdown lineups carry a
 # dupe. So this is a junk filter, not a lever: it exists to stop the builder
 # handing back a lineup with five figures unspent, and nothing more.
-MAX_LEFTOVER = 2500
+MAX_LEFTOVER = 5000
+
+# A roster spot projected under this is dead weight, not a punt. The real slate
+# runs Efton Chism III at 0.20 projected points and Tanner Arkin at 0.15 — a
+# $200 body exists only so the cap can be reached, and since leftover salary is
+# a null on showdown win rate there is no reason to reach it through one. This
+# is the showdown equivalent of the WNBA minutes gate: a floor on whether a slot
+# has any path to a useful score, not a grade on how good the player is.
+MIN_PROJ = 2.0
 OWN_LEAN = 0.35          # POSITIVE = lean toward the field. See below.
 CAPTAIN_CAP = 0.28       # share of entries any one captain may hold
 MIN_CAPTAINS = 10
@@ -285,11 +306,15 @@ def _dst_ok(players):
 
 
 def build_candidates(players, n, *, teams, split_targets=None, rng=None,
-                     max_off_pool=None, cpt_pool=None, max_leftover=MAX_LEFTOVER):
+                     max_off_pool=None, cpt_pool=None, max_leftover=MAX_LEFTOVER,
+                     min_proj=MIN_PROJ):
     """Randomised construction aimed at the shapes the field under-builds."""
     rng = rng or random.Random(0)
     split_targets = split_targets or SPLIT_TARGETS
-    pool = [p for p in players if p.proj > 0 and p.salary > 0]
+    pool = [p for p in players
+            if p.proj >= (min_proj if min_proj is not None else 0) and p.salary > 0]
+    if len(pool) < ROSTER_SIZE:      # gate too tight for this slate — ungate
+        pool = [p for p in players if p.proj > 0 and p.salary > 0]
     if len(pool) < ROSTER_SIZE or len(teams) < 2:
         return []
     cpt_pool = cpt_pool or pool
@@ -424,11 +449,11 @@ def build_candidates(players, n, *, teams, split_targets=None, rng=None,
         return build_candidates(players, n, teams=teams,
                                 split_targets=split_targets, rng=rng,
                                 max_off_pool=max_off_pool, cpt_pool=cpt_pool,
-                                max_leftover=None)
+                                max_leftover=None, min_proj=min_proj)
     return out
 
 
-def rank(lineups, mat, bar, sims, dupes_idx, own_lean=OWN_LEAN):
+def rank(lineups, mat, bar, sims, dupes_idx, own_lean=OWN_LEAN, dupe_scale=1.0):
     """Duplication-adjusted win probability, with a modest ownership lean.
 
     The lean is POSITIVE in showdown, which is the opposite of the classic
@@ -445,7 +470,7 @@ def rank(lineups, mat, bar, sims, dupes_idx, own_lean=OWN_LEAN):
         sc = score_lineup(lu, mat, sims)
         sc_sorted = sorted(sc)
         w = win_rate(sc, bar, sims) if bar else 0.0
-        d = estimated_dupes(lu, dupes_idx)
+        d = estimated_dupes(lu, dupes_idx, scale=dupe_scale)
         on = (lu.own_sum - lo) / span
         lu.metrics.update({
             "win": round(w, 5),
@@ -567,7 +592,7 @@ def select(lineups, n, *, captain_cap=CAPTAIN_CAP, min_captains=MIN_CAPTAINS,
 
 def vendor_arm(field_entries, n, *, players_by_id, captain_cap=CAPTAIN_CAP,
                min_captains=MIN_CAPTAINS, player_cap=PLAYER_CAP,
-               max_overlap=MAX_OVERLAP):
+               max_overlap=MAX_OVERLAP, dupe_scale=1.0):
     """Their pool, re-ranked on Win% / (1 + Dupes) and put through the same caps.
 
     This is the control arm for the A/B comparison, and on its own it is a
@@ -582,7 +607,7 @@ def vendor_arm(field_entries, n, *, players_by_id, captain_cap=CAPTAIN_CAP,
         if cpt is None or len(flex) != ROSTER_SIZE - 1:
             continue
         lu = Lineup(cpt, flex, source="vendor")
-        d = e.get("dupes") or 0.0
+        d = (e.get("dupes") or 0.0) * dupe_scale
         lu.metrics = {"win": e.get("win", 0.0), "dupes": d,
                       "roi": e.get("roi", 0.0), "cash": e.get("cash", 0.0),
                       "score": (e.get("win", 0.0)) / (1.0 + d)}
