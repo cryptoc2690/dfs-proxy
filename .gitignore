@@ -1,0 +1,8 @@
+# Generated per-slate outputs. Every build writes one of these and it carries a
+# specific contest's Entry IDs, so it is a throwaway artifact rather than source.
+# The build logs it pairs with are ignored the same way (wnba/.gitignore,
+# nfl/.gitignore) and are the thing actually worth keeping.
+*_upload.csv
+nfl_upload.csv
+__pycache__/
+*.pyc
