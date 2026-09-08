@@ -466,7 +466,8 @@ def rank(lineups, mat, bar, sims, dupes_idx, own_lean=OWN_LEAN, dupe_scale=1.0,
 
 
 def select(lineups, n, *, player_cap=PLAYER_CAP, qb_cap=QB_CAP, dst_cap=DST_CAP,
-           max_overlap=MAX_OVERLAP, stack_targets=None, core_floors=None):
+           max_overlap=MAX_OVERLAP, stack_targets=None, core_floors=None,
+           exclude=None):
     """Pick the final N under exposure, overlap and stack-shape quotas.
 
     Stack depth is a quota for the same reason the showdown team split is: the
@@ -476,6 +477,20 @@ def select(lineups, n, *, player_cap=PLAYER_CAP, qb_cap=QB_CAP, dst_cap=DST_CAP,
     lose a straight ranking contest while winning every like-for-like one. That
     is why the field builds QB+3 under 9% of the time.
     """
+    # Duplicate rosters are dropped here, and `exclude` carries what an earlier
+    # arm already took. Both arms chase the same shapes out of the same pool, so
+    # they collide — a real showdown split produced three identical pairs. A
+    # second copy of a roster you already hold buys no coverage: if it hits, the
+    # two entries just split the tied places between them.
+    seen_keys = set(exclude or ())
+    unique = []
+    for lu in lineups:
+        k = lu.key()
+        if k in seen_keys:
+            continue
+        seen_keys.add(k)
+        unique.append(lu)
+    lineups = unique
     ply = max(1, round(player_cap * n))
     qbc = max(1, round(qb_cap * n))
     dstc = max(1, round(dst_cap * n))

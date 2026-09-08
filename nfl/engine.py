@@ -613,7 +613,7 @@ def _enforce_core_floors(chosen, pool, floors):
 
 def select(lineups, n, *, captain_cap=CAPTAIN_CAP, min_captains=MIN_CAPTAINS,
            player_cap=PLAYER_CAP, max_overlap=MAX_OVERLAP,
-           split_targets=None, core_floors=None):
+           split_targets=None, core_floors=None, exclude=None):
     """Pick the final N under coverage rules rather than diversification ones.
 
     150 showdown entries are worth roughly two independent bets — mean pairwise
@@ -632,7 +632,24 @@ def select(lineups, n, *, captain_cap=CAPTAIN_CAP, min_captains=MIN_CAPTAINS,
     projection bands, and loses pooled. A quota is how you act on a
     matched-projection result; ranking alone would quietly discard it, which is
     the whole reason the field only builds 5-1 about 15.6% of the time.
+
+    Duplicate rosters are dropped here, and `exclude` carries the rosters an
+    earlier arm already took. Both arms chase the same high-win-rate shapes out
+    of the same player pool, so they collide: on the real showdown slate a 75/75
+    split returned three identical pairs, one copy in each arm. A second copy of
+    a roster you already hold buys no coverage — if it hits, the two entries
+    just split the tied places between them — so against a first-place objective
+    it is an entry spent on an outcome you already own.
     """
+    seen_keys = set(exclude or ())
+    unique = []
+    for lu in lineups:
+        k = lu.key()
+        if k in seen_keys:
+            continue
+        seen_keys.add(k)
+        unique.append(lu)
+    lineups = unique
     cap_ct = max(1, round(captain_cap * n))
     ply_ct = max(1, round(player_cap * n))
     quota = {}
@@ -724,7 +741,7 @@ def select(lineups, n, *, captain_cap=CAPTAIN_CAP, min_captains=MIN_CAPTAINS,
 
 def vendor_arm(field_entries, n, *, players_by_id, captain_cap=CAPTAIN_CAP,
                min_captains=MIN_CAPTAINS, player_cap=PLAYER_CAP,
-               max_overlap=MAX_OVERLAP, dupe_scale=1.0):
+               max_overlap=MAX_OVERLAP, dupe_scale=1.0, exclude=None):
     """Their pool, re-ranked on Win% / (1 + Dupes) and put through the same caps.
 
     This is the control arm for the A/B comparison, and on its own it is a
@@ -746,4 +763,5 @@ def vendor_arm(field_entries, n, *, players_by_id, captain_cap=CAPTAIN_CAP,
         cands.append(lu)
     cands.sort(key=lambda l: -l.metrics["score"])
     return select(cands, n, captain_cap=captain_cap, min_captains=min_captains,
-                  player_cap=player_cap, max_overlap=max_overlap)
+                  player_cap=player_cap, max_overlap=max_overlap,
+                  exclude=exclude)

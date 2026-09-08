@@ -514,14 +514,33 @@ def run_build(proj_text, field_text="", dk_text="", options=None):
         if not field:
             say("warn", "The vendor half of the split needs the vendor lineup "
                         "file; skipping it.")
-        elif fmt == "showdown":
-            chosen += E.vendor_arm(field, n_vendor, players_by_id=by_id,
-                                   dupe_scale=dupe_scale, **caps)
         else:
-            chosen += C.vendor_arm(field, n_vendor, dupe_scale=dupe_scale, **caps)
+            # What our own arm already took. Both arms rank the same player pool
+            # on the same objective, so they land on the same rosters — a real
+            # 75/75 showdown split produced three identical pairs before this.
+            mine_keys = {lu.key() for lu in chosen}
+            if fmt == "showdown":
+                chosen += E.vendor_arm(field, n_vendor, players_by_id=by_id,
+                                       dupe_scale=dupe_scale,
+                                       exclude=mine_keys, **caps)
+            else:
+                chosen += C.vendor_arm(field, n_vendor, dupe_scale=dupe_scale,
+                                       exclude=mine_keys, **caps)
 
     if not chosen:
         return {"error": "No lineups produced.", "notes": notes}
+
+    # Belt and braces. Every path above dedupes, but this is the one error that
+    # is invisible in the output and costs a real entry, so it is checked on the
+    # finished set rather than trusted.
+    keys = [lu.key() for lu in chosen]
+    dupes = len(keys) - len(set(keys))
+    if dupes:
+        say("warn", f"{dupes} of these {len(chosen)} entries duplicate another "
+                    f"one exactly. That should not happen — do not upload until "
+                    f"it is looked at.")
+    else:
+        say("good", f"All {len(chosen)} entries are distinct rosters.")
 
     # Where these entries sit against the actual opponents, on the two axes the
     # brief says decide a main slate. Ownership is the least-trusted finding in
