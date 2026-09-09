@@ -136,19 +136,27 @@ def _attach_dk_ids(players, dk):
     Showdown lists every player twice under two different ids — once as CPT at
     1.5x salary, once as FLEX — so both are carried and the writer picks by
     slot. A flex id in the captain cell is a file DK will not accept.
+
+    A record with an EMPTY flex id counts as a miss, not a hit. It used to count
+    as a hit, which meant the player kept the placeholder id `read_projections`
+    gave him — his own normalised name — and that name string went into the
+    upload file where a number belongs.
     """
     if not dk or not dk.get("pool"):
         return 0, [], []
     hit, miss, no_cpt = 0, [], []
     for p in players:
         rec = dk["pool"].get(normalize_name(p.name))
-        if rec:
-            p.dk_id = rec["dk_id"] or p.dk_id
+        if rec and rec.get("dk_id"):
+            p.dk_id = rec["dk_id"]
             p.cpt_dk_id = rec["cpt_dk_id"]
-            if not p.cpt_dk_id and p.proj > 0:
+            if not p.cpt_dk_id:
                 no_cpt.append(p.name)
             hit += 1
-        elif p.proj > 0:
+        else:
+            # Listed regardless of projection. A player projected 0 today can
+            # still be carried into a lineup by the vendor arm, which resolves
+            # its rosters by name.
             miss.append(p.name)
     return hit, miss, no_cpt
 
@@ -158,6 +166,79 @@ def _roster(lu, fmt):
     if fmt == "showdown":
         return [lu.cpt] + lu.flex
     return lu.slots()          # QB, RB, RB, WR, WR, WR, TE, FLEX, DST
+
+
+def _check_upload(entries, lineups, slots, fmt, dk):
+    """Everything that would make DK reject the file. -> [problem strings]
+
+    This is the last gate before an upload file exists, and it is deliberately
+    written against the FINISHED rows rather than trusting the builder that
+    produced them. Every rule the builder already enforces is checked again here
+    from the other side, because the builder enforcing it is exactly the
+    assumption that has failed before: a name that did not join DK, a captain
+    with no captain id, the same player reaching a roster twice through two
+    projection rows. None of those raise; they just produce a file DK bounces,
+    and by then the slate has locked.
+    """
+    bad = []
+    width = len(slots)
+    flex_ids = {v["dk_id"] for v in (dk or {}).get("pool", {}).values() if v["dk_id"]}
+    cpt_ids = {v["cpt_dk_id"] for v in (dk or {}).get("pool", {}).values()
+               if v["cpt_dk_id"]}
+    seen_entries = set()
+    for e, lu in zip(entries, lineups):
+        eid = e["entry_id"]
+        where = f"entry {eid}"
+        if eid in seen_entries:
+            bad.append(f"{where}: written more than once")
+        seen_entries.add(eid)
+        ps = _roster(lu, fmt)
+        if len(ps) != width or any(p is None for p in ps):
+            bad.append(f"{where}: {sum(1 for p in ps if p is not None)} players "
+                       f"for {width} roster slots")
+            continue
+        ids = [p.upload_id(i == 0) if fmt == "showdown" else p.dk_id
+               for i, p in enumerate(ps)]
+        for p, pid in zip(ps, ids):
+            if not str(pid).isdigit():
+                bad.append(f"{where}: {p.name.strip()} has no DK player ID "
+                           f"(got “{pid}”) — that name never matched the DK file")
+        if len({p.dk_id for p in ps}) != width:
+            names = [p.name.strip() for p in ps]
+            dup = [n for n in names if names.count(n) > 1]
+            bad.append(f"{where}: the same player appears twice"
+                       + (f" ({dup[0]})" if dup else ""))
+        if flex_ids or cpt_ids:
+            if fmt == "showdown":
+                if ids[0] not in cpt_ids:
+                    bad.append(f"{where}: {ps[0].name.strip()} is in the CAPTAIN "
+                               f"cell with a non-captain ID — DK will reject it")
+                for p, pid in zip(ps[1:], ids[1:]):
+                    if pid not in flex_ids:
+                        bad.append(f"{where}: {p.name.strip()} has an ID that is "
+                                   f"not in the DK player list")
+            else:
+                for p, pid in zip(ps, ids):
+                    if pid not in flex_ids:
+                        bad.append(f"{where}: {p.name.strip()} has an ID that is "
+                                   f"not in the DK player list")
+        if lu.salary > SALARY_CAP:
+            bad.append(f"{where}: ${lu.salary:,} is over the ${SALARY_CAP:,} cap")
+        if fmt == "showdown" and len({p.team for p in ps if p.team}) < 2:
+            bad.append(f"{where}: every player is from one team — showdown needs "
+                       f"both")
+        if fmt == "classic":
+            want = {"QB": 1, "DST": 1}
+            got = {}
+            for p in ps:
+                got[p.pos] = got.get(p.pos, 0) + 1
+            for pos, need in want.items():
+                if got.get(pos, 0) != need:
+                    bad.append(f"{where}: {got.get(pos, 0)} {pos} where DK wants "
+                               f"{need}")
+            if ps[7] is not None and ps[7].pos not in C.FLEX_POS:
+                bad.append(f"{where}: a {ps[7].pos} is in the FLEX slot")
+    return bad
 
 
 def _dk_rows(entries, lineups, header, fmt):
@@ -271,6 +352,10 @@ def run_build(proj_text, field_text="", dk_text="", options=None):
                 + ", ".join(f"{k} from “{v}”" for k, v in rep["matched"].items()))
     if rep["unmatched"]:
         say("info", "Not present, so skipped: " + ", ".join(rep["unmatched"]))
+    if rep.get("duplicate_rows"):
+        say("warn", f"{len(rep['duplicate_rows'])} duplicate row(s) in the "
+                    f"projections file, kept once each: "
+                    + ", ".join(rep["duplicate_rows"][:6]))
 
     teams = sorted({p.team for p in players if p.team})
     if len(teams) == 2:
@@ -307,11 +392,18 @@ def run_build(proj_text, field_text="", dk_text="", options=None):
         hit, miss, no_cpt = _attach_dk_ids(players, dk)
         say("good", f"DK entries: {len(dk['entries'])} entries, {hit} player IDs matched.")
         if miss:
-            say("warn", f"{len(miss)} projected players had no DK match by name: "
-                        + ", ".join(miss[:8]) + (" …" if len(miss) > 8 else ""))
+            say("warn", f"{len(miss)} player(s) in the projections file have no "
+                        f"DK match by name and cannot be used: "
+                        + ", ".join(miss[:10]) + (" …" if len(miss) > 10 else ""))
+        if hit and hit < 0.8 * (hit + len(miss)):
+            return {"error": f"Only {hit} of {hit + len(miss)} players matched "
+                             f"the DK entries file. That is almost certainly the "
+                             f"wrong slate's DK export — check the download.",
+                    "notes": notes}
         if no_cpt and fmt == "showdown":
-            say("warn", "No CAPTAIN id for " + ", ".join(no_cpt[:6])
-                        + " — they cannot be captained in the upload file.")
+            say("info", f"{len(no_cpt)} player(s) have no CAPTAIN id in the DK "
+                        f"file, so they will not be captained: "
+                        + ", ".join(no_cpt[:6]))
 
     by_id = {p.dk_id: p for p in players}
     by_name = {normalize_name(p.name): p for p in players}
@@ -371,6 +463,18 @@ def run_build(proj_text, field_text="", dk_text="", options=None):
     seed = _i(o.get("seed"), 0)
     n = max(1, _i(o.get("n"), 150))
     split = _i(o.get("split"), 0)
+    # Never build more lineups than there are entries to carry them. Building
+    # 150 against a 40-entry DK file used to write the first 40 and drop the
+    # rest, which quietly deleted the whole vendor arm and left the diagnostics
+    # describing 150 lineups that were never uploaded.
+    if dk and dk.get("entries") and len(dk["entries"]) < n:
+        say("warn", f"The DK file has {len(dk['entries'])} entries, so building "
+                    f"{len(dk['entries'])} lineups, not {n}. Enter or reserve "
+                    f"the rest on DK and download again if you want more.")
+        if split > 0:      # keep the A/B ratio you asked for, at the new size
+            split = max(1, round(split * len(dk["entries"]) / n))
+        n = len(dk["entries"])
+        split = min(split, n) if split > 0 else split
 
     mat = E.simulate(players, sims=sims, seed=seed)
     bar, sampled = M.field_bar(field, mat, sims, seed=seed) if field else (None, 0)
@@ -406,8 +510,14 @@ def run_build(proj_text, field_text="", dk_text="", options=None):
     raw_off = o.get("maxOffPool")
     if not pool_names:
         off_pool = None
-    elif raw_off in (None, "", "off"):
-        off_pool = 0
+    elif raw_off is None or raw_off == "":
+        off_pool = 0          # not specified: a pool means the pool
+    elif isinstance(raw_off, str) and raw_off.lower() in ("none", "off", "nolimit"):
+        # "No limit" has to MEAN no limit. It used to fall into the same branch
+        # as "not set" and become 0 — the strictest setting there is, the exact
+        # opposite of what the option says. Note the ordering: an unset CLI flag
+        # arrives as the None OBJECT and must not be read as the word "none".
+        off_pool = None
     else:
         off_pool = _i(raw_off, 0)
     if pool_names and off_pool == 0 and fmt == "classic":
@@ -450,8 +560,15 @@ def run_build(proj_text, field_text="", dk_text="", options=None):
                       max_leftover=_i(o.get("maxLeftover"), M.MAX_LEFTOVER),
                       min_proj=_f(o.get("minProj"), M.MIN_PROJ))
         if fmt == "showdown":
+            # Only players DK gave a captain id can go in the captain cell. The
+            # writer used to fall back to their flex id, which produces a file
+            # DK rejects — and the build merely warned, then captained them.
+            cpt_pool = [p for p in players
+                        if p.proj >= _f(o.get("minProj"), E.MIN_PROJ)
+                        and p.salary > 0 and (p.cpt_dk_id or not dk)]
             cands = E.build_candidates(players, max(4000, n_mine * 30),
-                                       teams=teams, **common)
+                                       teams=teams,
+                                       cpt_pool=cpt_pool or None, **common)
         else:
             cands = C.build_candidates(
                 players, max(4000, n_mine * 30), stack_targets=shape_targets,
@@ -496,39 +613,121 @@ def run_build(proj_text, field_text="", dk_text="", options=None):
         # the entries the user was told it would, and it fails QUIETLY: the
         # top-up loop stops when no legal swap exists and says nothing. So check
         # the result, name the player, and say how short it came.
-        if floors:
-            short = []
-            for p in players:
-                if not p.core or p.proj <= 0:
-                    continue
-                got = sum(1 for lu in chosen if p.dk_id in lu.ids())
-                if got < floors.get(p.dk_id, 0):
-                    short.append(f"{p.name.strip()} in {got}, not {floors[p.dk_id]}")
-            if short:
-                say("warn", "A core could not be given its full share — "
-                            + "; ".join(short) + ". Usually the pool, the salary "
-                            "cap or the stack rules leave nowhere legal to put "
-                            "them.")
+
 
     if n_vendor:
         if not field:
-            say("warn", "The vendor half of the split needs the vendor lineup "
-                        "file; skipping it.")
+            say("warn", f"The vendor half of the split needs the vendor lineup "
+                        f"file. Building all {n} from our own builder instead, "
+                        f"so every entry still gets a lineup.")
+            shape_kw = ({"split_targets": shape_targets} if fmt == "showdown"
+                        else {"stack_targets": shape_targets})
+            extra = M.select(cands, n, core_floors=floors,
+                             exclude={lu.key() for lu in chosen},
+                             **shape_kw, **caps)
+            chosen += extra[:n_vendor]
+            if len(chosen) < n:
+                say("warn", f"Only {len(chosen)} distinct lineups could be built "
+                            f"for {n} entries.")
         else:
             # What our own arm already took. Both arms rank the same player pool
             # on the same objective, so they land on the same rosters — a real
             # 75/75 showdown split produced three identical pairs before this.
             mine_keys = {lu.key() for lu in chosen}
-            if fmt == "showdown":
-                chosen += E.vendor_arm(field, n_vendor, players_by_id=by_id,
+            # The pool and the cores are your instructions, not our preference,
+            # so they have to bind on ALL 150 entries. They used to apply only
+            # to our own half while the notes said "every player must come from
+            # it" — and 70 of the vendor 75 held off-pool players.
+            vfield = field
+            # Their lineups can captain a player DK gave no captain id — the
+            # writer would then put his flex id in the captain cell, which DK
+            # rejects. Drop those rosters rather than let the whole file fail
+            # the gate below.
+            if fmt == "showdown" and dk:
+                before = len(vfield)
+                vfield = [e for e in vfield
+                          if e.get("cpt") is not None and e["cpt"].cpt_dk_id]
+                if len(vfield) < before:
+                    say("info", f"Skipped {before - len(vfield):,} of their "
+                                f"lineups that captain a player with no DK "
+                                f"captain ID.")
+            if off_pool is not None:
+                def _off(e):
+                    ps = ([e["cpt"]] + e["flex"]) if fmt == "showdown" else e["flex"]
+                    return sum(1 for p in ps if p and not p.in_pool and not p.core)
+                vfield = [e for e in field if _off(e) <= off_pool]
+                say("info" if vfield else "warn",
+                    f"Vendor pool filtered to your player pool: "
+                    f"{len(vfield):,} of {len(field):,} of their lineups qualify.")
+                if not vfield:
+                    say("warn", "None of their lineups fit your pool, so the "
+                                "vendor half is built from ours instead.")
+            vcores = ({p.dk_id: max(1, -(-n_vendor // (len(core_ids) + 1)))
+                       for p in players if p.core and p.proj > 0}
+                      if core_ids and n_vendor else None)
+            if vfield and fmt == "showdown":
+                chosen += E.vendor_arm(vfield, n_vendor, players_by_id=by_id,
                                        dupe_scale=dupe_scale,
-                                       exclude=mine_keys, **caps)
+                                       exclude=mine_keys, core_floors=vcores,
+                                       **caps)
+            elif vfield:
+                chosen += C.vendor_arm(vfield, n_vendor, dupe_scale=dupe_scale,
+                                       exclude=mine_keys, core_floors=vcores,
+                                       **caps)
             else:
-                chosen += C.vendor_arm(field, n_vendor, dupe_scale=dupe_scale,
-                                       exclude=mine_keys, **caps)
+                shape_kw = ({"split_targets": shape_targets} if fmt == "showdown"
+                            else {"stack_targets": shape_targets})
+                extra = M.select(cands, n, core_floors=floors,
+                                 exclude=mine_keys, **shape_kw, **caps)
+                chosen += extra[:n_vendor]
+
+    # Top up from our own candidates if either arm came up short — a vendor pool
+    # thinned by the pool filter or by missing captain IDs can leave entries
+    # with no lineup at all, and an entry with no lineup is an entry that scores
+    # zero. This is the last chance to notice.
+    if len(chosen) < n and n_mine and cands:
+        shape_kw = ({"split_targets": shape_targets} if fmt == "showdown"
+                    else {"stack_targets": shape_targets})
+        top_up = M.select(cands, n, core_floors=floors,
+                          exclude={lu.key() for lu in chosen},
+                          **shape_kw, **caps)
+        need = n - len(chosen)
+        chosen += top_up[:need]
+        if len(chosen) >= n:
+            say("info", f"Topped up {need} entries from our own builder to cover "
+                        f"all {n}.")
 
     if not chosen:
         return {"error": "No lineups produced.", "notes": notes}
+
+    # Did the core floors hold across ALL the entries, not just our own half?
+    # Never assume they did. The one failure this tool has been bitten by twice
+    # is a core landing in a fraction of the entries the user was told it would,
+    # and it fails QUIETLY — the top-up loop stops when no legal swap exists and
+    # says nothing. So check the finished set, name the player, say how short.
+    if core_ids:
+        want = max(1, -(-n // (len(core_ids) + 1)))
+        short = []
+        for p in players:
+            if not p.core or p.proj <= 0:
+                continue
+            got = sum(1 for lu in chosen if p.dk_id in lu.ids())
+            if got < want:
+                short.append(f"{p.name.strip()} is in {got} of {len(chosen)}, "
+                             f"not {want}")
+        if short:
+            say("warn", "A core could not be given its full share — "
+                        + "; ".join(short) + ". Usually the pool, the salary cap "
+                        "or the stack rules leave nowhere legal to put them.")
+        else:
+            say("good", f"Every core is in at least {want} of {len(chosen)} "
+                        f"entries.")
+
+    if dk and dk.get("entries") and len(chosen) < min(n, len(dk["entries"])):
+        say("warn", f"Only {len(chosen)} lineups could be built for "
+                    f"{min(n, len(dk['entries']))} entries. The remaining "
+                    f"entries will have no lineup and score zero — widen the "
+                    f"pool or lower the minimum projection.")
 
     # Belt and braces. Every path above dedupes, but this is the one error that
     # is invisible in the output and costs a real entry, so it is checked on the
@@ -638,9 +837,26 @@ def run_build(proj_text, field_text="", dk_text="", options=None):
                 chosen = chosen[:len(ents)]
             header = ("Entry ID,Contest Name,Contest ID,Entry Fee,"
                       + ",".join(dk["slots"]))
-            dk_csv = _dk_rows(ents, chosen, header, fmt)
-            meta["entry_ids"] = [e["entry_id"] for e in ents]
-            meta["contest_id"] = ents[0]["contest_id"]
+            # Check the finished rows before there is a file to download. A file
+            # DK bounces is worse than no file: you find out at lock, with no
+            # time to rebuild.
+            problems = _check_upload(ents, chosen, dk["slots"], fmt, dk)
+            if problems:
+                say("warn", f"NOT writing an upload file — {len(problems)} "
+                            f"problem(s) DraftKings would reject:")
+                for line in problems[:12]:
+                    say("warn", "    " + line)
+                if len(problems) > 12:
+                    say("warn", f"    …and {len(problems) - 12} more.")
+                say("warn", "Fix the input files and build again. Almost always "
+                            "this means a player's name differs between the "
+                            "Stokastic and DK exports — re-download both.")
+            else:
+                dk_csv = _dk_rows(ents, chosen, header, fmt)
+                say("good", f"Upload file checked: {len(ents)} rows, every player "
+                            f"ID valid for its slot, no repeats, none over the cap.")
+                meta["entry_ids"] = [e["entry_id"] for e in ents]
+                meta["contest_id"] = ents[0]["contest_id"]
     else:
         say("warn", "No DK entries file, so there is no uploadable CSV — that "
                     "export is the only source of your Entry IDs and DK's "

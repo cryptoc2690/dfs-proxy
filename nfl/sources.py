@@ -138,7 +138,8 @@ def read_projections(text):
         if req not in cols:
             return [], {"error": f"no '{req}' column found",
                         "headers": list(rows[0].keys())}
-    players, skipped = [], 0
+    players, skipped, dupes = [], 0, []
+    seen_names = set()
     for r in rows:
         raw_name = (r.get(cols["name"]) or "").strip()
         if not raw_name:
@@ -151,6 +152,15 @@ def read_projections(text):
         if salary <= 0:
             skipped += 1
             continue
+        # One row per player. Two rows for the same person become two Player
+        # objects that later collect the SAME DK id, and a lineup holding both
+        # writes that id twice — a roster DK rejects, which nothing downstream
+        # notices because the lineup's id set silently collapses to one short.
+        key = normalize_name(name)
+        if key in seen_names:
+            dupes.append(name)
+            continue
+        seen_names.add(key)
         pos = (r.get(cols.get("pos", ""), "") or "").strip().upper()
         pos = "DST" if pos in {"DEF", "D", "DST", "D/ST"} else pos
         p = Player(
@@ -167,7 +177,7 @@ def read_projections(text):
         players.append(p)
     return players, {"matched": cols, "unmatched": missing,
                      "rows": len(rows), "players": len(players),
-                     "skipped_no_salary": skipped}
+                     "skipped_no_salary": skipped, "duplicate_rows": dupes}
 
 
 # --- 2. Stokastic lineup pool = the simulated FIELD -----------------------
@@ -273,7 +283,10 @@ def read_field(text, by_id=None, by_name=None):
         si = ci.get("stack")
         entries.append({
             "cpt": cpt, "flex": flex,
-            "dupes": num(r, "dupes"), "win": num(r, "win"),
+            # Their Win% is a PERCENT ("0.065%"); ours is a fraction. Stored
+            # raw, the two were compared and displayed as if they were the same
+            # unit, making the vendor arm look 100x better than it is.
+            "dupes": num(r, "dupes"), "win": num(r, "win") / 100.0,
             "top10": num(r, "top10"), "cash": num(r, "cash"),
             "roi": num(r, "roi"), "own_sum": num(r, "ownsum"),
             "stack": (r[si].strip() if si is not None and si < len(r) else ""),

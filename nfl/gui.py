@@ -205,6 +205,8 @@ INDEX_HTML = r"""<!doctype html>
         duplication is understated by the ratio.</div>
       <label>Min projection for a roster spot</label>
       <input id="minproj" type="number" value="2" step="0.5">
+      <div class="hint cl-only">3.0 is the main-slate default; this box starts
+        at the showdown value.</div>
     </div>
     <div>
       <label>Sharp's pool</label>
@@ -220,7 +222,7 @@ INDEX_HTML = r"""<!doctype html>
         <option value="0" selected>0 — build only from the pool</option>
         <option value="1">1 — allow one</option>
         <option value="2">2 — allow two</option>
-        <option value="off">No limit</option>
+        <option value="none">No limit — the pool is only a shortlist</option>
       </select>
       <div class="picknote sd-only">Only applies if you picked a pool. A hard
         filter is defensible here because the whole showdown board is ~40

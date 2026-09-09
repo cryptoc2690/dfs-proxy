@@ -741,7 +741,8 @@ def select(lineups, n, *, captain_cap=CAPTAIN_CAP, min_captains=MIN_CAPTAINS,
 
 def vendor_arm(field_entries, n, *, players_by_id, captain_cap=CAPTAIN_CAP,
                min_captains=MIN_CAPTAINS, player_cap=PLAYER_CAP,
-               max_overlap=MAX_OVERLAP, dupe_scale=1.0, exclude=None):
+               max_overlap=MAX_OVERLAP, dupe_scale=1.0, exclude=None,
+               core_floors=None):
     """Their pool, re-ranked on Win% / (1 + Dupes) and put through the same caps.
 
     This is the control arm for the A/B comparison, and on its own it is a
@@ -764,4 +765,4 @@ def vendor_arm(field_entries, n, *, players_by_id, captain_cap=CAPTAIN_CAP,
     cands.sort(key=lambda l: -l.metrics["score"])
     return select(cands, n, captain_cap=captain_cap, min_captains=min_captains,
                   player_cap=player_cap, max_overlap=max_overlap,
-                  exclude=exclude)
+                  exclude=exclude, core_floors=core_floors)

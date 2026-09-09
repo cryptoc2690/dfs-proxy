@@ -587,7 +587,10 @@ def vendor_arm(field_entries, n, *, dupe_scale=1.0, **kw):
     cands = []
     for e in field_entries:
         ps = [p for p in (e.get("flex") or []) if p is not None]
-        if len(ps) != ROSTER_SIZE:
+        # Length alone is not legality. A 9-player roster with no TE, or two
+        # QBs, makes slots() hand the writer eight players or a None, and the
+        # upload file comes out malformed or the build crashes outright.
+        if len(ps) != ROSTER_SIZE or not _legal_final(ps) or not dst_ok(ps):
             continue
         lu = Lineup(ps, source="vendor")
         d = (e.get("dupes") or 0.0) * dupe_scale
