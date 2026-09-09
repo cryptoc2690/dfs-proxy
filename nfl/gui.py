@@ -131,7 +131,7 @@ INDEX_HTML = r"""<!doctype html>
 </div>
 
 <details id="setwrap">
-  <summary>Settings — pool &amp; cores, splits, caps, contest fill</summary>
+  <summary>Settings — pool &amp; cores, splits, caps, contest size</summary>
   <div class="setgrid">
     <div>
       <label>Lineups</label>
@@ -189,20 +189,16 @@ INDEX_HTML = r"""<!doctype html>
         player cap.</div>
     </div>
     <div>
-      <label>Contest entries so far</label>
-      <input id="entries" type="number" placeholder="from the DK contest page">
-      <label>Contest max entries</label>
-      <input id="cap" type="number" placeholder="from the DK contest page">
-      <div class="hint">The pool is guaranteed, so if the contest fills under
-        84.1% every entry is worth more than it costs. This is bigger than
-        anything else on this page and it is free to check.</div>
-    </div>
-    <div>
-      <label>Expected FINAL field size</label>
-      <input id="expect" type="number" placeholder="leave blank if unsure">
-      <div class="hint">Their pool models a capped set of opponents — 50,000 for
-        showdown, 10,000 on a main slate. If the real contest fills past that,
-        duplication is understated by the ratio.</div>
+      <label>Contest size — max entries</label>
+      <input id="cap" type="number" placeholder="e.g. 237812">
+      <label>How full it will get — <span id="fv">100</span>%</label>
+      <input id="fillpct" type="range" min="10" max="100" value="100"
+             style="width:100%">
+      <div class="hint">Off the DK contest page. Assumed to fill, which these
+        normally do — mark it down only when you are entering days early and
+        expect it to stay short. Stokastic models just 50,000 opponents on
+        showdown and 10,000 on a main slate, so without this number duplication
+        is measured against a field several times too small.</div>
       <label>Min projection for a roster spot</label>
       <input id="minproj" type="number" value="2" step="0.5">
       <div class="hint cl-only">3.0 is the main-slate default; this box starts
@@ -479,6 +475,7 @@ $('#ccap').addEventListener('input', e => { $('#cv').textContent = e.target.valu
 $('#qbcap').addEventListener('input', e => { $('#qv').textContent = e.target.value; });
 $('#dstcap').addEventListener('input', e => { $('#dv').textContent = e.target.value; });
 $('#bb').addEventListener('input', e => { $('#bv').textContent = e.target.value; });
+$('#fillpct').addEventListener('input', e => { $('#fv').textContent = e.target.value; });
 setFmt('showdown', false);
 
 const num = (sel, d) => { const v = parseFloat($(sel).value); return isNaN(v) ? d : v; };
@@ -504,9 +501,7 @@ $('#go').addEventListener('click', async () => {
           bringBack: num('#bb',15)/100,
           stackTargets: '3:'+num('#st3',45)+',2:'+num('#st2',40)+',1:'+num('#st1',15),
           minProj: num('#minproj',2),
-          entriesAtBuild: num('#entries',0),
-          fieldCap: num('#cap',0),
-          expectEntries: num('#expect',0),
+          fieldCap: num('#cap',0), fillPct: num('#fillpct',100),
           maxOffPool: $('#offpool').value,
           pool: [...sel.pool].join('\n'), cores: [...sel.core].join('\n')
         }
@@ -544,7 +539,6 @@ function render(d){
     + card(s.projAvg, 'avg projection')
     + card(s.ownAvg, 'avg ownership sum')
     + card(s.dupeAvg, 'avg expected duplicates')
-    + (s.fill!=null ? card(s.fill+'%', 'contest full') : '')
     + '</div>';
   h += '<div style="font-size:12.5px;color:var(--muted);margin-bottom:6px">Top '
      + (s.headLabel || 'captains') + ': '

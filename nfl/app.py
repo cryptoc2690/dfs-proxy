@@ -480,8 +480,14 @@ def run_build(proj_text, field_text="", dk_text="", options=None):
     bar, sampled = M.field_bar(field, mat, sims, seed=seed) if field else (None, 0)
     idx = M.dupe_index(field) if field else {}
     modelled = M.field_size(field) if field else 0
-    expect = _i(o.get("expectEntries"), 0)
+    # NFL contests of this size fill, so the contest's max entries IS the field
+    # size unless told otherwise. Leaving it blank used to mean duplication was
+    # measured against the ~50,000 opponents the vendor models instead of the
+    # 237,812 that actually enter — understating it by nearly 5x.
     field_cap = _i(o.get("fieldCap"), 0)
+    fill_pct = _f(o.get("fillPct"), 100.0)
+    fill_pct = min(max(fill_pct, 1.0), 100.0)
+    expect = _i(o.get("expectEntries"), 0) or int(round(field_cap * fill_pct / 100.0))
     dupe_scale = max(1.0, expect / modelled) if (modelled and expect) else 1.0
 
     if bar:
@@ -491,13 +497,16 @@ def run_build(proj_text, field_text="", dk_text="", options=None):
         say("info", f"Vendor pool models {modelled:,.0f} opponent entries in "
                     f"{len(idx):,} distinct lineups.")
         if expect:
-            say("info", f"Scaling duplication ×{dupe_scale:.2f} for an expected "
-                        f"{expect:,}-entry field.")
-        elif field_cap and modelled < field_cap * 0.9:
-            say("warn", f"This contest holds up to {field_cap:,} but the vendor "
-                        f"pool models {modelled:,.0f}. If it fills past that, "
-                        f"duplication below is understated — put your read of "
-                        f"the final field size in “expected entries”.")
+            say("info", f"Scaling duplication ×{dupe_scale:.2f} for a "
+                        f"{expect:,}-entry field"
+                        + (f" ({fill_pct:.0f}% of {field_cap:,})."
+                           if field_cap and fill_pct < 100 else "."))
+        elif modelled:
+            say("warn", f"No contest size given, so duplication is measured "
+                        f"against the {modelled:,.0f} opponents the vendor "
+                        f"models. A real contest is bigger, so the numbers "
+                        f"below understate it — put the contest's max entries "
+                        f"in the settings.")
     else:
         say("warn", "No vendor lineup file, so there is no opponent field: "
                     "lineups are ranked on simulated score alone, with no win "
@@ -787,15 +796,6 @@ def run_build(proj_text, field_text="", dk_text="", options=None):
                 f"vs {100.0 * fd.get(d, 0) / n_f:.0f}%"
                 for d in sorted(set(mine) | set(fd))))
 
-    entries_at_build = _i(o.get("entriesAtBuild"), 0)
-    fill = (round(100.0 * entries_at_build / field_cap, 1)
-            if entries_at_build and field_cap else None)
-    if fill is not None:
-        say("good" if fill < 84.1 else "info",
-            f"Contest is {fill}% full. Break-even fill on a guaranteed pool is "
-            f"84.1%" + (" — every entry is worth more than it costs."
-                        if fill < 84.1 else "."))
-
     settings = {"n": n, "split": split, "sims": sims, "seed": seed,
                 "format": fmt,
                 "ownLean": _f(o.get("ownLean"), M.OWN_LEAN),
@@ -815,11 +815,11 @@ def run_build(proj_text, field_text="", dk_text="", options=None):
         "slate": datetime.now().astimezone().date().isoformat(),
         "format": fmt,
         "settings": settings,
-        "contest_state": {"entries_at_build": entries_at_build or None,
-                          "field_cap": field_cap or None,
+        "contest_state": {"field_cap": field_cap or None,
+                          "fill_pct": fill_pct,
                           "expect_entries": expect or None,
                           "vendor_field_modelled": modelled,
-                          "dupe_scale": round(dupe_scale, 3), "fill_pct": fill},
+                          "dupe_scale": round(dupe_scale, 3)},
     }
 
     dk_csv = None
@@ -893,7 +893,6 @@ def run_build(proj_text, field_text="", dk_text="", options=None):
             "ownAvg": round(sum(lu.own_sum for lu in chosen) / len(chosen), 1),
             "dupeAvg": round(sum(lu.metrics.get("dupes", 0) for lu in chosen)
                              / len(chosen), 2),
-            "fill": fill,
         },
         "lineups": [_lineup_payload(lu, fmt) for lu in chosen],
         "dkCsv": dk_csv,
@@ -1061,8 +1060,10 @@ def main(argv=None):
     ap.add_argument("--max-leftover", type=int, default=None)
     ap.add_argument("--min-proj", type=float, default=None)
     ap.add_argument("--max-off-pool", type=int, default=None)
-    ap.add_argument("--entries-at-build", type=int, default=None)
-    ap.add_argument("--field-cap", type=int, default=None)
+    ap.add_argument("--field-cap", type=int, default=None,
+                    help="contest max entries")
+    ap.add_argument("--fill-pct", type=float, default=100.0,
+                    help="how full it will get, %% of max (default 100)")
     ap.add_argument("--expect-entries", type=int, default=None)
     ap.add_argument("--out", default="nfl_upload.csv")
     a = ap.parse_args(argv)
@@ -1079,8 +1080,9 @@ def main(argv=None):
         "qbCap": a.qb_cap, "dstCap": a.dst_cap, "bringBack": a.bring_back,
         "stackTargets": a.stack_targets,
         "maxLeftover": a.max_leftover, "minProj": a.min_proj,
-        "maxOffPool": a.max_off_pool, "entriesAtBuild": a.entries_at_build,
-        "fieldCap": a.field_cap, "expectEntries": a.expect_entries,
+        "maxOffPool": a.max_off_pool,
+        "fieldCap": a.field_cap, "fillPct": a.fill_pct,
+        "expectEntries": a.expect_entries,
     })
     for note in res.get("notes", []):
         print(f"  [{note['type']}] {note['text']}")
