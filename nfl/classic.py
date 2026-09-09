@@ -405,7 +405,10 @@ def estimated_dupes(lu, idx, scale=1.0, field_n=0.0):
     """
     hit = idx.get(lu.key())
     if hit is not None:
-        return max(0.0, (hit - 1.0) * scale)
+        # Every field entry holding this roster is an OPPONENT we share with;
+        # ours is an extra entry on top. Subtracting one treated a field entry
+        # as if it were ours.
+        return max(0.0, hit * scale)
     # Not in the vendor pool. Fall back to the independence estimate against the
     # real field size rather than a hard-coded one — the pool models 10,000
     # opponents for a contest that holds 400,000+, so the two differ by ~40x.

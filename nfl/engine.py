@@ -313,20 +313,31 @@ def dupe_index(field_entries):
     return idx
 
 
-def estimated_dupes(lu, idx, own_fallback=True, scale=1.0):
-    """How many opponents we expect to be holding this exact roster."""
+def estimated_dupes(lu, idx, own_fallback=True, scale=1.0, field_n=0.0):
+    """How many OPPONENTS we expect to be holding this exact roster.
+
+    The index counts field entries holding the roster, and ours is an extra
+    entry on top of those — so every one of them is an opponent we share with.
+    Subtracting one used to treat a field entry as if it were ours, which made a
+    roster the field builds exactly once score ZERO duplication while a roster
+    the field never builds scored about 4.7. That is backwards, and it is not a
+    rounding error: it made the ranking actively prefer rosters the vendor
+    generates. On a real showdown slate it put 145 of 150 entries at a modelled
+    zero when each was genuinely shared with about five opponents.
+    """
     hit = idx.get(lu.key())
     if hit is not None:
-        return max(0.0, (hit - 1.0) * scale)
+        return max(0.0, hit * scale)
     if not own_fallback:
         return 0.0
     # Not in the vendor pool at all -> the field is unlikely to build it. Use a
-    # small ownership-driven estimate rather than claiming zero.
+    # small ownership-driven estimate rather than claiming zero, against the
+    # size of the field actually modelled rather than a hard-coded number.
     p = 1.0
     for pl in lu.flex:
         p *= max(pl.ownership, 0.1) / 100.0
     p *= max(lu.cpt.cpt_own or lu.cpt.ownership / 3.0, 0.1) / 100.0
-    return p * 50_000.0 * scale
+    return p * (field_n if field_n > 0 else 50_000.0) * scale
 
 
 # --- construction --------------------------------------------------------
@@ -541,7 +552,8 @@ def build_candidates(players, n, *, teams, split_targets=None, rng=None,
     return out
 
 
-def rank(lineups, mat, bar, sims, dupes_idx, own_lean=OWN_LEAN, dupe_scale=1.0):
+def rank(lineups, mat, bar, sims, dupes_idx, own_lean=OWN_LEAN, dupe_scale=1.0,
+         field_n=0.0):
     """Duplication-adjusted win probability, with a modest ownership lean.
 
     The lean is POSITIVE in showdown, which is the opposite of the classic
@@ -558,7 +570,7 @@ def rank(lineups, mat, bar, sims, dupes_idx, own_lean=OWN_LEAN, dupe_scale=1.0):
         sc = score_lineup(lu, mat, sims)
         sc_sorted = sorted(sc)
         w = win_rate(sc, bar, sims) if bar else 0.0
-        d = estimated_dupes(lu, dupes_idx, scale=dupe_scale)
+        d = estimated_dupes(lu, dupes_idx, scale=dupe_scale, field_n=field_n)
         on = (lu.own_sum - lo) / span
         lu.metrics.update({
             "win": round(w, 5),

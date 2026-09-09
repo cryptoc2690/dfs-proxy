@@ -589,7 +589,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None):
                              + (" — and whether your pool can cover all nine "
                                 "roster slots." if pool_names else "."),
                     "notes": notes}
-        dupe_kw = {} if fmt == "showdown" else {"field_n": modelled}
+        dupe_kw = {"field_n": modelled}
         if bar:
             M.rank(cands, mat, bar, sims, idx,
                    own_lean=_f(o.get("ownLean"), M.OWN_LEAN),

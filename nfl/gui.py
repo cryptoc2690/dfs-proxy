@@ -492,7 +492,9 @@ $('#go').addEventListener('click', async () => {
         proj: files.proj, field: files.field, dk: files.dk,
         options: {
           n: num('#n',150), split: num('#split',75),
-          format: fmt,
+          // Deliberately NOT sending the format. The server works it out from
+          // the files and says which signal it used; the page's own guess only
+          // decides which settings to show.
           ownLean: num('#lean',0)/100,
           captainCap: num('#ccap',28)/100,
           minCaptains: num('#mincpt',10),
