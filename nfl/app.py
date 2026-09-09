@@ -547,8 +547,16 @@ def run_build(proj_text, field_text="", dk_text="", options=None):
     # the whole report, so the honest thing is to SHOW the size of the bet being
     # made rather than bake a direction in and stay quiet about it.
     if field:
-        f_own = sorted(sum(p.ownership for p in (e.get("flex") or []))
-                       for e in field)
+        # Count the field's ownership over the same slots ours is counted over.
+        # A showdown captain carries his OWN ownership number on a different
+        # denominator, and leaving it out of the field's total while keeping it
+        # in ours compared a six-slot sum against a five-slot one — which made
+        # these lineups look far chalkier against the field than they are.
+        def _own_of(e):
+            flex = sum(p.ownership for p in (e.get("flex") or []))
+            cpt = e.get("cpt")
+            return flex + (cpt.cpt_own if cpt is not None else 0.0)
+        f_own = sorted(_own_of(e) for e in field)
         if f_own:
             mine_own = sum(lu.own_sum for lu in chosen) / len(chosen)
             pct = 100.0 * sum(1 for v in f_own if v < mine_own) / len(f_own)
