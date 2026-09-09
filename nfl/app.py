@@ -130,6 +130,50 @@ def _stack_targets(raw):
     return {d: w / total for d, w in out.items()}
 
 
+def _pool_gaps_note(players, mat, sims, min_proj):
+    """Strong, low-owned plays the sharp's sheet does not list. -> [Player]
+
+    Advisory only: the tool never adds these, it surfaces the miss and leaves
+    the call where it belongs. The list recomputes every build, so once a name
+    is added to the pool it drops off on its own.
+
+    The bars come from the SLATE, not from constants. A showdown board has ~30
+    playable players and a main slate ~330, and any fixed ceiling-and-ownership
+    threshold that suits one is noise on the other. Upside is the simulated 90th
+    percentile — the real one out of the correlated sim, not a vendor Ceiling
+    column, which is just projection plus 0.675 sigma and says nothing new.
+    """
+    playable = [p for p in players
+                if p.proj >= min_proj and p.salary > 0 and p.dk_id in mat]
+    if len(playable) < 12:
+        return []
+    p90 = {}
+    for p in playable:
+        row = sorted(mat[p.dk_id])
+        p90[p.dk_id] = row[min(int(sims * 0.90), sims - 1)]
+    ups = sorted(p90.values())
+    owns = sorted(p.ownership for p in playable)
+    up_bar = ups[len(ups) // 2]            # above-median upside
+    own_bar = owns[len(owns) // 2]         # below-median ownership
+    gaps = [p for p in playable
+            if not p.in_pool and not p.core
+            and p90[p.dk_id] >= up_bar and p.ownership <= own_bar]
+    # Highest ceiling first, not best points-per-dollar. Per-dollar hands back a
+    # list of cheap quarterbacks every time — QB scoring is high relative to QB
+    # salary — and you roster one of those, so four of them is not a list you
+    # can act on. Capped at two per position for the same reason.
+    gaps.sort(key=lambda p: -p90[p.dk_id])
+    out, per = [], {}
+    for p in gaps:
+        if per.get(p.pos, 0) >= 2:
+            continue
+        per[p.pos] = per.get(p.pos, 0) + 1
+        out.append((p, p90[p.dk_id]))
+        if len(out) >= 4:
+            break
+    return out
+
+
 def _attach_dk_ids(players, dk):
     """Swap in DK's real player IDs.
 
@@ -549,6 +593,24 @@ def run_build(proj_text, field_text="", dk_text="", options=None):
                     + ("every player must come from it."
                        if not off_pool else
                        f"up to {off_pool} off-pool player(s) per lineup."))
+
+    if pool_names:
+        gaps = _pool_gaps_note(players, mat, sims, _f(o.get("minProj"), M.MIN_PROJ))
+        if gaps:
+            say("good", "Pool gaps — high-upside, low-owned plays NOT on your "
+                        "sheet: "
+                        + "; ".join(f"{p.name.strip()} ({up:.0f} ceiling, "
+                                    f"{p.ownership:.0f}% owned, ${p.salary:,})"
+                                    for p, up in gaps)
+                        + ". Your sharp may have passed on purpose. If not, add "
+                          "them — each drops off this list once you do.")
+        elif fmt == "showdown":
+            say("info", "No pool gaps. On a ~30 player showdown board ownership "
+                        "tracks upside closely, so there is rarely anything both "
+                        "strong and unowned — expect this line most nights.")
+        else:
+            say("info", "No pool gaps: nothing outside your sheet combines "
+                        "above-median upside with below-median ownership.")
 
     n_mine = n if split <= 0 else min(split, n)
     n_vendor = n - n_mine
