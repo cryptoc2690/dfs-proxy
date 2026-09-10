@@ -1018,13 +1018,31 @@ def grade(results_text, slate=None):
         return {"error": "No build log yet — nothing to grade."}
     if slate:
         rows = [r for r in rows if r.get("slate") == slate]
-    else:                                    # the most recent build in the log
-        stamps = sorted({r["ts"] for r in rows if r.get("ts")})
-        if not stamps:
-            return {"error": "No builds in the log."}
-        rows = [r for r in rows if r.get("ts") == stamps[-1]]
-    if not rows:
-        return {"error": "No logged entries match that slate."}
+        if not rows:
+            return {"error": f"No logged entries for {slate}."}
+    else:
+        # The most recent build this results file actually COVERS, not simply
+        # the most recent build. A results file is for one slate; the last thing
+        # in the log may be a different slate, or a test run.
+        stamps = sorted({r["ts"] for r in rows if r.get("ts")}, reverse=True)
+        best = None
+        for ts in stamps:
+            grp = [r for r in rows if r.get("ts") == ts]
+            names = {normalize_name(p["name"])
+                     for r in grp for p in (r.get("players") or [])}
+            if not names:
+                continue
+            cover = len(names & set(scored)) / len(names)
+            if cover >= 0.9:
+                best = grp
+                break
+            if best is None and cover >= 0.5:
+                best = grp             # fall back to the best partial match
+        if best is None:
+            return {"error": "No build in the log matches that results file — "
+                             "its players do not appear in any logged slate. "
+                             "Is it the right game?"}
+        rows = best
     fmt = rows[0].get("format", "showdown")
     graded, unknown = [], set()
     for r in rows:
@@ -1100,6 +1118,19 @@ def _describe(kind, text):
             return {"ok": True, "msg": f"{rep['rows']:,} opponent lineups "
                                        f"({rep.get('format', '?')})",
                     "format": rep.get("format")}
+        if kind == "linestar":
+            ls, rep = read_linestar(text)
+            if rep.get("error"):
+                return {"ok": False,
+                        "msg": f"not a LineStar export ({rep['error']})"}
+            n_t = len(rep.get("teams") or {})
+            if rep.get("is_results"):
+                return {"ok": True, "results": True,
+                        "msg": f"post-game: {rep['with_scores']} actual scores, "
+                               f"{n_t} teams with Vegas"}
+            return {"ok": True, "results": False,
+                    "msg": f"pre-game: {rep['players']} players, {n_t} teams "
+                           f"with Vegas (Vegas is logged, nothing else is used)"}
         if kind == "dk":
             dk = read_dk_entries(text)
             n_e, n_p = len(dk["entries"]), len(dk["pool"])
@@ -1144,7 +1175,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, json.dumps({"error": "not found"}))
 
     def do_POST(self):
-        if self.path not in ("/api/build", "/api/players", "/api/check"):
+        if self.path not in ("/api/build", "/api/players", "/api/check",
+                             "/api/grade"):
             return self._send(404, json.dumps({"error": "not found"}))
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -1172,6 +1204,10 @@ class Handler(BaseHTTPRequestHandler):
 
             # Confirm a dropped file is the thing the slot expects, so a wrong
             # or unreadable file says so instead of sitting there looking loaded.
+            if self.path == "/api/grade":
+                g = grade(p.get("results") or "", p.get("slate"))
+                return self._send(400 if g.get("error") else 200, json.dumps(g))
+
             if self.path == "/api/check":
                 return self._send(200, json.dumps(
                     _describe(p.get("kind") or "", p.get("text") or "")))

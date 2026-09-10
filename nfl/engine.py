@@ -375,16 +375,40 @@ def _weighted_pick(cands, weights, rng):
     return cands[-1]
 
 
-def _dst_ok(players):
-    """Never roster a defense against an offense you are stacking — close to
-    mechanically self-cancelling, since points allowed IS the opponent's
-    scoring. Enforced as a hard rule, not a soft penalty."""
+# How many of YOUR OWN players a defense may face before the roster is refused.
+# This was 3, and at 3 it does something nobody intended: a six-player showdown
+# roster split 3-3 and holding a defense ALWAYS has exactly three opposing
+# players, so the rule banned every 3-3 construction that carried a defense.
+# Measured against the real NE @ SEA field, it ruled out 733 of the 788 such
+# lineups the field built, and seven of the top eight scoring lineups on the
+# slate — a whole shape removed by a side effect.
+#
+# The structural argument for relaxing it does not depend on that result. The
+# simulator ALREADY prices this: a defense loads -0.85 on its opponent's team
+# factor and -0.60 on their passing game, so pairing one with the offense it
+# faces is penalised in the ranking on its own merits. A hard ban on top of that
+# is the same belief counted twice, and unlike the simulator it cannot tell a
+# cheap defense in a shootout from an expensive one in a blowout.
+#
+# At 4 it still refuses the constructions that are close to self-cancelling —
+# a defense against four or five of your own — and lets the simulation price
+# the rest.
+DST_MAX_AGAINST = 4
+
+
+def _dst_ok(players, limit=None):
+    """Refuse a defense facing too many of your own players.
+
+    Points allowed IS the opponent's scoring, so the two partly cancel. This is
+    the floor under that idea; the pricing is the simulator's job.
+    """
+    cap = DST_MAX_AGAINST if limit is None else limit
     for d in players:
         if not d.is_dst:
             continue
         against = sum(1 for p in players
                       if not p.is_dst and p.team and p.team == d.opponent)
-        if against >= 3:
+        if against >= cap:
             return False
     return True
 

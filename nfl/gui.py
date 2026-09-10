@@ -128,6 +128,8 @@ INDEX_HTML = r"""<!doctype html>
     <span class="fstate">the opponent field — drop or click</span></div>
   <div class="fslot req" id="s_dk"><b>3 · DK entries export</b>
     <span class="fstate">needed to upload — drop or click</span></div>
+  <div class="fslot" id="s_ls"><b>4 · LineStar <span style="opacity:.6">(optional)</span></b>
+    <span class="fstate">Vegas before · results after — drop or click</span></div>
 </div>
 
 <details id="setwrap">
@@ -247,6 +249,11 @@ INDEX_HTML = r"""<!doctype html>
     <button id="dl" class="alt" style="display:none">&#11015; Download DK file</button>
     <span id="status" style="color:var(--muted);font-size:13px"></span>
   </div>
+  <div class="row" id="graderow" style="display:none">
+    <button id="grade" class="alt">&#9201; Grade last night against results</button>
+    <span style="color:var(--muted);font-size:12.5px">That LineStar file has
+      actual scores in it — score your logged entries against them.</span>
+  </div>
   <div id="welcome">
     <p><b>Drop three files above.</b></p>
     <p>1 and 2 come from Stokastic — the projections export and the lineups
@@ -266,7 +273,7 @@ INDEX_HTML = r"""<!doctype html>
 
 <script>
 const $ = s => document.querySelector(s);
-const files = {proj:null, field:null, dk:null};
+const files = {proj:null, field:null, dk:null, linestar:null};
 let result = null, roster = [], fmt = 'showdown', fmtFromDk = false;
 
 // Showdown and classic are different games, not two sizes of one, so the page
@@ -327,6 +334,8 @@ function slot(key, el){
           files[key] = text;
           mark('loaded', '✓ ' + f.name + ' — ' + d.msg);
           if(d.format) setFmt(d.format, key === 'dk');
+          if(key === 'linestar')
+            $('#graderow').style.display = d.results ? '' : 'none';
           if(key === 'proj') loadRoster(text);
         } else {
           files[key] = null;
@@ -358,6 +367,7 @@ function slot(key, el){
 slot('proj', $('#s_proj'));
 slot('field', $('#s_field'));
 slot('dk', $('#s_dk'));
+slot('linestar', $('#s_ls'));
 
 // ---- type-ahead pickers, enabled once the slate is known ----
 const sel = {pool:new Set(), core:new Set()};
@@ -490,6 +500,7 @@ $('#go').addEventListener('click', async () => {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
         proj: files.proj, field: files.field, dk: files.dk,
+        linestar: files.linestar,
         options: {
           n: num('#n',150), split: num('#split',75),
           // Deliberately NOT sending the format. The server works it out from
@@ -517,6 +528,55 @@ $('#go').addEventListener('click', async () => {
   }
   b.disabled = false; b.textContent = 'Build lineups';
 });
+
+$('#grade').addEventListener('click', async () => {
+  const b = $('#grade'); b.disabled = true;
+  b.innerHTML = '<span class="spin"></span>Scoring…';
+  try {
+    const res = await fetch('/api/grade', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({results: files.linestar})
+    });
+    renderGrade(await res.json());
+  } catch(e) {
+    $('#out').innerHTML = '<div class="note warn">'+e.message+'</div>';
+  }
+  b.disabled = false; b.innerHTML = '&#9201; Grade last night against results';
+});
+
+function renderGrade(g){
+  if(g.error){ $('#out').innerHTML = '<div class="note warn">'+esc(g.error)+'</div>'; return; }
+  const o = g.overall;
+  let h = '<div class="note info">Scored <b>'+g.entries+'</b> logged entries from '
+        + esc(String(g.slate)) + ' against actual results.</div>';
+  h += '<div class="cards">'
+    + card(o.best, 'your best entry') + card(o.median, 'your median')
+    + card(o.mean, 'your mean') + card(g.entries, 'entries graded') + '</div>';
+  const tbl = (title, obj, lbl) => {
+    let t = '<div style="font-size:12.5px;color:var(--muted);margin:14px 0 4px">'
+          + title + '</div><div class="tblwrap"><table><thead><tr><th>' + lbl
+          + '</th><th class="num">n</th><th class="num">best</th>'
+          + '<th class="num">median</th><th class="num">mean</th></tr></thead><tbody>';
+    Object.entries(obj).sort((a,b) => b[1].best - a[1].best).forEach(([k,v]) => {
+      t += '<tr><td>'+esc(k)+'</td><td class="num">'+v.n+'</td>'
+        + '<td class="num">'+v.best.toFixed(1)+'</td>'
+        + '<td class="num">'+v.median.toFixed(1)+'</td>'
+        + '<td class="num">'+v.mean.toFixed(1)+'</td></tr>';
+    });
+    return t + '</tbody></table></div>';
+  };
+  h += tbl('Which half of the split did better — this is the A/B', g.by_arm, 'arm');
+  h += tbl('Which shape did better on this slate', g.by_shape, 'shape');
+  h += '<div class="note info" style="margin-top:14px"><b>One slate is not '
+     + 'evidence.</b> Every construction rule in this tool came out of the '
+     + "vendor's own simulation, which is a model of the field and not the "
+     + 'field. Six to ten graded slates is what settles any of it — the '
+     + 'numbers accumulate in the log on their own.</div>';
+  if(g.unscored && g.unscored.length)
+    h += '<div class="note warn">No score found for: '+esc(g.unscored.join(', '))+'</div>';
+  $('#out').innerHTML = h;
+  $('#welcome').style.display = 'none';
+}
 
 function render(d){
   let h = '';
