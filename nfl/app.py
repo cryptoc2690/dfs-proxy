@@ -75,7 +75,13 @@ def _i(v, d=0):
         return d
 
 
-def _pool_gaps(players):
+def _share(v, d):
+    """A cap or share. "28" means 28%, not 2,800% — the CLI used to take it."""
+    x = _f(v, d)
+    return x / 100.0 if x > 1.0 else x
+
+
+def _pool_gaps(players, min_proj):
     """-> (off-pool players a legal classic roster needs, which seats are short)
 
     Classic needs a QB, two RBs, three WRs, a TE, a flex and a DST out of the
@@ -87,7 +93,7 @@ def _pool_gaps(players):
     """
     have = {}
     for p in players:
-        if p.in_pool and p.proj > 0 and p.salary > 0:
+        if p.in_pool and p.proj >= min_proj and p.salary > 0:
             have[p.pos] = have.get(p.pos, 0) + 1
     short = [f"{need} {pos}" + ("s" if need > 1 else "")
              for pos, need in (("QB", 1), ("RB", 2), ("WR", 3),
@@ -98,7 +104,20 @@ def _pool_gaps(players):
     flexish = min(min(have.get("RB", 0), 3) + min(have.get("WR", 0), 4)
                   + min(have.get("TE", 0), 2), 7)
     usable = min(have.get("QB", 0), 1) + min(have.get("DST", 0), 1) + flexish
-    return max(0, C.ROSTER_SIZE - usable), short
+    need_off = max(0, C.ROSTER_SIZE - usable)
+    # Seats covered is not enough: a sheet of fifteen studs covers every seat
+    # and still cannot make a roster under the cap. Price the cheapest legal
+    # roster the sheet allows so the failure has a reason attached.
+    cheapest = 0
+    if need_off == 0:
+        sal = {pos: sorted(p.salary for p in players
+                           if p.in_pool and p.proj >= min_proj and p.salary > 0
+                           and p.pos == pos)
+               for pos in ("QB", "RB", "WR", "TE", "DST")}
+        base = sal["QB"][:1] + sal["RB"][:2] + sal["WR"][:3] + sal["TE"][:1] + sal["DST"][:1]
+        rest = sorted(sal["RB"][2:] + sal["WR"][3:] + sal["TE"][1:])
+        cheapest = sum(base) + (rest[0] if rest else 0)
+    return need_off, short, cheapest
 
 
 def _stack_targets(raw):
@@ -132,7 +151,7 @@ def _stack_targets(raw):
 
 
 def _pool_gaps_note(players, mat, sims, min_proj):
-    """Strong, low-owned plays the sharp's sheet does not list. -> [Player]
+    """Strong, low-owned plays the sharp's sheet does not list. -> [(Player, ceiling)]
 
     Advisory only: the tool never adds these, it surfaces the miss and leaves
     the call where it belongs. The list recomputes every build, so once a name
@@ -173,6 +192,13 @@ def _pool_gaps_note(players, mat, sims, min_proj):
         if len(out) >= 4:
             break
     return out
+
+
+def _stack_targets_valid(raw):
+    if isinstance(raw, dict):
+        return any(_f(v) > 0 for v in raw.values())
+    return any(_f(part.split(":", 1)[1]) > 0
+               for part in str(raw).replace(";", ",").split(",") if ":" in part)
 
 
 def _attach_dk_ids(players, dk):
@@ -281,7 +307,7 @@ def _check_upload(entries, lineups, slots, fmt, dk):
                 if got.get(pos, 0) != need:
                     bad.append(f"{where}: {got.get(pos, 0)} {pos} where DK wants "
                                f"{need}")
-            if ps[7] is not None and ps[7].pos not in C.FLEX_POS:
+            if ps[7].pos not in C.FLEX_POS:
                 bad.append(f"{where}: a {ps[7].pos} is in the FLEX slot")
     return bad
 
@@ -392,8 +418,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
 
     players, rep = read_projections(proj_text or "")
     if rep.get("error"):
-        return {"error": f"Projections file: {rep['error']}",
-                "headers": rep.get("headers")}
+        return {"error": f"Projections file: {rep['error']}"}
     say("info", f"Projections: {rep['players']} players read. Columns matched — "
                 + ", ".join(f"{k} from “{v}”" for k, v in rep["matched"].items()))
     if rep["unmatched"]:
@@ -402,6 +427,20 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
         say("warn", f"{len(rep['duplicate_rows'])} duplicate row(s) in the "
                     f"projections file, kept once each: "
                     + ", ".join(rep["duplicate_rows"][:6]))
+    # A column that matched by prefix or substring rather than by name is a
+    # guess, and a guess about which column is the projection is the kind of
+    # thing that has silently poisoned a whole build before. Say it.
+    if rep.get("loose"):
+        say("warn", "Columns matched by GUESS, not by exact name — check these: "
+                    + ", ".join(f"{k} <- “{h}”" for k, h in rep["loose"]))
+    if rep.get("bad_proj"):
+        say("warn", f"{len(rep['bad_proj'])} player(s) have a non-numeric "
+                    f"projection (“-”, “N/A”…) and were treated as 0: "
+                    + ", ".join(rep["bad_proj"][:6]))
+    if rep.get("unknown_pos"):
+        say("warn", f"{len(rep['unknown_pos'])} projected player(s) have a blank "
+                    f"or unknown position and cannot be rostered: "
+                    + ", ".join(rep["unknown_pos"][:6]))
 
     teams = sorted({p.team for p in players if p.team})
     if len(teams) == 2:
@@ -435,13 +474,23 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                     f"projections file covers the whole slate.")
 
     if dk:
+        if not dk.get("pool"):
+            # Entry rows but no player pool: an UPLOAD file (ours, or one
+            # already filled in) dropped where DK's export belongs. Without
+            # the pool there are no DK ids, so nothing downstream can work.
+            return {"error": f"The DK file has {len(dk['entries'])} entry rows "
+                             f"but no player pool, so it is an upload file, not "
+                             f"DK's export. Download the entries file from DK "
+                             f"again — the one with the player list to the right "
+                             f"of the entries.",
+                    "notes": notes}
         hit, miss, no_cpt = _attach_dk_ids(players, dk)
         say("good", f"DK entries: {len(dk['entries'])} entries, {hit} player IDs matched.")
         if miss:
             say("warn", f"{len(miss)} player(s) in the projections file have no "
                         f"DK match by name and cannot be used: "
                         + ", ".join(miss[:10]) + (" …" if len(miss) > 10 else ""))
-        if hit and hit < 0.8 * (hit + len(miss)):
+        if hit < 0.8 * (hit + len(miss)):
             return {"error": f"Only {hit} of {hit + len(miss)} players matched "
                              f"the DK entries file. That is almost certainly the "
                              f"wrong slate's DK export — check the download.",
@@ -450,6 +499,10 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
             say("info", f"{len(no_cpt)} player(s) have no CAPTAIN id in the DK "
                         f"file, so they will not be captained: "
                         + ", ".join(no_cpt[:6]))
+        # A player with no DK id cannot go in the file, so he cannot go in a
+        # lineup either. Warning and then rostering him anyway only moved the
+        # failure to the write gate, where the whole file is refused.
+        players = [p for p in players if str(p.dk_id).isdigit()]
 
     by_id = {p.dk_id: p for p in players}
     by_name = {normalize_name(p.name): p for p in players}
@@ -487,8 +540,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
     # "total ownership", and reading the wrong one silently corrupts every
     # leverage and duplication figure — so this runs on every build.
     flex_own = sum(p.ownership for p in players)
-    cpt_own = sum(p.cpt_own for p in players)
     if fmt == "showdown":
+        cpt_own = sum(p.cpt_own for p in players)
         ok_own = 450 <= flex_own <= 650 and 550 <= flex_own + cpt_own <= 650
         say("good" if ok_own else "warn",
             f"Ownership: {flex_own:.0f}% across the five flex slots + {cpt_own:.0f}% "
@@ -539,18 +592,21 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
     # game script, so they are logged against every build to be tested later.
     vegas = None
     if (linestar_text or "").strip():
-        ls, lrep = read_linestar(linestar_text)
+        _ls, lrep = read_linestar(linestar_text)
         if lrep.get("error"):
             say("warn", f"LineStar file: {lrep['error']}")
         else:
             vegas = lrep.get("teams") or None
-            if vegas:
+            if vegas and len(vegas) <= 2:
                 say("info", "Vegas, logged for later testing: "
                             + "; ".join(f"{t} {v['implied']:.1f} implied"
-                                        for t, v in list(vegas.items())[:4])
+                                        for t, v in vegas.items())
                             + (f" | total {list(vegas.values())[0]['total']:.1f}"
                                if list(vegas.values())[0].get("total") else "")
                             + ". Not used in the build.")
+            elif vegas:
+                say("info", f"Vegas logged for {len(vegas)} teams, for later "
+                            f"testing. Not used in the build.")
             if lrep.get("is_results"):
                 say("warn", "That LineStar file already has scores in it — it is "
                             "a post-game export. Use it with --grade, not here.")
@@ -601,8 +657,15 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
     else:
         off_pool = _i(raw_off, 0)
     if pool_names and off_pool == 0 and fmt == "classic":
-        need_off, short = _pool_gaps(players)
-        if need_off:
+        need_off, short, cheapest = _pool_gaps(players, _f(o.get("minProj"), M.MIN_PROJ))
+        if not need_off and cheapest > SALARY_CAP:
+            off_pool = None
+            say("warn", f"Your pool covers every seat, but the cheapest legal "
+                        f"roster it allows costs ${cheapest:,} — over the "
+                        f"${SALARY_CAP:,} cap. Treating it as a shortlist rather "
+                        f"than a hard filter. Your cores still get their "
+                        f"guaranteed share.")
+        elif need_off:
             # A sheet that cannot fill nine seats is a shortlist, not a build
             # constraint, and any partial allowance would be a number invented
             # here rather than one the sharp meant. Drop the constraint and say
@@ -615,6 +678,20 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                           f"{C.ROSTER_SIZE}. Treating it as a shortlist rather "
                           f"than a hard filter. Your cores still get their "
                           f"guaranteed share.")
+    if pool_names and off_pool == 0 and fmt == "showdown":
+        sal = sorted(p.salary for p in players
+                     if p.in_pool and p.proj > 0 and p.salary > 0)
+        if len(sal) < 6:
+            off_pool = None
+            say("warn", f"Your pool holds only {len(sal)} playable names and a "
+                        f"showdown roster needs six. Treating it as a shortlist.")
+        else:
+            cheapest = int(round(sal[0] * 1.5)) + sum(sal[1:6])
+            if cheapest > SALARY_CAP:
+                off_pool = None
+                say("warn", f"The cheapest legal roster your pool allows costs "
+                            f"${cheapest:,} — over the ${SALARY_CAP:,} cap. "
+                            f"Treating it as a shortlist.")
     if pool_names and off_pool is not None:
         say("info", "Pool is a build constraint: "
                     + ("every player must come from it."
@@ -642,15 +719,19 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
     n_mine = n if split <= 0 else min(split, n)
     n_vendor = n - n_mine
     chosen = []
-    shape_targets = (E.SPLIT_TARGETS if fmt == "showdown" else
-                     _stack_targets(o.get("stackTargets")))
-    caps = dict(player_cap=_f(o.get("playerCap"), M.PLAYER_CAP))
+    shape_targets = E.SPLIT_TARGETS
+    if fmt == "classic":
+        shape_targets = _stack_targets(o.get("stackTargets"))
+        if o.get("stackTargets") and shape_targets == dict(C.STACK_TARGETS) \
+                and not _stack_targets_valid(o.get("stackTargets")):
+            say("warn", "The stack-shape boxes did not add up to anything usable, "
+                        "so the default 45/55 is in force.")
+    caps = dict(player_cap=_share(o.get("playerCap"), M.PLAYER_CAP))
     if fmt == "showdown":
-        caps.update(captain_cap=_f(o.get("captainCap"), E.CAPTAIN_CAP),
-                    min_captains=_i(o.get("minCaptains"), E.MIN_CAPTAINS))
+        caps.update(captain_cap=_share(o.get("captainCap"), E.CAPTAIN_CAP))
     else:
-        caps.update(qb_cap=_f(o.get("qbCap"), C.QB_CAP),
-                    dst_cap=_f(o.get("dstCap"), C.DST_CAP))
+        caps.update(qb_cap=_share(o.get("qbCap"), C.QB_CAP),
+                    dst_cap=_share(o.get("dstCap"), C.DST_CAP))
 
     if n_mine:
         rng = __import__("random").Random(seed)
@@ -670,7 +751,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
         else:
             cands = C.build_candidates(
                 players, max(4000, n_mine * 30), stack_targets=shape_targets,
-                bring_back_share=_f(o.get("bringBack"), C.BRING_BACK_SHARE),
+                bring_back_share=_share(o.get("bringBack"), C.BRING_BACK_SHARE),
                 **common)
         if not cands:
             return {"error": "Built no legal lineups. Check the salaries, "
@@ -693,10 +774,14 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
         # Every core the sharp set is guaranteed a share of the entries, so a
         # conviction pick cannot be squeezed out by the tool's own preferences.
         core_ids = [p.dk_id for p in players if p.core and p.proj > 0]
-        floors = None
+        floors = floors_total = None
         if core_ids:
             per = max(1, -(-n_mine // (len(core_ids) + 1)))
             floors = {cid: per for cid in core_ids}
+            # The second arm and any top-up inherit this arm's counts and work
+            # toward the floor for ALL n, which is what the final check tests.
+            floors_total = {cid: max(1, -(-n // (len(core_ids) + 1)))
+                            for cid in core_ids}
             say("info", f"Each of your {len(core_ids)} core(s) is guaranteed at "
                         f"least {per} of {n_mine} lineups.")
         if fmt == "showdown":
@@ -706,11 +791,6 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
             chosen += C.select(cands, n_mine, stack_targets=shape_targets,
                                core_floors=floors, **caps)
         say("info", f"Built {len(chosen)} lineups from {len(cands):,} candidates.")
-        # Did the floors actually hold? Never assume they did. The one failure
-        # this tool has already been bitten by is a core landing in a fraction of
-        # the entries the user was told it would, and it fails QUIETLY: the
-        # top-up loop stops when no legal swap exists and says nothing. So check
-        # the result, name the player, and say how short it came.
 
 
     if n_vendor:
@@ -720,10 +800,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                         f"so every entry still gets a lineup.")
             shape_kw = ({"split_targets": shape_targets} if fmt == "showdown"
                         else {"stack_targets": shape_targets})
-            extra = M.select(cands, n, core_floors=floors,
-                             exclude={lu.key() for lu in chosen},
-                             **shape_kw, **caps)
-            chosen += extra[:n_vendor]
+            chosen += M.select(cands, n_vendor, core_floors=floors_total,
+                               prior=chosen, **shape_kw, **caps)
             if len(chosen) < n:
                 say("warn", f"Only {len(chosen)} distinct lineups could be built "
                             f"for {n} entries.")
@@ -731,7 +809,6 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
             # What our own arm already took. Both arms rank the same player pool
             # on the same objective, so they land on the same rosters — a real
             # 75/75 showdown split produced three identical pairs before this.
-            mine_keys = {lu.key() for lu in chosen}
             # The pool and the cores are your instructions, not our preference,
             # so they have to bind on ALL 150 entries. They used to apply only
             # to our own half while the notes said "every player must come from
@@ -753,31 +830,26 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                 def _off(e):
                     ps = ([e["cpt"]] + e["flex"]) if fmt == "showdown" else e["flex"]
                     return sum(1 for p in ps if p and not p.in_pool and not p.core)
-                vfield = [e for e in field if _off(e) <= off_pool]
+                vfield = [e for e in vfield if _off(e) <= off_pool]
                 say("info" if vfield else "warn",
                     f"Vendor pool filtered to your player pool: "
                     f"{len(vfield):,} of {len(field):,} of their lineups qualify.")
                 if not vfield:
                     say("warn", "None of their lineups fit your pool, so the "
                                 "vendor half is built from ours instead.")
-            vcores = ({p.dk_id: max(1, -(-n_vendor // (len(core_ids) + 1)))
-                       for p in players if p.core and p.proj > 0}
-                      if core_ids and n_vendor else None)
             if vfield and fmt == "showdown":
-                chosen += E.vendor_arm(vfield, n_vendor, players_by_id=by_id,
-                                       dupe_scale=dupe_scale,
-                                       exclude=mine_keys, core_floors=vcores,
+                chosen += E.vendor_arm(vfield, n_vendor, dupe_scale=dupe_scale,
+                                       core_floors=floors_total, prior=chosen,
                                        **caps)
             elif vfield:
                 chosen += C.vendor_arm(vfield, n_vendor, dupe_scale=dupe_scale,
-                                       exclude=mine_keys, core_floors=vcores,
+                                       core_floors=floors_total, prior=chosen,
                                        **caps)
             else:
                 shape_kw = ({"split_targets": shape_targets} if fmt == "showdown"
                             else {"stack_targets": shape_targets})
-                extra = M.select(cands, n, core_floors=floors,
-                                 exclude=mine_keys, **shape_kw, **caps)
-                chosen += extra[:n_vendor]
+                chosen += M.select(cands, n_vendor, core_floors=floors_total,
+                                   prior=chosen, **shape_kw, **caps)
 
     # Top up from our own candidates if either arm came up short — a vendor pool
     # thinned by the pool filter or by missing captain IDs can leave entries
@@ -786,17 +858,18 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
     if len(chosen) < n and n_mine and cands:
         shape_kw = ({"split_targets": shape_targets} if fmt == "showdown"
                     else {"stack_targets": shape_targets})
-        top_up = M.select(cands, n, core_floors=floors,
-                          exclude={lu.key() for lu in chosen},
-                          **shape_kw, **caps)
         need = n - len(chosen)
-        chosen += top_up[:need]
-        if len(chosen) >= n:
-            say("info", f"Topped up {need} entries from our own builder to cover "
-                        f"all {n}.")
+        chosen += M.select(cands, need, core_floors=floors_total, prior=chosen,
+                           **shape_kw, **caps)
+        say("info", f"Topped up {need} entries from our own builder to cover "
+                    f"all {n}.")
 
     if not chosen:
         return {"error": "No lineups produced.", "notes": notes}
+    if len(chosen) < n:
+        say("warn", f"Only {len(chosen)} lineups could be built for {n} entries. "
+                    f"The remaining entries will have no lineup and score zero — "
+                    f"widen the pool or lower the minimum projection.")
 
     # Did the core floors hold across ALL the entries, not just our own half?
     # Never assume they did. The one failure this tool has been bitten by twice
@@ -821,11 +894,6 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
             say("good", f"Every core is in at least {want} of {len(chosen)} "
                         f"entries.")
 
-    if dk and dk.get("entries") and len(chosen) < min(n, len(dk["entries"])):
-        say("warn", f"Only {len(chosen)} lineups could be built for "
-                    f"{min(n, len(dk['entries']))} entries. The remaining "
-                    f"entries will have no lineup and score zero — widen the "
-                    f"pool or lower the minimum projection.")
 
     # Belt and braces. Every path above dedupes, but this is the one error that
     # is invisible in the output and costs a real entry, so it is checked on the
@@ -888,18 +956,17 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
     settings = {"n": n, "split": split, "sims": sims, "seed": seed,
                 "format": fmt,
                 "ownLean": _f(o.get("ownLean"), M.OWN_LEAN),
-                "playerCap": _f(o.get("playerCap"), M.PLAYER_CAP),
+                "playerCap": _share(o.get("playerCap"), M.PLAYER_CAP),
                 "minProj": _f(o.get("minProj"), M.MIN_PROJ),
                 "maxOffPool": off_pool,
                 "cores": sorted(core_names), "pool": sorted(pool_names)}
     if fmt == "showdown":
         settings.update({"captainCap": caps["captain_cap"],
-                         "minCaptains": caps["min_captains"],
                          "splitTargets": shape_targets})
     else:
         settings.update({"qbCap": caps["qb_cap"], "dstCap": caps["dst_cap"],
                          "stackTargets": {str(k): v for k, v in shape_targets.items()},
-                         "bringBack": _f(o.get("bringBack"), C.BRING_BACK_SHARE)})
+                         "bringBack": _share(o.get("bringBack"), C.BRING_BACK_SHARE)})
     meta = {
         "slate": datetime.now().astimezone().date().isoformat(),
         "format": fmt,
@@ -1058,7 +1125,7 @@ def grade(results_text, slate=None):
             total += scored[key] * mult
         if ok:
             graded.append({"score": round(total, 2), "source": r.get("source"),
-                           "shape": r.get("split") or r.get("shape"),
+                           "shape": (r.get("split") or r.get("shape") or "?").split(" |")[0],
                            "entry_id": r.get("entry_id"),
                            "head": r.get("captain") or r.get("qb"),
                            "proj": r.get("proj"), "own": r.get("own_sum")})
@@ -1098,6 +1165,9 @@ def _describe(kind, text):
         return {"ok": False, "msg": "that file is empty"}
     try:
         if kind == "proj":
+            if "linestarid" in text.split("\n", 1)[0].lower():
+                return {"ok": False, "msg": "that is a LineStar export — it goes "
+                                            "in slot 4, not here"}
             players, rep = read_projections(text)
             if rep.get("error"):
                 return {"ok": False,
@@ -1111,7 +1181,7 @@ def _describe(kind, text):
             return {"ok": True, "msg": f"{len(live)} players, {where}",
                     "format": "showdown" if len(teams) <= 2 else "classic"}
         if kind == "field":
-            entries, rep = read_field(text)
+            _entries, rep = read_field(text)
             if rep.get("error"):
                 return {"ok": False,
                         "msg": f"not a lineups export ({rep['error']})"}
@@ -1119,7 +1189,7 @@ def _describe(kind, text):
                                        f"({rep.get('format', '?')})",
                     "format": rep.get("format")}
         if kind == "linestar":
-            ls, rep = read_linestar(text)
+            _ls, rep = read_linestar(text)
             if rep.get("error"):
                 return {"ok": False,
                         "msg": f"not a LineStar export ({rep['error']})"}
@@ -1202,12 +1272,12 @@ class Handler(BaseHTTPRequestHandler):
                                 if q.proj > 0],
                 }))
 
-            # Confirm a dropped file is the thing the slot expects, so a wrong
-            # or unreadable file says so instead of sitting there looking loaded.
             if self.path == "/api/grade":
                 g = grade(p.get("results") or "", p.get("slate"))
                 return self._send(400 if g.get("error") else 200, json.dumps(g))
 
+            # Confirm a dropped file is the thing the slot expects, so a wrong
+            # or unreadable file says so instead of sitting there looking loaded.
             if self.path == "/api/check":
                 return self._send(200, json.dumps(
                     _describe(p.get("kind") or "", p.get("text") or "")))
@@ -1226,7 +1296,7 @@ class Handler(BaseHTTPRequestHandler):
 def serve():
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     url = f"http://127.0.0.1:{PORT}/"
-    print(f"NFL Showdown optimizer — {url}")
+    print(f"NFL optimizer (showdown and main slate) — {url}")
     print("Drop your files in the browser. Ctrl-C here to stop.")
     try:
         webbrowser.open(url)
@@ -1241,7 +1311,7 @@ def serve():
 
 # ---------------- command line ----------------
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="DK NFL Showdown builder")
+    ap = argparse.ArgumentParser(description="DK NFL lineup builder — showdown and main slate")
     ap.add_argument("--proj", help="Stokastic projections CSV")
     ap.add_argument("--field", help="Stokastic lineups CSV (the opponent field)")
     ap.add_argument("--dk", help="DK entries export (needed for an upload file)")
@@ -1259,13 +1329,12 @@ def main(argv=None):
                     help="override the auto-detected slate format")
     ap.add_argument("--own-lean", type=float, default=None)
     ap.add_argument("--captain-cap", type=float, default=E.CAPTAIN_CAP)
-    ap.add_argument("--min-captains", type=int, default=E.MIN_CAPTAINS)
     ap.add_argument("--player-cap", type=float, default=None)
     ap.add_argument("--qb-cap", type=float, default=C.QB_CAP)
     ap.add_argument("--dst-cap", type=float, default=C.DST_CAP)
     ap.add_argument("--bring-back", type=float, default=C.BRING_BACK_SHARE)
     ap.add_argument("--stack-targets", default=None,
-                    help="classic stack quotas, e.g. 3:0.45,2:0.40,1:0.15")
+                    help="classic stack quotas, e.g. 3:45,2:55 (default)")
     ap.add_argument("--max-leftover", type=int, default=None)
     ap.add_argument("--min-proj", type=float, default=None)
     ap.add_argument("--max-off-pool", type=int, default=None)
@@ -1311,7 +1380,7 @@ def main(argv=None):
         "n": a.n, "split": a.split, "sims": a.sims, "seed": a.seed,
         "format": a.format,
         "ownLean": a.own_lean, "captainCap": a.captain_cap,
-        "minCaptains": a.min_captains, "playerCap": a.player_cap,
+        "playerCap": a.player_cap,
         "qbCap": a.qb_cap, "dstCap": a.dst_cap, "bringBack": a.bring_back,
         "stackTargets": a.stack_targets,
         "maxLeftover": a.max_leftover, "minProj": a.min_proj,

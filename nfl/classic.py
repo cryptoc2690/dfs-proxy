@@ -17,7 +17,9 @@ research brief is explicit that three things point the OPPOSITE way:
    split. Holding projection AND ownership constant, each extra pass-catcher
    stacked with your QB is worth +31% relative win probability — about 2.4
    projected points. Unstacked lineups are 9.6% of the field and give up more
-   than half their win probability.
+   than half their win probability. (Those shares are the vendor's, whose
+   stack column counts running backs; on this module's pass-catcher
+   definition the real field builds QB+3 4.6% of the time.)
 
 3. **Bring-backs cut win equity** (-12.7%, standardised beta -0.103 on Win% and
    +0.010 on Cash%). A bring-back hedges game script: it raises the floor and
@@ -31,6 +33,7 @@ column understates by up to ~40x and must be scaled.
 
 from __future__ import annotations
 
+import heapq
 import random
 
 from dk import SALARY_CAP
@@ -46,28 +49,44 @@ MAX_POS = {"QB": 1, "RB": 3, "WR": 4, "TE": 2, "DST": 1}  # the flex is the +1
 
 # --- construction targets ------------------------------------------------
 # Win rate at matched projection, from the brief: no stack 0.0077, QB+1 0.0156,
-# QB+2 0.0194, QB+3 0.0201. The field builds QB+3 about 8.7% of the time, so
-# this is where the room is. Aimed at depth 2 and 3, with a slice of 1 kept for
-# the slates where a third partner cannot be afforded.
-STACK_TARGETS = {3: 0.45, 2: 0.40, 1: 0.15}
+# QB+2 0.0194, QB+3 0.0201. The field builds QB+3 about 4.7% of the time by this
+# definition (pass-catchers only; the vendor's own column counts backs too and
+# says 8.8%), so this is where the room is. No floor on QB+1: a slice of the
+# weakest shape was kept for slates where a third partner cannot be afforded,
+# and measured out of sample it cost first-place equity (1.21x the vendor arm
+# with it, 1.33x without, under the calibrated simulator).
+STACK_TARGETS = {3: 0.45, 2: 0.55}
 BRING_BACK_SHARE = 0.15   # the insurance block, and nothing more
 MIN_STACK = 1             # never build a lineup with no stack at all
 # Ownership lean: NEUTRAL by default, and this is deliberate. Ranking on win
-# probability against the field's best score already fades chalk hard on its own
-# — measured on the real main slate it lands these lineups at the field's 12th
-# ownership percentile with the lean at zero. Adding a negative lean on top
-# bought one further point of ownership sum, because the candidate pool is
-# already skewed that way and there is nothing left to fade. So the lever fails
-# the test every lever here has to pass: it does not change the output enough to
-# justify acting on the report's LEAST-trusted finding. It stays exposed, in both
-# directions, for a slate where the read says otherwise.
+# probability already fades chalk on its own — with the lean at zero these
+# lineups land well below the field's median ownership. The lever is live in
+# both directions (measured: -0.2 moves the ownership sum 4-10 points lower,
+# +0.25 moves it 15-17 higher), but the finding that would justify a default
+# in either direction is the report's LEAST-trusted one, so it stays at zero
+# until graded results say otherwise.
 OWN_LEAN = 0.0
-QB_CAP = 0.35             # QB exposure IS stack exposure, so it binds tighter
+QB_CAP = 0.35             # QB exposure IS stack exposure. A rail: the top QB
+                          # sits at 17-21 of 75 on real builds, under the cap.
 PLAYER_CAP = 0.55
 DST_CAP = 0.30
 MAX_OVERLAP = 6           # of 9
 MIN_PROJ = 3.0            # a roster spot needs some path to a useful score
 MAX_LEFTOVER = 2000
+CORE_BOOST = 3.0          # construction weight on a core, so its floor is reachable
+
+# The score to beat. Ranking on "beat the field's single BEST score" was too
+# coarse a target. Measured on the real main slate with 3,000 fixed candidates:
+# 764-828 of them cleared it in ZERO simulations, the rest took one of only
+# 12-13 distinct values, and the order among those was noise — change the
+# simulation seed and only 12-16 of the chosen 75 survived. Against the field's
+# 99th percentile: 2-3 zeros, 63-65 distinct values, 45-47 of 75 survive a
+# seed change. It is also the tier that actually pays. The sample is drawn
+# WEIGHTED by (1 + Dupes), because a row the field holds forty times is forty
+# opponents, not one.
+BAR_QUANTILE = 0.99
+BAR_SAMPLE = 2000
+BAR_WEIGHTED = True
 
 
 class Lineup:
@@ -127,7 +146,8 @@ class Lineup:
         FLEX, DST. The flex is whichever RB/WR/TE is left over."""
         by = {"QB": [], "RB": [], "WR": [], "TE": [], "DST": []}
         for p in self.players:
-            by.get(p.pos, by["WR"]).append(p)
+            if p.pos in by:            # an unknown position is not a receiver
+                by[p.pos].append(p)
         for k in by:
             by[k].sort(key=lambda p: -p.proj)
         out, used = [], set()
@@ -254,8 +274,8 @@ def build_candidates(players, n, *, rng=None, stack_targets=None,
         want = _pick([d for d, _ in depths], [w for _, w in depths], rng)
         want_bb = rng.random() < bring_back_share
 
-        qw = [max(q.proj, 0.1) ** 2 * (0.0 if qb_used.get(q.dk_id, 0) >= qb_room
-                                       else 1.0) for q in qbs]
+        qw = [max(q.proj, 0.1) ** 2 * (CORE_BOOST if q.core else 1.0)
+              * (0.0 if qb_used.get(q.dk_id, 0) >= qb_room else 1.0) for q in qbs]
         if not any(qw):
             qb_used.clear()
             continue
@@ -275,8 +295,11 @@ def build_candidates(players, n, *, rng=None, stack_targets=None,
         licensed = qb.core
         mates = [p for p in pool if p.team == qb.team and p.pos in ("WR", "TE")
                  and p.dk_id not in used and (licensed or allowed(p, off))]
-        rng.shuffle(mates)
-        mates.sort(key=lambda p: -p.proj)
+        # Best partners first, ties broken at random so the same QB does not
+        # get the identical stack every time. (A shuffle before a stable sort
+        # only ever reordered exact-projection ties.)
+        mates.sort(key=lambda p: (-p.proj * (CORE_BOOST if p.core else 1.0),
+                                  rng.random()))
         got = 0
         for p in mates:
             if got >= want:
@@ -340,7 +363,10 @@ def build_candidates(players, n, *, rng=None, stack_targets=None,
                 if not _completable(picked + [p]):
                     continue
                 elig.append(p)
-                w.append(max(p.proj, 0.1) ** 3)
+                # A core gets extra weight here so its floor is reachable at
+                # all: with none, a core QB projected 13.6 reached 32 of 4,000
+                # candidates and his "guaranteed" floor was a fiction.
+                w.append(max(p.proj, 0.1) ** 3 * (CORE_BOOST if p.core else 1.0))
             if not elig:
                 ok = False
                 break
@@ -418,27 +444,38 @@ def estimated_dupes(lu, idx, scale=1.0, field_n=0.0):
     return p * (field_n if field_n > 0 else 100_000.0) * scale
 
 
-def field_bar(entries, mat, sims, sample=1200, seed=0):
-    """The score to beat per sim: the best a sample of the field reaches.
+def field_bar(entries, mat, sims, sample=None, seed=0, quantile=None,
+              weighted=None):
+    """The score to beat per sim — the field's BAR_QUANTILE score.
 
-    Sampling understates the true field maximum, but it understates it the same
-    way for every candidate, so the ordering — which is all we use — holds.
+    Kept as a running top-k per sim rather than the full sample x sims matrix,
+    which at 2,000 x 4,000 would be a quarter of a gigabyte of Python floats.
     """
     rng = random.Random(seed + 11)
     usable = [e for e in entries if len(e.get("flex") or []) == ROSTER_SIZE]
     if not usable:
         return None, 0
-    picks = usable if len(usable) <= sample else rng.sample(usable, sample)
-    bar = [0.0] * sims
+    sample = sample or BAR_SAMPLE
+    q = BAR_QUANTILE if quantile is None else quantile
+    if BAR_WEIGHTED if weighted is None else weighted:
+        picks = rng.choices(usable, weights=[1.0 + (e.get("dupes") or 0.0)
+                                             for e in usable], k=sample)
+    else:
+        picks = usable if len(usable) <= sample else rng.sample(usable, sample)
+    keep = max(1, int(round((1.0 - q) * len(picks))))   # k-th largest = bar
+    heaps = [[] for _ in range(sims)]
     for e in picks:
         rows = [mat.get(p.dk_id) for p in e["flex"]]
         if any(r is None for r in rows):
             continue
         for s in range(sims):
             v = sum(r[s] for r in rows)
-            if v > bar[s]:
-                bar[s] = v
-    return bar, len(picks)
+            h = heaps[s]
+            if len(h) < keep:
+                heapq.heappush(h, v)
+            elif v > h[0]:
+                heapq.heapreplace(h, v)
+    return [h[0] if h else 0.0 for h in heaps], len(picks)
 
 
 # --- scoring and selection ----------------------------------------------
@@ -454,23 +491,19 @@ def rank(lineups, mat, bar, sims, dupes_idx, own_lean=OWN_LEAN, dupe_scale=1.0,
     span = (hi - lo) or 1.0
     for lu in lineups:
         sc = score_lineup(lu, mat, sims)
-        w = (sum(1 for s in range(sims) if sc[s] > bar[s]) / sims) if bar else 0.0
+        w = sum(1 for s in range(sims) if sc[s] > bar[s]) / sims
         d = estimated_dupes(lu, dupes_idx, scale=dupe_scale, field_n=field_n)
         on = (lu.own_sum - lo) / span
-        lu.metrics.update({
-            "win": round(w, 5), "dupes": round(d, 2),
-            "mean": round(sum(sc) / sims, 2),
-            "stack": lu.stack_depth(), "bringBack": lu.bring_back(),
-        })
-        base = w if bar else (sum(sc) / sims) / 200.0
-        lu.metrics["score"] = (base / (1.0 + d)) * (1 + own_lean * (2 * on - 1))
+        lu.metrics.update({"win": round(w, 5), "dupes": round(d, 2),
+                           "mean": round(sum(sc) / sims, 2)})
+        lu.metrics["score"] = (w / (1.0 + d)) * (1 + own_lean * (2 * on - 1))
     lineups.sort(key=lambda l: -l.metrics["score"])
     return lineups
 
 
 def select(lineups, n, *, player_cap=PLAYER_CAP, qb_cap=QB_CAP, dst_cap=DST_CAP,
            max_overlap=MAX_OVERLAP, stack_targets=None, core_floors=None,
-           exclude=None):
+           prior=None):
     """Pick the final N under exposure, overlap and stack-shape quotas.
 
     Stack depth is a quota for the same reason the showdown team split is: the
@@ -478,14 +511,16 @@ def select(lineups, n, *, player_cap=PLAYER_CAP, qb_cap=QB_CAP, dst_cap=DST_CAP,
     projection. Forcing a third pass-catcher from one team means reaching deeper
     into that team's roster, so those lineups carry slightly less projection and
     lose a straight ranking contest while winning every like-for-like one. That
-    is why the field builds QB+3 under 9% of the time.
+    is why the field builds QB+3 under 5% of the time.
+
+    `prior` is what an earlier arm already took: its rosters are excluded (a
+    second copy of a roster you hold buys no coverage — if it hits, the two
+    entries split the tied places), its exposure counts are inherited so the
+    caps hold across ALL entries rather than per arm, and its rosters count for
+    overlap at the same six-of-nine bar.
     """
-    # Duplicate rosters are dropped here, and `exclude` carries what an earlier
-    # arm already took. Both arms chase the same shapes out of the same pool, so
-    # they collide — a real showdown split produced three identical pairs. A
-    # second copy of a roster you already hold buys no coverage: if it hits, the
-    # two entries just split the tied places between them.
-    seen_keys = set(exclude or ())
+    prior = list(prior or [])
+    seen_keys = {lu.key() for lu in prior}
     unique = []
     for lu in lineups:
         k = lu.key()
@@ -494,13 +529,22 @@ def select(lineups, n, *, player_cap=PLAYER_CAP, qb_cap=QB_CAP, dst_cap=DST_CAP,
         seen_keys.add(k)
         unique.append(lu)
     lineups = unique
-    ply = max(1, round(player_cap * n))
-    qbc = max(1, round(qb_cap * n))
-    dstc = max(1, round(dst_cap * n))
+    total = n + len(prior)
+    ply = max(1, round(player_cap * total))
+    qbc = max(1, round(qb_cap * total))
+    dstc = max(1, round(dst_cap * total))
     quota = ({d: int(round(v * n)) for d, v in stack_targets.items()}
              if stack_targets else {})
-    chosen, sets, taken = [], [], set()
+    chosen, taken = [], set()
+    sets = [set(lu.ids()) for lu in prior]
     used, qb_ct, dst_ct, depth_ct = {}, {}, {}, {}
+    for lu in prior:
+        for p in lu.players:
+            used[p.dk_id] = used.get(p.dk_id, 0) + 1
+            if p.is_qb:
+                qb_ct[p.dk_id] = qb_ct.get(p.dk_id, 0) + 1
+            if p.is_dst:
+                dst_ct[p.dk_id] = dst_ct.get(p.dk_id, 0) + 1
 
     def take(lu):
         chosen.append(lu)
@@ -525,24 +569,39 @@ def select(lineups, n, *, player_cap=PLAYER_CAP, qb_cap=QB_CAP, dst_cap=DST_CAP,
         s = set(lu.ids())
         return not any(len(s & t) > overlap for t in sets)
 
-    def sweep(overlap, depth=None, limit=None):
+    def sweep(overlap, depth=None, limit=None, need=None, floor=None):
         for lu in lineups:
             if len(chosen) >= n:
                 return
             if limit is not None and depth_ct.get(depth, 0) >= limit:
                 return
+            if floor is not None and used.get(need, 0) >= floor:
+                return
             if id(lu) in taken:
                 continue
             if depth is not None and lu.stack_depth() != depth:
                 continue
+            if need is not None and need not in lu.ids():
+                continue
             if ok(lu, overlap):
                 take(lu)
 
+    # Cores FIRST, under the same caps and overlap as everything else. They
+    # used to be swapped in at the end past every cap — one showdown core
+    # reached 62 of 75 against a cap of 49 and dragged identical-six pairs in
+    # with it. A conviction pick outranks the tool's preferences; it does not
+    # outrank the exposure rules the user set.
+    for cid, floor in (core_floors or {}).items():
+        sweep(max_overlap, need=cid, floor=floor)
     for d, want in sorted(quota.items(), key=lambda kv: -kv[1]):
         sweep(max_overlap, depth=d, limit=want)
     sweep(max_overlap)
     for relax in (max_overlap + 1, ROSTER_SIZE):
         sweep(relax)
+    # A core still short gets one more look with overlap relaxed — caps held.
+    for cid, floor in (core_floors or {}).items():
+        if used.get(cid, 0) < floor:
+            sweep(ROSTER_SIZE, need=cid, floor=floor)
     if len(chosen) < n:                      # hold the QB cap longest
         for lu in lineups:
             if len(chosen) >= n:
@@ -556,32 +615,6 @@ def select(lineups, n, *, player_cap=PLAYER_CAP, qb_cap=QB_CAP, dst_cap=DST_CAP,
             break
         if id(lu) not in taken:
             take(lu)
-    chosen = chosen[:n]
-
-    # Cores last, so a conviction pick outranks every preference above it.
-    if core_floors:
-        picked = {id(c) for c in chosen}
-
-        def held(cid):
-            return sum(1 for lu in chosen if cid in lu.ids())
-
-        for cid, need in core_floors.items():
-            while held(cid) < need:
-                cand = next((c for c in lineups
-                             if cid in c.ids() and id(c) not in picked), None)
-                if cand is None:
-                    break
-                drop = next((lu for lu in reversed(chosen)
-                             if cid not in lu.ids()
-                             and all(oid not in lu.ids() or held(oid) - 1 >= o
-                                     for oid, o in core_floors.items()
-                                     if oid != cid)), None)
-                if drop is None:
-                    break
-                chosen.remove(drop)
-                picked.discard(id(drop))
-                chosen.append(cand)
-                picked.add(id(cand))
     return chosen[:n]
 
 
@@ -596,10 +629,8 @@ def vendor_arm(field_entries, n, *, dupe_scale=1.0, **kw):
         if len(ps) != ROSTER_SIZE or not _legal_final(ps) or not dst_ok(ps):
             continue
         lu = Lineup(ps, source="vendor")
-        d = (e.get("dupes") or 0.0) * dupe_scale
+        d = (1.0 + (e.get("dupes") or 0.0)) * dupe_scale   # every copy is an opponent
         lu.metrics = {"win": e.get("win", 0.0), "dupes": round(d, 2),
-                      "roi": e.get("roi", 0.0), "cash": e.get("cash", 0.0),
-                      "stack": lu.stack_depth(), "bringBack": lu.bring_back(),
                       "score": e.get("win", 0.0) / (1.0 + d)}
         cands.append(lu)
     cands.sort(key=lambda l: -l.metrics["score"])

@@ -23,11 +23,10 @@ INDEX_HTML = r"""<!doctype html>
     background:linear-gradient(135deg,#8b5a2b,#c8843f);border:1px solid #e6d5b8}
   header .sub{color:var(--muted);font-size:13px;margin-left:auto}
   label{display:block;font-size:12.5px;color:var(--muted);margin:12px 0 5px}
-  input[type=number],input[type=text],textarea,select{width:100%;
+  input[type=number],input[type=text],select{width:100%;
     background:var(--panel2);border:1px solid var(--line);color:var(--text);
     border-radius:8px;padding:8px 10px;font-size:14px;font-family:inherit}
-  textarea{resize:vertical;min-height:60px;line-height:1.35}
-  input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent)}
+  input:focus,select:focus{outline:none;border-color:var(--accent)}
 
   #filerail{display:flex;flex-wrap:wrap;border-bottom:1px solid var(--line);
     background:var(--panel)}
@@ -86,8 +85,6 @@ INDEX_HTML = r"""<!doctype html>
     animation:sp .7s linear infinite;vertical-align:-2px}
   @keyframes sp{to{transform:rotate(360deg)}}
   #welcome{color:var(--muted);font-size:14px;line-height:1.7;max-width:760px}
-  #welcome code{background:var(--panel2);padding:2px 6px;border-radius:5px;
-    font-size:12.5px}
   .fslot.bad b{color:#e08080}
   .fslot.bad .fstate{color:#e08080}
 
@@ -160,26 +157,25 @@ INDEX_HTML = r"""<!doctype html>
     <div class="sd-only">
       <label>Max share on one captain — <span id="cv">28</span>%</label>
       <input id="ccap" type="range" min="10" max="60" value="28" style="width:100%">
-      <label>Fewest distinct captains</label>
-      <input id="mincpt" type="number" value="10" min="1" max="40">
       <div class="hint">The captain is the highest-dispersion call in the format.
         Their own field puts about a fifth of its captaincies on one player and
-        uses only ~23 captains across 8,000+ lineups.</div>
+        uses only 24 captains across 9,000+ lineups.</div>
     </div>
     <div class="cl-only">
       <label>Stack shape — share of lineups at QB+3 / QB+2 / QB+1</label>
       <div class="trio">
         <input id="st3" type="number" value="45" min="0" max="100">
-        <input id="st2" type="number" value="40" min="0" max="100">
-        <input id="st1" type="number" value="15" min="0" max="100">
+        <input id="st2" type="number" value="55" min="0" max="100">
+        <input id="st1" type="number" value="0" min="0" max="100">
       </div>
       <label>Bring-back (a player from your QB's opponent) — <span id="bv">15</span>%</label>
       <input id="bb" type="range" min="0" max="60" value="15" style="width:100%">
       <div class="hint">Stacking is the main lever on a main slate: each extra
         pass-catcher with your QB is worth about +31% relative win probability at
-        matched projection, and the field builds QB+3 under 5% of the time. A
-        bring-back does the opposite — it raises the floor and cuts the tail, so
-        it is kept as a small insurance block.</div>
+        matched projection, and the field builds QB+3 under 5% of the time. No
+        QB+1 by default — a floor on the weakest shape was measured to cost
+        first-place equity. A bring-back does the opposite of a stack — it
+        raises the floor and cuts the tail — so it is a small insurance block.</div>
     </div>
     <div class="cl-only">
       <label>Max share on one QB — <span id="qv">35</span>%</label>
@@ -203,8 +199,6 @@ INDEX_HTML = r"""<!doctype html>
         is measured against a field several times too small.</div>
       <label>Min projection for a roster spot</label>
       <input id="minproj" type="number" value="2" step="0.5">
-      <div class="hint cl-only">3.0 is the main-slate default; this box starts
-        at the showdown value.</div>
     </div>
     <div>
       <label>Sharp's pool</label>
@@ -288,11 +282,18 @@ function setFmt(f, fromDk){
   $('#title').textContent = f === 'showdown' ? 'NFL Showdown Optimizer'
                                              : 'NFL Main Slate Optimizer';
   // The ownership lean genuinely points opposite ways in the two formats, so
-  // the default follows the format until the user touches the slider.
+  // the default follows the format until the user touches the slider. Same
+  // for the projection floor: a main-slate roster spot needs 3.0, showdown
+  // 2.0, and sending the showdown value for both meant the page and the
+  // command line built different main-slate lineups from the same files.
   if(!leanTouched){
     $('#lean').value = f === 'showdown' ? 35 : 0;
     $('#lean').dispatchEvent(new Event('input'));
   }
+  if(!minTouched){
+    $('#minproj').value = f === 'showdown' ? 2 : 3;
+  }
+  $('#cap').placeholder = f === 'showdown' ? 'e.g. 237812' : 'e.g. 416171';
 }
 
 // The browser must not navigate away when a file is dropped anywhere else.
@@ -475,7 +476,8 @@ function slateLabel(teams){
   return teams.length + ' teams · ' + Math.round(teams.length/2) + ' games · main slate';
 }
 
-let leanTouched = false;
+let leanTouched = false, minTouched = false;
+$('#minproj').addEventListener('change', () => { minTouched = true; });
 $('#lean').addEventListener('input', e => {
   const v = e.target.value/100;
   $('#lv').textContent = (v>=0?'+':'') + v.toFixed(2);
@@ -508,12 +510,11 @@ $('#go').addEventListener('click', async () => {
           // decides which settings to show.
           ownLean: num('#lean',0)/100,
           captainCap: num('#ccap',28)/100,
-          minCaptains: num('#mincpt',10),
           qbCap: num('#qbcap',35)/100,
           dstCap: num('#dstcap',30)/100,
           bringBack: num('#bb',15)/100,
-          stackTargets: '3:'+num('#st3',45)+',2:'+num('#st2',40)+',1:'+num('#st1',15),
-          minProj: num('#minproj',2),
+          stackTargets: '3:'+num('#st3',45)+',2:'+num('#st2',55)+',1:'+num('#st1',0),
+          minProj: num('#minproj', fmt === 'showdown' ? 2 : 3),
           fieldCap: num('#cap',0), fillPct: num('#fillpct',100),
           maxOffPool: $('#offpool').value,
           pool: [...sel.pool].join('\n'), cores: [...sel.core].join('\n')

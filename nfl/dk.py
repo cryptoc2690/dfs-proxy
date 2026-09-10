@@ -13,16 +13,11 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 SALARY_CAP = 50_000
 ROSTER_SIZE = 6          # 1 CPT + 5 FLEX
 CAPTAIN_MULT = 1.5       # applies to BOTH points and salary
-
-# Positions that catch passes, so they ride the same passing-game factor as the
-# QB. This is what makes a stack a stack (see engine.simulate).
-PASS_CATCHERS = {"WR", "TE", "RB"}   # RB only partially — see engine.PASS_SHARE
-
 
 @dataclass
 class Player:
@@ -33,8 +28,9 @@ class Player:
     opponent: str
     salary: int          # FLEX salary; captain costs round(salary * 1.5)
     proj: float          # projection, FLEX basis
-    ownership: float     # projected ownership across the five FLEX slots
-                         # (Stokastic's column sums to 500%, not 600%)
+    ownership: float     # projected ownership, per roster slot: the showdown
+                         # column sums to 500% (five flex slots, captain is a
+                         # separate column), the classic column to 900%
     # DK's CAPTAIN id — a DIFFERENT number for the same player. Showdown lists
     # every player twice, once per slot, at 1.5x salary as captain. Writing the
     # flex id into the captain cell produces a file DK will not accept. Filled
@@ -46,7 +42,6 @@ class Player:
     cpt_optimal: float = 0.0  # how often they captain the sim's optimal lineup, %
     core: bool = False
     in_pool: bool = False
-    notes: list[str] = field(default_factory=list)
 
     @property
     def game(self) -> str:

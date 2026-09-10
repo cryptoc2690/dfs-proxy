@@ -1,4 +1,5 @@
-"""Readers for the four files a showdown build runs on.
+"""Readers for the files a build runs on — Stokastic's two exports, the DK
+entries export, an optional LineStar export, and the sharp's sheet.
 
 Column names are sniffed rather than hard-coded, because Stokastic's exports
 have moved before and one renamed header should not take the tool down on a
@@ -27,13 +28,15 @@ PROJ_COLUMNS = {
     "team":      ["team", "teamabbrev", "tm"],
     "opp":       ["opp", "opponent"],
     "salary":    ["salary", "sal", "dksalary"],
-    "proj":      ["projfp", "projection", "projpts", "proj", "fpts", "projectedpoints"],
+    "proj":      ["projectedfp", "projfp", "projection", "projpts", "proj", "fpts",
+                  "projectedpoints"],
     "own":       ["ownership%", "ownership", "own%", "own", "projown",
                   "projectedownership", "pown"],
     "sd":        ["stddev", "standarddeviation", "sd", "stdev", "sigma"],
     "boom":      ["boom", "boompct", "boom%"],
-    "cpt_own":   ["cptownership", "captainownership", "cptown", "captainown"],
-    "cpt_opt":   ["cptoptimal", "captainoptimal", "cptopt", "optimalcpt"],
+    "cpt_own":   ["projectedcptownership", "cptownership", "captainownership",
+                  "cptown", "captainown"],
+    "cpt_opt":   ["cptoptimal%", "cptoptimal", "captainoptimal", "cptopt", "optimalcpt"],
     "dk_id":     ["dkid", "playerid", "id"],
 }
 
@@ -64,17 +67,19 @@ def _match_columns(headers, spec, exclude=None):
     """
     exclude = exclude or {}
     norm = {_norm_header(h): h for h in headers}
-    found, missing = {}, []
+    found, missing, loose = {}, [], []
+    bound = set()          # a header serves ONE field — see below
     for key, candidates in spec.items():
         bad = exclude.get(key, [])
         allowed = {n: h for n, h in norm.items()
-                   if not any(b in n for b in bad)}
-        hit = None
+                   if not any(b in n for b in bad) and h not in bound}
+        hit, exact = None, True
         for c in candidates:
             if c in allowed:
                 hit = allowed[c]
                 break
         if hit is None:
+            exact = False
             for c in candidates:
                 pre = [h for n, h in allowed.items() if n.startswith(c)]
                 if pre:
@@ -87,10 +92,17 @@ def _match_columns(headers, spec, exclude=None):
                     hit = min(sub, key=len)
                     break
         if hit:
+            # Never let two fields read one column. A vendor rename to
+            # "Proj Own" used to bind BOTH projection and ownership to it,
+            # turning every projection into an ownership number with no
+            # warning anywhere.
             found[key] = hit
+            bound.add(hit)
+            if not exact:
+                loose.append((key, hit))
         else:
             missing.append(key)
-    return found, missing
+    return found, missing, loose
 
 
 def _f(v):
@@ -133,13 +145,13 @@ def read_projections(text):
     rows = list(csv.DictReader(io.StringIO((text or "").lstrip("﻿"))))
     if not rows:
         return [], {"error": "empty file"}
-    cols, missing = _match_columns(rows[0].keys(), PROJ_COLUMNS, PROJ_EXCLUDE)
+    cols, missing, loose = _match_columns(rows[0].keys(), PROJ_COLUMNS, PROJ_EXCLUDE)
     for req in ("name", "salary", "proj"):
         if req not in cols:
-            return [], {"error": f"no '{req}' column found",
-                        "headers": list(rows[0].keys())}
+            return [], {"error": f"no '{req}' column found"}
     players, skipped, dupes = [], 0, []
     seen_names = set()
+    bad_proj, unknown_pos = [], []      # cells that quietly became 0 / nobody
     for r in rows:
         raw_name = (r.get(cols["name"]) or "").strip()
         if not raw_name:
@@ -148,7 +160,10 @@ def read_projections(text):
         dk_id = (r.get(cols["dk_id"], "") or "").strip() if "dk_id" in cols else ""
         dk_id = dk_id or embedded_id
         salary = int(_f(r.get(cols["salary"])))
-        proj = _f(r.get(cols["proj"]))
+        raw_proj = (r.get(cols["proj"]) or "").strip()
+        proj = _f(raw_proj)
+        if raw_proj and proj == 0.0 and not _looks_numeric(raw_proj):
+            bad_proj.append(name)       # "-", "N/A", "TBD": not a zero, a hole
         if salary <= 0:
             skipped += 1
             continue
@@ -163,6 +178,8 @@ def read_projections(text):
         seen_names.add(key)
         pos = (r.get(cols.get("pos", ""), "") or "").strip().upper()
         pos = "DST" if pos in {"DEF", "D", "DST", "D/ST"} else pos
+        if proj > 0 and pos not in {"QB", "RB", "WR", "TE", "K", "DST"}:
+            unknown_pos.append(f"{name} ({pos or 'blank'})")
         p = Player(
             name=name, dk_id=dk_id or normalize_name(name), pos=pos,
             team=(r.get(cols.get("team", ""), "") or "").strip().upper(),
@@ -175,9 +192,20 @@ def read_projections(text):
             cpt_optimal=_f(r.get(cols.get("cpt_opt", ""))) if "cpt_opt" in cols else 0.0,
         )
         players.append(p)
-    return players, {"matched": cols, "unmatched": missing,
-                     "rows": len(rows), "players": len(players),
-                     "skipped_no_salary": skipped, "duplicate_rows": dupes}
+    return players, {"matched": cols, "unmatched": missing, "loose": loose,
+                     "players": len(players), "duplicate_rows": dupes,
+                     "bad_proj": bad_proj, "unknown_pos": unknown_pos}
+
+
+def _looks_numeric(s):
+    t = str(s).strip().replace("%", "").replace("$", "").replace(",", "")
+    if t.startswith("(") and t.endswith(")"):
+        t = t[1:-1]
+    try:
+        float(t)
+        return True
+    except ValueError:
+        return False
 
 
 # --- 2. Stokastic lineup pool = the simulated FIELD -----------------------
@@ -186,17 +214,6 @@ def read_projections(text):
 # configured pool size, and player exposure tracks projected ownership at
 # r = 0.996. We read it to learn what the field builds, which is the one thing
 # that cannot be produced cold-start.
-FIELD_COLUMNS = {
-    "win":   ["win%", "win", "winpct", "simwin"],
-    "top10": ["top10%", "top10", "top10pct"],
-    "cash":  ["cash%", "cash", "cashpct"],
-    "dupes": ["dupes", "dupe", "duplicates", "dups"],
-    "roi":   ["simulatedroi", "simroi", "roi"],
-    "ownsum": ["ownsum", "totalownership", "ownershipsum", "sumownership"],
-    "stack": ["stacktype", "stack"],
-}
-
-
 def read_field(text, by_id=None, by_name=None):
     """Their lineup pool. -> (entries, report)
 
@@ -206,9 +223,9 @@ def read_field(text, by_id=None, by_name=None):
     every lineup would resolve to one flex player instead of five, and the whole
     field model would come back empty without erroring.
 
-    Each entry: {"cpt": Player|None, "flex": [Player], "dupes", "win", ...}
-    Slots resolve against the projections pool, so the field and our own builds
-    share Player objects.
+    Each entry: {"cpt": Player|None, "flex": [Player], "dupes", "win"} — the
+    two vendor columns the build actually uses. Slots resolve against the
+    projections pool, so the field and our own builds share Player objects.
     """
     rows = list(csv.reader(io.StringIO((text or "").lstrip("﻿"))))
     if len(rows) < 2:
@@ -229,16 +246,13 @@ def read_field(text, by_id=None, by_name=None):
     elif looks:
         cpt_i, flex_i = None, looks          # classic: no captain
     else:
-        return [], {"error": "no roster columns found (no 'Name (id)' cells)",
-                    "headers": headers}
+        return [], {"error": "no roster columns found (no 'Name (id)' cells)"}
     if cpt_i is not None:
         flex_i = flex_i[:5]
         if len(flex_i) < 5:
-            return [], {"error": "could not find CPT + 5 FLEX columns",
-                        "headers": headers}
+            return [], {"error": "could not find CPT + 5 FLEX columns"}
     elif len(flex_i) < 6:
-        return [], {"error": f"only {len(flex_i)} roster columns found",
-                    "headers": headers}
+        return [], {"error": f"only {len(flex_i)} roster columns found"}
 
     def col(*names):
         for n in names:
@@ -250,13 +264,7 @@ def read_field(text, by_id=None, by_name=None):
                     return i
         return None
 
-    ci = {"dupes": col("dupes"), "win": col("win%", "win"),
-          "top10": col("top10%", "top10"), "cash": col("cash%", "cash"),
-          "roi": col("simulatedroi", "roi"), "ownsum": col("ownsum"),
-          # "Stack Type" ("QB + 2 | 1 OPP") before the bare "Stack" column,
-          # which holds the stacked TEAM. A prefix match on "stack" alone finds
-          # the team and calls it a shape.
-          "stack": col("stacktype", "stack"), "salary": col("salary")}
+    ci = {"dupes": col("dupes"), "win": col("win%", "win")}
 
     by_id = by_id or {}
     by_name = by_name or {}
@@ -280,20 +288,14 @@ def read_field(text, by_id=None, by_name=None):
         if (cpt_i is not None and cpt is None) or any(p is None for p in flex):
             unresolved += 1
             continue
-        si = ci.get("stack")
         entries.append({
             "cpt": cpt, "flex": flex,
             # Their Win% is a PERCENT ("0.065%"); ours is a fraction. Stored
             # raw, the two were compared and displayed as if they were the same
             # unit, making the vendor arm look 100x better than it is.
             "dupes": num(r, "dupes"), "win": num(r, "win") / 100.0,
-            "top10": num(r, "top10"), "cash": num(r, "cash"),
-            "roi": num(r, "roi"), "own_sum": num(r, "ownsum"),
-            "stack": (r[si].strip() if si is not None and si < len(r) else ""),
         })
-    return entries, {"cpt_col": headers[cpt_i] if cpt_i is not None else None,
-                     "flex_cols": [headers[i] for i in flex_i],
-                     "format": "showdown" if cpt_i is not None else "classic",
+    return entries, {"format": "showdown" if cpt_i is not None else "classic",
                      "rows": len(rows) - 1, "parsed": len(entries),
                      "unresolved_rosters": unresolved}
 
@@ -328,14 +330,11 @@ def read_dk_entries(text):
                     break
                 slots.append(c.strip())
         elif (r[0] or "").strip().isdigit() and len(r) > 5:
-            width = len(slots) or 6
-            cells = [c for c in r[4:4 + width] if (c or "").strip()]
             entries.append({
                 "entry_id": r[0].strip(),
                 "contest": (r[1] or "").strip(),
                 "contest_id": (r[2] or "").strip(),
                 "fee": (r[3] or "").strip(),
-                "names": [_name_and_id(c)[0] for c in cells],
             })
         if pi is not None and len(r) > pi + 5 and (r[pi + 2] or "").strip().isdigit():
             name = (r[pi + 1] or "").strip()
@@ -345,14 +344,11 @@ def read_dk_entries(text):
             # once as FLEX — under two different DK ids. Keep both. Keying on
             # name alone would let whichever row came last win, and a flex id in
             # the captain cell is a file DK will not accept.
-            rec = pool.setdefault(key, {"name": name, "dk_id": "", "cpt_dk_id": "",
-                                        "salary": 0, "cpt_salary": 0})
+            rec = pool.setdefault(key, {"dk_id": "", "cpt_dk_id": ""})
             if slot == "CPT":
                 rec["cpt_dk_id"] = (r[pi + 2] or "").strip()
-                rec["cpt_salary"] = int(_f(r[pi + 4]))
             else:
                 rec["dk_id"] = (r[pi + 2] or "").strip()
-                rec["salary"] = int(_f(r[pi + 4]))
     return {"slots": slots or ["CPT", "FLEX", "FLEX", "FLEX", "FLEX", "FLEX"],
             "entries": entries, "pool": pool}
 
@@ -371,8 +367,7 @@ def read_dk_entries(text):
 #            deciding the team split, which is a bet on game script.
 #   SCORED — actual fantasy points, which makes this the results file.
 LINESTAR_COLUMNS = {
-    "name": ["name", "player"], "team": ["team"], "pos": ["position", "pos"],
-    "scored": ["scored"], "proj": ["projected"],
+    "name": ["name", "player"], "team": ["team"], "scored": ["scored"],
     "spread": ["vegas"], "total": ["vegastotals"], "implied": ["vegasimplied"],
     "ml": ["vegasml"],
 }
@@ -388,19 +383,18 @@ def read_linestar(text):
     rows = list(csv.DictReader(io.StringIO((text or "").lstrip("﻿"))))
     if not rows:
         return {}, {"error": "empty file"}
-    cols, missing = _match_columns(rows[0].keys(), LINESTAR_COLUMNS)
+    cols, missing, _loose = _match_columns(rows[0].keys(), LINESTAR_COLUMNS)
     if "name" not in cols:
-        return {}, {"error": "no player name column",
-                    "headers": list(rows[0].keys())}
+        return {}, {"error": "no player name column"}
+    if not any(k in cols for k in ("scored", "implied", "total", "spread")):
+        return {}, {"error": "no Vegas or Scored columns — not a LineStar export"}
     out, teams, scored = {}, {}, 0
     for r in rows:
         name = (r.get(cols["name"]) or "").strip()
         if not name:
             continue
         rec = {k: _f(r.get(cols[k])) for k in
-               ("scored", "proj", "spread", "total", "implied", "ml")
-               if k in cols}
-        rec["name"] = name
+               ("scored", "spread", "total", "implied", "ml") if k in cols}
         rec["team"] = (r.get(cols.get("team", ""), "") or "").strip().upper()
         if rec.get("scored"):
             scored += 1
@@ -411,8 +405,7 @@ def read_linestar(text):
                                   "total": rec.get("total"),
                                   "ml": rec.get("ml")}
     return out, {"players": len(out), "with_scores": scored,
-                 "teams": teams, "unmatched": missing,
-                 "is_results": scored >= 5}
+                 "teams": teams, "is_results": scored >= 5}
 
 
 # --- 5. The sharp's sheet -------------------------------------------------

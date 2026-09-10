@@ -24,7 +24,7 @@ There is also a command-line path for scripted runs:
 
 ```
 python3 nfl/app.py --proj proj.csv --field lineups.csv --dk DKEntries.csv \
-  --n 150 --split 75 --entries-at-build 56000 --field-cap 237812 --out upload.csv
+  --n 150 --split 75 --field-cap 237812 --out upload.csv
 ```
 
 ## The four files
@@ -43,6 +43,12 @@ up to 9.8 points on a single lineup when pulled hours apart.
 Get the DK entries file by entering or reserving your 150 entries on DK first,
 then downloading. It is the only file carrying your Entry IDs and DK's player
 IDs, and without it there is nothing to upload.
+
+Every column is matched by exact name. A column that only matched by prefix or
+substring is reported as a **guess** so you can check it — a renamed vendor
+column once bound both projection and ownership to the same numbers with no
+warning anywhere. Non-numeric projections (“-”, “N/A”) and blank positions are
+listed rather than silently becoming zero.
 
 Each drop slot checks the file before accepting it and says what it found —
 "150 entries, 68 players (showdown)" — or why it was rejected. A file in the
@@ -147,6 +153,57 @@ only 0.3% of the vendor's modelled pool carries a dupe at all against 70% in
 showdown. An average of ~0 expected duplicates on a main slate is right, not
 broken.
 
+### How a lineup is ranked, and why that changed
+
+A lineup's score is how often it clears **the field's 99th-percentile score**
+in the same simulated world, divided by its expected duplicates. It used to be
+"how often it beats the field's single best score", and that was too coarse a
+target on a main slate: most candidates cleared it in zero simulations, the
+rest in a handful, and the order among them was noise — change the random
+seed and only 3–11 of the chosen 75 survived. The field sample is drawn
+**weighted by Dupes**, because a roster the field holds forty times is forty
+opponents, not one.
+
+**Measured.** Build under one simulation seed, judge under a different one
+the ranking never saw, three build seeds, against the vendor's own 75
+re-ranked from their pool. First-place share of our arm as a multiple of
+theirs:
+
+| | judged by the old simulator | judged by the calibrated one |
+|---|---|---|
+| code before these changes | 1.11× | **0.77×** (behind) |
+| ranking fix only | 1.25× | 0.91× |
+| simulator fix only | 1.08× | 1.07× |
+| both, plus stack quotas 45/55 | **1.25×** | **1.33×** |
+
+The full set is also the most stable across seeds (0.062 / 0.062 / 0.061)
+and the only one whose top-1% share clears the vendor arm's. On a second,
+independent judge seed the same comparison came out 1.12× → **1.31×** (old
+judge) and 1.03× → **1.62×** (calibrated judge). Bars at the 95th or 99.9th
+percentile were both worse than the 99th. The judge is still a simulator —
+real graded slates are what settle it — but the improvement holds under both
+versions of it and both seeds, which is the check the review asked for.
+
+### The simulator lands on the vendor's numbers now
+
+Every player's simulated row is calibrated so its mean equals the projection
+and its spread equals the stated Std Dev — exactly, not approximately. Before
+this, defenses ran 6–8% high, workhorse backs 2–6% low, and every position was
+17–31% wider than stated; that excess was all uncorrelated noise, which diluted
+the stack correlation the whole build exists to exploit (QB→WR1 was 0.27; it is
+0.46 calibrated). The Boom-mixture that caused most of the excess is gone.
+
+### Cores and caps
+
+A core's guaranteed share is filled **inside** the selection sweeps, under the
+same exposure caps and overlap rules as everything else, rather than swapped in
+afterwards past every cap. If a floor cannot be met within the rules the build
+says so by name. Cores also get a construction weight, so a core the sharp
+likes and the projections do not can still reach its floor.
+
+The two arms of a split check overlap against each other, so the vendor half
+cannot hand you near-copies of your own half.
+
 ## Settings worth knowing
 
 | Flag | Default | Note |
@@ -156,7 +213,8 @@ broken.
 | `--player-cap` | `0.65` sd / `0.55` classic | Share of entries one player may hold. |
 | `--max-leftover` | `5000` sd / `2000` classic | Junk filter, not a lever. |
 | `--min-proj` | `2.0` sd / `3.0` classic | Floor on a roster spot having any path to a score. |
-| `--max-off-pool` | off | Max non-pool players per lineup. Needs `--pool`. |
+| `--max-off-pool` | `0` with a pool | Max non-pool players per lineup. Needs `--pool`. |
+| `--field-cap` | — | Contest max entries. Assumed to fill; `--fill-pct` marks it down. |
 | `--sims` | `4000` | Monte-Carlo runs. |
 
 Showdown only:
@@ -170,20 +228,18 @@ Main slate only:
 
 | Flag | Default | Note |
 |---|---|---|
-| `--stack-targets` | `3:45,2:40,1:15` | Share of lineups at each stack depth. |
+| `--stack-targets` | `3:45,2:55` | Share of lineups at each stack depth. |
 | `--bring-back` | `0.15` | Share carrying a player from the QB's opponent. |
 | `--qb-cap` | `0.35` | QB exposure *is* stack exposure, so it binds tighter. |
 | `--dst-cap` | `0.30` | Share of entries one defense may hold. |
 
-## Log contest fill — it may be the biggest edge here
+## Put the contest size in
 
-`--entries-at-build` and `--field-cap` are worth filling in every time. Both
-contests are **guaranteed** prize pools, so EV per entry is `pool / entries` and
-break-even fill is **84.1%**. At the fill levels observed in the brief, EV per
-entry ran $1.78 against a $0.50 entry. That swing is far larger than any
-construction decision in this tool and it costs nothing to observe.
-
-The tool prints whether you are in overlay and logs it.
+`--field-cap` (the page's "Contest size") is the contest's max entries, and it
+is assumed to fill because these do. Stokastic models only 50,000 opponents on
+showdown and 10,000 on a main slate; without the real size, every duplication
+figure is measured against a field several times too small. Mark it down with
+`--fill-pct` only when entering days early into a contest that may stay short.
 
 ## The log
 

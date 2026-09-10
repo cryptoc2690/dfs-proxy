@@ -26,7 +26,7 @@ from __future__ import annotations
 import math
 import random
 
-from dk import CAPTAIN_MULT, ROSTER_SIZE, SALARY_CAP, Lineup, Player
+from dk import CAPTAIN_MULT, ROSTER_SIZE, SALARY_CAP, Lineup
 
 # --- correlation structure ----------------------------------------------
 # Relative standard deviations of the shared factors. Every player's outcome
@@ -53,21 +53,29 @@ K_TEAM = 0.45       # kickers ride their offense weakly and partly anti-correlat
 SUB_SD_RB = 0.65    # carries substitute hard — the strongest negative pair
 SUB_SD_REC = 0.30   # targets compete, but a good passing day feeds everyone
 #
-# What these settle at, measured on a synthetic two-team game (30k sims):
+# What these settle at, measured on the real main-slate file (3k sims, every
+# team's top player at each position), AFTER each row is calibrated to the
+# stated mean and sigma — the calibration is what makes these hold, because
+# before it the rows ran 17-31% wider than stated and that excess was all
+# uncorrelated noise, which diluted every pair:
 #
-#   QB -> own WR/TE      +0.30    DST -> opposing QB   -0.23
-#   QB -> own RB         +0.16    DST -> own QB        +0.02
-#   own RB -> own RB     -0.16    different game        0.00
-#   own WR -> own WR     +0.10
+#   QB -> own WR1        +0.46    DST -> opposing QB   -0.23
+#   QB -> own TE1        +0.40    own RB1 -> own RB2   -0.24
+#   QB -> own RB1        +0.26    different game        0.00
+#   own WR1 -> own WR2   +0.22
 #
-# The receiver pair staying slightly positive is deliberate rather than a miss:
-# a good passing day genuinely lifts every target-earner, and the competition
-# for targets only partly offsets it. The backfield is the pair that has to come
-# out clearly negative, because two backs really are splitting one budget.
-# Every number above is JUDGEMENT, not measurement — there is no NFL results
-# history yet. They are the first thing to re-fit once there is.
+# The receiver pair staying positive is deliberate: a good passing day lifts
+# every target-earner, and the competition for targets only partly offsets it.
+# The backfield is the pair that has to come out clearly negative, because two
+# backs really are splitting one budget. The factor SIZES are still judgement
+# — there is no NFL results history yet — and are the first thing to re-fit.
 
-BOOM_VALUE_MULT = 5.0    # Stokastic's Boom is P(score > 5x salary/1000)
+# Bodies below this projection do not join a team's backfield or receiving
+# group. With every proj>0 player in the group, a backfield of two real backs
+# and two special-teamers is a four-way split, the zero-sum shock is spread
+# four ways, and the RB-RB anti-correlation the group exists to create
+# collapses from about -0.16 to -0.07.
+SUB_MIN_PROJ = 2.0
 
 
 def _gamma(k, rng):
@@ -111,7 +119,7 @@ def _sub_group(p):
     return None
 
 
-def _player_factors(p, teams):
+def _player_factors(p):
     """How much of each shared factor this player rides. Returns
     (game, own_team, own_pass, own_rush, opp_team, opp_pass) exposures."""
     if p.is_dst:
@@ -132,12 +140,17 @@ def simulate(players, sims=4000, seed=0):
     """-> {dk_id: [score per sim]}
 
     Each player's variance is split between the shared factors above and an
-    idiosyncratic remainder, so the total still lands on Stokastic's stated
-    standard deviation instead of inflating it. Where Boom% is present the
-    idiosyncratic part becomes a two-piece mixture calibrated to reproduce it —
-    that is the one distribution column with content a normal cannot express
-    (Josh Allen and Justin Herbert carry near-identical projections and sigma
-    but Boom of 5.3 against 13.2).
+    idiosyncratic remainder, and every row is then calibrated so its mean is
+    the projection and its spread the stated standard deviation — exactly.
+
+    Boom% is deliberately NOT used to shape the distribution. A two-piece
+    mixture built on it once lived here. Backing the threshold out of the
+    vendor's own Proj/SD/Boom gives ~3.9x salary for RBs, 4.1x WRs, 5.2x QBs —
+    not a flat 5x — and built on 5x the mixture doubled star players' sigma,
+    halved the QB-to-receiver correlation the stacking exists to exploit, and
+    still missed its own Boom target. Measured out of sample it made the
+    lineups worse. Boom is still read and logged, so a results review can
+    test whether it predicts anything.
     """
     rng = random.Random(seed)
     teams = sorted({p.team for p in players if p.team})
@@ -160,11 +173,11 @@ def simulate(players, sims=4000, seed=0):
     # Zero-sum share shocks inside each team's backfield and receiving corps.
     # Drawing one value per member and subtracting the group mean makes it pure
     # redistribution: the group's total is untouched, but who gets it moves.
-    sub = {}
+    sub, sub_n = {}, {}
     groups = {}
     for p in players:
         g = _sub_group(p)
-        if g and p.proj > 0 and p.team:
+        if g and p.proj >= SUB_MIN_PROJ and p.team:
             groups.setdefault((p.team, g), []).append(p)
     for (tm, g), members in groups.items():
         if len(members) < 2:
@@ -177,25 +190,35 @@ def simulate(players, sims=4000, seed=0):
             for m, z in zip(members, row):
                 sub.setdefault(m.dk_id, [1.0] * sims)[s] = max(
                     0.15, 1 + width * (z - mean))
+        for m in members:
+            sub_n[m.dk_id] = len(members)
 
     out = {}
     for p in players:
         if p.proj <= 0:
             out[p.dk_id] = [0.0] * sims
             continue
-        gx, tx, px, rx, ox, opx = _player_factors(p, teams)
+        gx, tx, px, rx, ox, opx = _player_factors(p)
         ti = tidx.get(p.team, 0)
-        oi = tidx.get(p.opponent, 1 - ti if len(teams) > 1 else 0)
+        # An opponent the file does not name gets NO opponent factor, rather
+        # than the old 1 - ti fallback, which on a 24-team slate pointed at
+        # whichever team happened to sit next to this one in the index.
+        oi = tidx.get(p.opponent)
         gi = gidx.get(p.game, 0)
         game = game_f[gi]
 
-        # Systematic relative variance this player is exposed to.
+        # Systematic relative variance this player is exposed to. A zero-sum
+        # draw minus its group mean has variance width^2 * (1 - 1/n), not
+        # width^2 — charging the full width over-counted it and left too
+        # little for the player's own noise.
         gsub = _sub_group(p)
-        sub_w = (SUB_SD_RB if gsub == "RB" else SUB_SD_REC) if p.dk_id in sub else 0.0
+        n_sub = sub_n.get(p.dk_id, 0)
+        sub_w = (SUB_SD_RB if gsub == "RB" else SUB_SD_REC) if n_sub else 0.0
+        sub_var = sub_w ** 2 * (1.0 - 1.0 / n_sub) if n_sub else 0.0
         sys_var = ((gx * GAME_SD) ** 2 + (tx * TEAM_SD) ** 2
                    + (px * PASS_SD) ** 2 + (rx * RUSH_SD) ** 2
                    + (ox * TEAM_SD) ** 2 + (opx * PASS_SD) ** 2
-                   + sub_w ** 2)
+                   + sub_var)
         sys_sd = math.sqrt(sys_var) * p.proj
         total_sd = p.sd if p.sd > 0 else 0.9 * p.proj
         # Whatever variance the shared factors do not account for is the
@@ -207,40 +230,49 @@ def simulate(players, sims=4000, seed=0):
             sys_sd = total_sd * 0.95
         idio_sd = math.sqrt(max(total_sd ** 2 - sys_sd ** 2, (0.05 * p.proj) ** 2))
 
-        # Boom-calibrated two-piece idiosyncratic mean.
-        boom_p = min(max(p.boom / 100.0, 0.0), 0.60)
-        thresh = BOOM_VALUE_MULT * p.salary / 1000.0
-        hi_mean = lo_mean = p.proj
-        use_mix = False
-        if boom_p > 0.01 and thresh > p.proj:
-            hi_mean = thresh * 1.25
-            lo_mean = (p.proj - boom_p * hi_mean) / (1 - boom_p)
-            use_mix = lo_mean > 0.15 * p.proj
         sub_row = sub.get(p.dk_id)
         row = []
         for s in range(sims):
             mult = (game[s] ** gx)
-            if tx:
-                mult *= team_f[ti][s] ** (tx * damp)
+            mult *= team_f[ti][s] ** (tx * damp)
             if px:
                 mult *= pass_f[ti][s] ** (px * damp)
             if rx:
                 mult *= rush_f[ti][s] ** (rx * damp)
-            if ox and len(teams) > 1:
+            if ox and oi is not None:
                 mult *= team_f[oi][s] ** (ox * damp)
-            if opx and len(teams) > 1:
+            if opx and oi is not None:
                 mult *= pass_f[oi][s] ** (opx * damp)
             if sub_row is not None:
                 mult *= sub_row[s] ** damp
-            if use_mix and rng.random() < boom_p:
-                base = _gamma_draw(hi_mean, idio_sd, rng)
-            elif use_mix:
-                base = _gamma_draw(lo_mean, idio_sd, rng)
-            else:
-                base = _gamma_draw(p.proj, idio_sd, rng)
-            row.append(max(0.0, base * mult))
-        out[p.dk_id] = row
+            row.append(max(0.0, _gamma_draw(p.proj, idio_sd, rng) * mult))
+        # Land the row on the stated mean and sigma. Multiplying lognormal-ish
+        # factors does not preserve the mean (E[f^a] != 1 for a != 1), which
+        # biased every defense high by 6-8% and damped backs low by 4-6%; and
+        # the shared-plus-own split only approximates the stated sigma — every
+        # position ran 14-31% wide, all of it uncorrelated noise diluting the
+        # pairs. Rescale so both hold exactly; an affine map leaves the
+        # correlations alone.
+        out[p.dk_id] = _calibrate(row, p.proj, total_sd)
     return out
+
+
+def _calibrate(row, mean_t, sd_t):
+    n = len(row)
+    m = sum(row) / n
+    if m <= 0:
+        return row
+    k = mean_t / m
+    row = [x * k for x in row]
+    sd = math.sqrt(sum((x - mean_t) ** 2 for x in row) / n)
+    if sd > 1e-9 and sd_t > 0:
+        f = sd_t / sd
+        row = [max(0.0, mean_t + (x - mean_t) * f) for x in row]
+        m2 = sum(row) / n
+        if m2 > 0:
+            k2 = mean_t / m2
+            row = [x * k2 for x in row]
+    return row
 
 
 def score_lineup(lu, mat, sims):
@@ -313,7 +345,7 @@ def dupe_index(field_entries):
     return idx
 
 
-def estimated_dupes(lu, idx, own_fallback=True, scale=1.0, field_n=0.0):
+def estimated_dupes(lu, idx, scale=1.0, field_n=0.0):
     """How many OPPONENTS we expect to be holding this exact roster.
 
     The index counts field entries holding the roster, and ours is an extra
@@ -328,8 +360,6 @@ def estimated_dupes(lu, idx, own_fallback=True, scale=1.0, field_n=0.0):
     hit = idx.get(lu.key())
     if hit is not None:
         return max(0.0, hit * scale)
-    if not own_fallback:
-        return 0.0
     # Not in the vendor pool at all -> the field is unlikely to build it. Use a
     # small ownership-driven estimate rather than claiming zero, against the
     # size of the field actually modelled rather than a hard-coded number.
@@ -344,9 +374,10 @@ def estimated_dupes(lu, idx, own_fallback=True, scale=1.0, field_n=0.0):
 SPLIT_TARGETS = {"5-1": 0.45, "4-2": 0.40, "3-3": 0.15}
 # Unspent salary. The brief found leftover is a null on showdown win rate
 # (beta +0.001) but NOT on duplication (r = -0.30) — cheaper lineups are less
-# duplicated, which is worth something when 70% of showdown lineups carry a
-# dupe. So this is a junk filter, not a lever: it exists to stop the builder
-# handing back a lineup with five figures unspent, and nothing more.
+# duplicated, which matters when 70% of showdown lineups carry a dupe. Measured
+# on the real slate this IS a lever, not a junk filter: removing it cost 0.8
+# projected points per lineup, and tightening it to 500 raised expected
+# duplicates by 7.9. It stays where it is.
 MAX_LEFTOVER = 5000
 
 # A roster spot projected under this is dead weight, not a punt. The real slate
@@ -357,9 +388,11 @@ MAX_LEFTOVER = 5000
 # has any path to a useful score, not a grade on how good the player is.
 MIN_PROJ = 2.0
 OWN_LEAN = 0.35          # POSITIVE = lean toward the field. See below.
-CAPTAIN_CAP = 0.28       # share of entries any one captain may hold
-MIN_CAPTAINS = 10
-PLAYER_CAP = 0.65        # showdown must run high: 6 of ~68 players fill a lineup
+CAPTAIN_CAP = 0.28       # share of entries any one captain may hold. A rail:
+                         # on the slates built so far the top captain sat at
+                         # 12-13 of 75, so it has never bound.
+PLAYER_CAP = 0.65        # showdown must run high: 6 of ~68 players fill a lineup.
+                         # This one DOES bind (49 of 75 on the real slate).
 MAX_OVERLAP = 4          # of 6, before two entries are near-duplicates
 
 
@@ -377,8 +410,8 @@ def _weighted_pick(cands, weights, rng):
 
 # How many of YOUR OWN players a defense may face before the roster is refused.
 # This was 3, and at 3 it does something nobody intended: a six-player showdown
-# roster split 3-3 and holding a defense ALWAYS has exactly three opposing
-# players, so the rule banned every 3-3 construction that carried a defense.
+# roster split 3-3 holding one defense ALWAYS has exactly three opposing
+# non-DST players, so the rule banned every 3-3 construction with a defense.
 # Measured against the real NE @ SEA field, it ruled out 733 of the 788 such
 # lineups the field built, and seven of the top eight scoring lineups on the
 # slate — a whole shape removed by a side effect.
@@ -396,13 +429,13 @@ def _weighted_pick(cands, weights, rng):
 DST_MAX_AGAINST = 4
 
 
-def _dst_ok(players, limit=None):
+def _dst_ok(players):
     """Refuse a defense facing too many of your own players.
 
     Points allowed IS the opponent's scoring, so the two partly cancel. This is
     the floor under that idea; the pricing is the simulator's job.
     """
-    cap = DST_MAX_AGAINST if limit is None else limit
+    cap = DST_MAX_AGAINST
     for d in players:
         if not d.is_dst:
             continue
@@ -511,7 +544,7 @@ def build_candidates(players, n, *, teams, split_targets=None, rng=None,
                     if salary + p.salary + floor_rest * (slots_left - 1) > SALARY_CAP:
                         continue
                 elig.append(p)
-                spend = min(p.salary / per_slot, 1.6) if per_slot > 0 else 1.0
+                spend = min(p.salary / per_slot, 1.6)
                 w.append((max(p.proj, 0.1) ** 3) * (0.35 + spend))
             if not elig:
                 ok = False
@@ -592,15 +625,13 @@ def rank(lineups, mat, bar, sims, dupes_idx, own_lean=OWN_LEAN, dupe_scale=1.0,
     span = (hi - lo) or 1.0
     for lu in lineups:
         sc = score_lineup(lu, mat, sims)
-        sc_sorted = sorted(sc)
-        w = win_rate(sc, bar, sims) if bar else 0.0
+        w = win_rate(sc, bar, sims)
         d = estimated_dupes(lu, dupes_idx, scale=dupe_scale, field_n=field_n)
         on = (lu.own_sum - lo) / span
         lu.metrics.update({
             "win": round(w, 5),
             "dupes": round(d, 2),
             "mean": round(sum(sc) / sims, 2),
-            "p90": round(sc_sorted[int(sims * 0.90)], 2),
             "ownLean": round(1 + own_lean * (2 * on - 1), 3),
         })
         lu.metrics["score"] = (w / (1.0 + d)) * lu.metrics["ownLean"]
@@ -608,48 +639,9 @@ def rank(lineups, mat, bar, sims, dupes_idx, own_lean=OWN_LEAN, dupe_scale=1.0,
     return lineups
 
 
-def _enforce_core_floors(chosen, pool, floors):
-    """Top up under-exposed cores to their floor.
-
-    Carried over from the WNBA engine, where the lesson was learned the hard
-    way: a filter upstream of this once cut every lineup holding a low-owned
-    core, and the core landed in one entry out of ten. A core is the user's own
-    conviction, so it outranks the tool's preferences — but this is best-effort
-    and stops rather than looping when no legal swap exists.
-    """
-    chosen = list(chosen)
-    picked = {id(c) for c in chosen}
-
-    def held(cid):
-        return sum(1 for lu in chosen if cid in lu.ids())
-
-    for cid, need in floors.items():
-        while held(cid) < need:
-            cand = next((c for c in pool
-                         if cid in c.ids() and id(c) not in picked), None)
-            if cand is None:
-                break
-            drop = None
-            for lu in reversed(chosen):          # weakest first
-                if cid in lu.ids():
-                    continue
-                safe = all(oid not in lu.ids() or held(oid) - 1 >= oneed
-                           for oid, oneed in floors.items() if oid != cid)
-                if safe:
-                    drop = lu
-                    break
-            if drop is None:
-                break
-            chosen.remove(drop)
-            picked.discard(id(drop))
-            chosen.append(cand)
-            picked.add(id(cand))
-    return chosen
-
-
-def select(lineups, n, *, captain_cap=CAPTAIN_CAP, min_captains=MIN_CAPTAINS,
+def select(lineups, n, *, captain_cap=CAPTAIN_CAP,
            player_cap=PLAYER_CAP, max_overlap=MAX_OVERLAP,
-           split_targets=None, core_floors=None, exclude=None):
+           split_targets=None, core_floors=None, prior=None):
     """Pick the final N under coverage rules rather than diversification ones.
 
     150 showdown entries are worth roughly two independent bets — mean pairwise
@@ -677,7 +669,14 @@ def select(lineups, n, *, captain_cap=CAPTAIN_CAP, min_captains=MIN_CAPTAINS,
     just split the tied places between them — so against a first-place objective
     it is an entry spent on an outcome you already own.
     """
-    seen_keys = set(exclude or ())
+    # `prior` is what an earlier arm already took. Its rosters are excluded,
+    # its exposure counts are inherited so the caps hold across ALL entries
+    # rather than per arm, and its rosters are checked for overlap — at the
+    # twin threshold (five of six): on a 68-player board two 5-1 lineups on
+    # the same side share four players almost by definition, and holding the
+    # other arm to the within-arm cap pushed it off that shape entirely.
+    prior = list(prior or [])
+    seen_keys = {lu.key() for lu in prior}
     unique = []
     for lu in lineups:
         k = lu.key()
@@ -686,13 +685,20 @@ def select(lineups, n, *, captain_cap=CAPTAIN_CAP, min_captains=MIN_CAPTAINS,
         seen_keys.add(k)
         unique.append(lu)
     lineups = unique
-    cap_ct = max(1, round(captain_cap * n))
-    ply_ct = max(1, round(player_cap * n))
+    total = n + len(prior)
+    cap_ct = max(1, round(captain_cap * total))
+    ply_ct = max(1, round(player_cap * total))
     quota = {}
     if split_targets:
         quota = {k: int(round(v * n)) for k, v in split_targets.items()}
     chosen, sets = [], []
+    cross = max_overlap + 1
     cpt_ct, ply_used, split_ct = {}, {}, {}
+    prior_sets = [set(lu.ids()) for lu in prior]
+    for lu in prior:
+        cpt_ct[lu.cpt.dk_id] = cpt_ct.get(lu.cpt.dk_id, 0) + 1
+        for p in lu.players:
+            ply_used[p.dk_id] = ply_used.get(p.dk_id, 0) + 1
 
     def take(lu):
         chosen.append(lu)
@@ -708,28 +714,41 @@ def select(lineups, n, *, captain_cap=CAPTAIN_CAP, min_captains=MIN_CAPTAINS,
         if any(ply_used.get(i, 0) >= ply_ct for i in lu.ids()):
             return False
         s = set(lu.ids())
+        if any(len(s & t) > cross for t in prior_sets):
+            return False
         return not any(len(s & t) > overlap for t in sets)
 
     taken = set()
 
-    def pass_over(overlap, want_split=None, limit=None):
+    def pass_over(overlap, want_split=None, limit=None, need=None, floor=None):
         for lu in lineups:
             if len(chosen) >= n or (limit is not None and split_ct.get(want_split, 0) >= limit):
+                return
+            if floor is not None and ply_used.get(need, 0) >= floor:
                 return
             if id(lu) in taken:
                 continue
             if want_split and lu.split_label() != want_split:
                 continue
+            if need is not None and need not in lu.ids():
+                continue
             if ok(lu, overlap):
                 take(lu)
                 taken.add(id(lu))
 
-    # Quotas first, best-first inside each shape, then fill on merit.
+    # Cores first, under the same caps and overlap as everything else — they
+    # used to be swapped in afterwards past every cap. Then quotas, best-first
+    # inside each shape, then fill on merit.
+    for cid, floor in (core_floors or {}).items():
+        pass_over(max_overlap, need=cid, floor=floor)
     for shape, want in sorted(quota.items(), key=lambda kv: -kv[1]):
         pass_over(max_overlap, want_split=shape, limit=want)
     pass_over(max_overlap)
     for relax in (max_overlap + 1, ROSTER_SIZE):      # loosen rather than under-fill
         pass_over(relax)
+    for cid, floor in (core_floors or {}).items():    # still short: overlap relaxed
+        if ply_used.get(cid, 0) < floor:
+            pass_over(ROSTER_SIZE, need=cid, floor=floor)
 
     # Still short. Relax the player cap but HOLD the captain cap: the captain is
     # the highest-dispersion decision in the format, so it is the last thing to
@@ -749,36 +768,12 @@ def select(lineups, n, *, captain_cap=CAPTAIN_CAP, min_captains=MIN_CAPTAINS,
             take(lu)
             taken.add(id(lu))
 
-    # Captain coverage floor: swap the weakest entries onto unused captains
-    # until enough distinct captains are represented.
-    if min_captains and len(cpt_ct) < min_captains:
-        have = set(cpt_ct)
-        for lu in lineups:
-            if len(have) >= min_captains:
-                break
-            if lu.cpt.dk_id in have or id(lu) in taken:
-                continue
-            victim = next((c for c in reversed(chosen)
-                           if cpt_ct.get(c.cpt.dk_id, 0) > 1), None)
-            if victim is None:
-                break
-            chosen.remove(victim)
-            cpt_ct[victim.cpt.dk_id] -= 1
-            chosen.append(lu)
-            cpt_ct[lu.cpt.dk_id] = 1
-            have.add(lu.cpt.dk_id)
-    chosen = chosen[:n]
-    # Cores last, so they override every preference above them rather than being
-    # filtered out before they are ever considered.
-    if core_floors:
-        chosen = _enforce_core_floors(chosen, lineups, core_floors)[:n]
-    return chosen
+    return chosen[:n]
 
 
-def vendor_arm(field_entries, n, *, players_by_id, captain_cap=CAPTAIN_CAP,
-               min_captains=MIN_CAPTAINS, player_cap=PLAYER_CAP,
-               max_overlap=MAX_OVERLAP, dupe_scale=1.0, exclude=None,
-               core_floors=None):
+def vendor_arm(field_entries, n, *, captain_cap=CAPTAIN_CAP,
+               player_cap=PLAYER_CAP, max_overlap=MAX_OVERLAP, dupe_scale=1.0,
+               core_floors=None, prior=None):
     """Their pool, re-ranked on Win% / (1 + Dupes) and put through the same caps.
 
     This is the control arm for the A/B comparison, and on its own it is a
@@ -793,12 +788,12 @@ def vendor_arm(field_entries, n, *, players_by_id, captain_cap=CAPTAIN_CAP,
         if cpt is None or len(flex) != ROSTER_SIZE - 1:
             continue
         lu = Lineup(cpt, flex, source="vendor")
-        d = (e.get("dupes") or 0.0) * dupe_scale
+        # Every field copy is an opponent once we enter it — the same count
+        # our own arm is charged (see estimated_dupes), not one fewer.
+        d = (1.0 + (e.get("dupes") or 0.0)) * dupe_scale
         lu.metrics = {"win": e.get("win", 0.0), "dupes": d,
-                      "roi": e.get("roi", 0.0), "cash": e.get("cash", 0.0),
                       "score": (e.get("win", 0.0)) / (1.0 + d)}
         cands.append(lu)
     cands.sort(key=lambda l: -l.metrics["score"])
-    return select(cands, n, captain_cap=captain_cap, min_captains=min_captains,
-                  player_cap=player_cap, max_overlap=max_overlap,
-                  exclude=exclude, core_floors=core_floors)
+    return select(cands, n, captain_cap=captain_cap, player_cap=player_cap,
+                  max_overlap=max_overlap, core_floors=core_floors, prior=prior)
