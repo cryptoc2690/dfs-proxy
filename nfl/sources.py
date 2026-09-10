@@ -357,7 +357,65 @@ def read_dk_entries(text):
             "entries": entries, "pool": pool}
 
 
-# --- 4. The sharp's sheet -------------------------------------------------
+# --- 4. LineStar (optional) ----------------------------------------------
+# Tested against actual results on NE @ SEA: LineStar's projections correlate
+# with the truth at r = 0.618 against Stokastic's 0.630, identical MAE and RMSE,
+# and a head-to-head of 13-17 on absolute error. Its Ceiling, Safety, Consensus
+# and PPG columns all correlate NEGATIVELY with what Stokastic's projection got
+# wrong, which is regression to the mean rather than new information. So none of
+# it is read into the build.
+#
+# Two things here ARE unique, and neither is a projection:
+#   VEGAS  — the spread, total and per-team implied points. Stokastic's showdown
+#            export carries none of it, and it is the natural candidate for
+#            deciding the team split, which is a bet on game script.
+#   SCORED — actual fantasy points, which makes this the results file.
+LINESTAR_COLUMNS = {
+    "name": ["name", "player"], "team": ["team"], "pos": ["position", "pos"],
+    "scored": ["scored"], "proj": ["projected"],
+    "spread": ["vegas"], "total": ["vegastotals"], "implied": ["vegasimplied"],
+    "ml": ["vegasml"],
+}
+
+
+def read_linestar(text):
+    """-> (by normalized name: {...}, report). Vegas context and actual scores.
+
+    Deliberately does NOT return projections for the build to use. That was
+    measured and it adds nothing; reading it in would be a lever with no
+    evidence behind it.
+    """
+    rows = list(csv.DictReader(io.StringIO((text or "").lstrip("﻿"))))
+    if not rows:
+        return {}, {"error": "empty file"}
+    cols, missing = _match_columns(rows[0].keys(), LINESTAR_COLUMNS)
+    if "name" not in cols:
+        return {}, {"error": "no player name column",
+                    "headers": list(rows[0].keys())}
+    out, teams, scored = {}, {}, 0
+    for r in rows:
+        name = (r.get(cols["name"]) or "").strip()
+        if not name:
+            continue
+        rec = {k: _f(r.get(cols[k])) for k in
+               ("scored", "proj", "spread", "total", "implied", "ml")
+               if k in cols}
+        rec["name"] = name
+        rec["team"] = (r.get(cols.get("team", ""), "") or "").strip().upper()
+        if rec.get("scored"):
+            scored += 1
+        out[normalize_name(name)] = rec
+        if rec["team"] and rec["team"] not in teams and rec.get("implied"):
+            teams[rec["team"]] = {"implied": rec.get("implied"),
+                                  "spread": rec.get("spread"),
+                                  "total": rec.get("total"),
+                                  "ml": rec.get("ml")}
+    return out, {"players": len(out), "with_scores": scored,
+                 "teams": teams, "unmatched": missing,
+                 "is_results": scored >= 5}
+
+
+# --- 5. The sharp's sheet -------------------------------------------------
 def read_sharp(text):
     """One name per line, first tab/comma field. -> set of normalized names.
 

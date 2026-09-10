@@ -199,6 +199,49 @@ history, so every setting in this tool is a hypothesis. The log is what lets a
 later review join these entries to real standings and find out which ones were
 right.
 
+## Grading a slate — the only thing that settles any of this
+
+```
+python3 nfl/app.py --grade LineStar_post_game.csv
+```
+
+Every construction belief in this tool — the 5-1 split, QB+3, the bring-back
+share, the ownership lean — was measured inside **the vendor's own simulation**,
+which is a model of the field and not the field. `--grade` scores your logged
+entries against real results and breaks them down by arm and by shape.
+
+The LineStar export doubles as the results file: its `Scored` column is actual
+fantasy points, and nothing in the Stokastic exports carries them after the
+fact. Pull it after the games, run `--grade`, and the numbers accumulate.
+
+**Do not act on one slate.** Six to ten is a signal.
+
+## LineStar — tested, and it is not a projection source
+
+Measured against actual results on NE @ SEA:
+
+| | LineStar | Stokastic |
+|---|---|---|
+| correlation with actual | 0.618 | 0.630 |
+| mean absolute error | 3.95 | 3.99 |
+| RMSE | 5.48 | 5.48 |
+| head-to-head, closer on | 13 of 30 | 17 of 30 |
+
+Identical. And every LineStar-only column — Ceiling, Safety, Consensus, PPG,
+Consistency — correlates **negatively** with what Stokastic's projection got
+wrong, which is regression to the mean rather than information. Pre-game the
+two projection sets agree at r = 0.974 with a median gap of 0.8 points and no
+player differing by 5.
+
+So none of it is read into the build. Two things in the file are still worth
+having, and neither is a projection:
+
+- **Vegas** — spread, total, per-team implied points. Stokastic's showdown
+  export carries none of it. Pass `--linestar` and it is logged against the
+  build without touching it. The team split is a bet on game script, so this is
+  the natural thing to condition it on — once there is enough of it to test.
+- **Scored** — actual points, which is what `--grade` runs on.
+
 ## Known limits
 
 - The correlation strengths in `engine.py` are judgement, not measurement. They

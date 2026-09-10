@@ -46,7 +46,8 @@ import classic as C
 import engine as E
 from dk import SALARY_CAP, normalize_name
 from gui import INDEX_HTML
-from sources import read_dk_entries, read_field, read_projections, read_sharp
+from sources import (read_dk_entries, read_field, read_linestar,
+                     read_projections, read_sharp)
 
 LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "logs", "nfl_builds.jsonl")
@@ -380,7 +381,8 @@ def _lineup_payload(lu, fmt="showdown"):
     }
 
 
-def run_build(proj_text, field_text="", dk_text="", options=None):
+def run_build(proj_text, field_text="", dk_text="", options=None,
+              linestar_text=""):
     """The whole build. Returns plain dicts, so the CLI and the page share it."""
     o = options or {}
     notes = []
@@ -528,6 +530,31 @@ def run_build(proj_text, field_text="", dk_text="", options=None):
     # size unless told otherwise. Leaving it blank used to mean duplication was
     # measured against the ~50,000 opponents the vendor models instead of the
     # 237,812 that actually enter — understating it by nearly 5x.
+    # LineStar, if given, is read for Vegas ONLY. Its projections were tested
+    # against actual results and land on r = 0.618 where Stokastic is 0.630 —
+    # the same number twice — and every one of its extra columns correlates
+    # NEGATIVELY with what Stokastic's projection got wrong, which is regression
+    # to the mean, not information. The Vegas lines are the one thing here that
+    # Stokastic's showdown export does not carry, and the team split is a bet on
+    # game script, so they are logged against every build to be tested later.
+    vegas = None
+    if (linestar_text or "").strip():
+        ls, lrep = read_linestar(linestar_text)
+        if lrep.get("error"):
+            say("warn", f"LineStar file: {lrep['error']}")
+        else:
+            vegas = lrep.get("teams") or None
+            if vegas:
+                say("info", "Vegas, logged for later testing: "
+                            + "; ".join(f"{t} {v['implied']:.1f} implied"
+                                        for t, v in list(vegas.items())[:4])
+                            + (f" | total {list(vegas.values())[0]['total']:.1f}"
+                               if list(vegas.values())[0].get("total") else "")
+                            + ". Not used in the build.")
+            if lrep.get("is_results"):
+                say("warn", "That LineStar file already has scores in it — it is "
+                            "a post-game export. Use it with --grade, not here.")
+
     field_cap = _i(o.get("fieldCap"), 0)
     fill_pct = _f(o.get("fillPct"), 100.0)
     fill_pct = min(max(fill_pct, 1.0), 100.0)
@@ -881,7 +908,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None):
                           "fill_pct": fill_pct,
                           "expect_entries": expect or None,
                           "vendor_field_modelled": modelled,
-                          "dupe_scale": round(dupe_scale, 3)},
+                          "dupe_scale": round(dupe_scale, 3),
+                          "vegas": vegas},
     }
 
     dk_csv = None
@@ -959,6 +987,84 @@ def run_build(proj_text, field_text="", dk_text="", options=None):
         "lineups": [_lineup_payload(lu, fmt) for lu in chosen],
         "dkCsv": dk_csv,
         "logPath": LOG_PATH,
+    }
+
+
+def grade(results_text, slate=None):
+    """Score already-logged entries against actual results. -> report dict
+
+    This is the only way any of the construction beliefs in this tool ever get
+    settled. Every one of them — the 5-1 team split, the QB+3 stack, the
+    bring-back share, the ownership lean — was measured inside the vendor's own
+    SIMULATION, which is a model of the field and not the field. One real slate
+    already disagreed with the biggest of them by a factor of four in the wrong
+    direction, and one slate is not evidence either. Six to ten of these is.
+
+    The LineStar export doubles as the results file: its Scored column is actual
+    fantasy points, which nothing in the Stokastic exports carries after the
+    fact.
+    """
+    res, rep = read_linestar(results_text or "")
+    if rep.get("error"):
+        return {"error": f"Results file: {rep['error']}"}
+    if not rep.get("is_results"):
+        return {"error": "That LineStar file has no scores in it yet — it is a "
+                         "pre-game export. Download it again after the games."}
+    scored = {k: v.get("scored", 0.0) for k, v in res.items()}
+    try:
+        with open(LOG_PATH, encoding="utf-8") as fh:
+            rows = [json.loads(l) for l in fh if l.strip()]
+    except OSError:
+        return {"error": "No build log yet — nothing to grade."}
+    if slate:
+        rows = [r for r in rows if r.get("slate") == slate]
+    else:                                    # the most recent build in the log
+        stamps = sorted({r["ts"] for r in rows if r.get("ts")})
+        if not stamps:
+            return {"error": "No builds in the log."}
+        rows = [r for r in rows if r.get("ts") == stamps[-1]]
+    if not rows:
+        return {"error": "No logged entries match that slate."}
+    fmt = rows[0].get("format", "showdown")
+    graded, unknown = [], set()
+    for r in rows:
+        ps = r.get("players") or []
+        total, ok = 0.0, True
+        for i, p in enumerate(ps):
+            key = normalize_name(p["name"])
+            if key not in scored:
+                unknown.add(p["name"])
+                ok = False
+                break
+            mult = 1.5 if (fmt == "showdown" and i == 0) else 1.0
+            total += scored[key] * mult
+        if ok:
+            graded.append({"score": round(total, 2), "source": r.get("source"),
+                           "shape": r.get("split") or r.get("shape"),
+                           "entry_id": r.get("entry_id"),
+                           "head": r.get("captain") or r.get("qb"),
+                           "proj": r.get("proj"), "own": r.get("own_sum")})
+    if not graded:
+        return {"error": "Could not score any logged entry — the results file "
+                         "does not cover these players."}
+    graded.sort(key=lambda g: -g["score"])
+    def stat(rowset):
+        sc = sorted((g["score"] for g in rowset), reverse=True)
+        return {"n": len(sc), "best": sc[0], "median": sc[len(sc) // 2],
+                "mean": round(sum(sc) / len(sc), 2)}
+    arms, shapes = {}, {}
+    for g in graded:
+        arms.setdefault(g["source"] or "?", []).append(g)
+        shapes.setdefault(g["shape"] or "?", []).append(g)
+    return {
+        "slate": rows[0].get("slate"), "format": fmt,
+        "entries": len(graded),
+        "unscored": sorted(unknown)[:8],
+        "overall": stat(graded),
+        "by_arm": {k: stat(v) for k, v in sorted(arms.items())},
+        "by_shape": {k: stat(v) for k, v in sorted(shapes.items())},
+        "top": graded[:5],
+        "vegas": rows[0].get("contest_state", {}).get("vegas"),
     }
 
 
@@ -1074,7 +1180,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, json.dumps(
                     {"error": "Drop the Stokastic projections CSV first."}))
             result = run_build(p.get("proj") or "", p.get("field") or "",
-                               p.get("dk") or "", p.get("options") or {})
+                               p.get("dk") or "", p.get("options") or {},
+                               linestar_text=p.get("linestar") or "")
             self._send(400 if result.get("error") else 200, json.dumps(result))
         except Exception as exc:                             # noqa: BLE001
             self._send(500, json.dumps({"error": str(exc)}))
@@ -1102,6 +1209,10 @@ def main(argv=None):
     ap.add_argument("--proj", help="Stokastic projections CSV")
     ap.add_argument("--field", help="Stokastic lineups CSV (the opponent field)")
     ap.add_argument("--dk", help="DK entries export (needed for an upload file)")
+    ap.add_argument("--linestar", help="LineStar export — Vegas lines, logged only")
+    ap.add_argument("--grade", help="LineStar POST-GAME export: score the last "
+                                    "logged build against actual results")
+    ap.add_argument("--grade-slate", help="which logged slate to grade (YYYY-MM-DD)")
     ap.add_argument("--pool", help="sharp's pool, one name per line")
     ap.add_argument("--cores", help="sharp's cores, one name per line")
     ap.add_argument("--n", type=int, default=150)
@@ -1130,6 +1241,32 @@ def main(argv=None):
     ap.add_argument("--out", default="nfl_upload.csv")
     a = ap.parse_args(argv)
 
+    if a.grade:
+        g = grade(_read(a.grade), a.grade_slate)
+        if g.get("error"):
+            print(f"ERROR: {g['error']}")
+            return 2
+        print(f"\n== {g['entries']} entries graded — {g['slate']} ({g['format']}) ==")
+        o = g["overall"]
+        print(f"  overall   best {o['best']:.1f}  median {o['median']:.1f}  "
+              f"mean {o['mean']:.1f}")
+        print("  by arm:")
+        for k, v in g["by_arm"].items():
+            print(f"    {k:<8} n={v['n']:<4} best {v['best']:6.1f}  "
+                  f"median {v['median']:6.1f}  mean {v['mean']:6.1f}")
+        print("  by shape:")
+        for k, v in sorted(g["by_shape"].items(), key=lambda kv: -kv[1]["best"]):
+            print(f"    {k:<12} n={v['n']:<4} best {v['best']:6.1f}  "
+                  f"median {v['median']:6.1f}  mean {v['mean']:6.1f}")
+        print("  best five:")
+        for t in g["top"]:
+            print(f"    {t['score']:6.1f}  {str(t['shape']):<12} {t['head']}")
+        if g.get("vegas"):
+            print(f"  vegas: {g['vegas']}")
+        if g.get("unscored"):
+            print(f"  ! no score found for: {', '.join(g['unscored'])}")
+        return 0
+
     if not a.proj:                    # no files named -> open the page
         return serve()
 
@@ -1145,7 +1282,7 @@ def main(argv=None):
         "maxOffPool": a.max_off_pool,
         "fieldCap": a.field_cap, "fillPct": a.fill_pct,
         "expectEntries": a.expect_entries,
-    })
+    }, linestar_text=_read(a.linestar))
     for note in res.get("notes", []):
         print(f"  [{note['type']}] {note['text']}")
     if res.get("error"):
