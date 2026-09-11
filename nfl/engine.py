@@ -837,6 +837,18 @@ def select(lineups, n, *, captain_cap=CAPTAIN_CAP,
         s = lu.major_side()
         if s and s not in teams_seen:
             teams_seen.append(s)
+    # The vendor arm has no shape quota of its own — it is THEIR pool, and
+    # imposing our shape mix on it would stop it being an independent control.
+    # But with no quota to hang the side balance on, the running cap does the
+    # balancing by falling through to 3-3s: measured across both slates it cost
+    # six 5-1 lineups per 150 and bought twelve even ones, drifting the arm
+    # toward the one shape the field already over-builds. So when the cap is on
+    # and no quota was given, take the arm's OWN natural shape mix — what its
+    # top n would have been — and balance the sides inside that. It keeps the
+    # shape mix the arm chose while removing the side bet it did not choose.
+    if side_cap and side_cap < 1.0 and not quota and len(teams_seen) >= 2:
+        for lu in lineups[:n]:
+            quota[lu.split_label()] = quota.get(lu.split_label(), 0) + 1
     for shape, want in sorted(quota.items(), key=lambda kv: -kv[1]):
         a, b = (int(x) for x in shape.split("-"))
         if a == b or not side_cap or side_cap >= 1.0 or len(teams_seen) < 2:
