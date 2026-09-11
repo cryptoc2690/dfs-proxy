@@ -568,6 +568,16 @@ function renderGrade(g){
   };
   h += tbl('Which half of the split did better — this is the A/B', g.by_arm, 'arm');
   h += tbl('Which shape did better on this slate', g.by_shape, 'shape');
+  if(g.by_side && Object.keys(g.by_side).length > 1){
+    h += tbl('Which side did better — your entries by the team they leaned on',
+             g.by_side, 'side');
+    const fs = g.field_sides;
+    if(fs) h += '<div class="note info">Where the field was that night: '
+      + esc(Object.entries(fs).map(([k,v]) => k+' '+v.toFixed(0)+'%').join(' · '))
+      + '. Your set is held to an even split, so a side that keeps winning here '
+      + 'while the field keeps sitting on the other one is the thing worth '
+      + 'acting on — after several slates, not this one.</div>';
+  }
   h += '<div class="note info" style="margin-top:14px"><b>One slate is not '
      + 'evidence.</b> Every construction rule in this tool came out of the '
      + "vendor's own simulation, which is a model of the field and not the "

@@ -23,6 +23,7 @@ research brief found the WNBA versions would actively mislead in NFL:
 
 from __future__ import annotations
 
+import heapq
 import math
 import random
 
@@ -282,31 +283,63 @@ def score_lineup(lu, mat, sims):
     return [cpt[s] * CAPTAIN_MULT + sum(r[s] for r in rows) for s in range(sims)]
 
 
-def field_bar(field_entries, mat, sims, sample=1200, seed=0):
-    """The score to beat, per sim.
+# The score a lineup has to clear to count as a win in that simulated world.
+#
+# This used to be the MAX of an unweighted 1,200-lineup sample, and a sampled
+# maximum is a noisy extreme: on SF @ LAR it left 1,141 of 4,000 candidates at
+# exactly zero and gave the whole pool only 45 distinct win values, so the
+# winning roster sat in a 740-way tie spanning ranks #305 to #2,859 and the
+# duplication divisor — not the simulator — did the actual ranking.
+#
+# So the same bar the main slate uses: the field's 99th percentile, sampled in
+# proportion to how many entries each lineup really represents. Weighting
+# matters because the vendor exports DISTINCT lineups with a Dupes count; drawn
+# uniformly, a one-off counts as much as a roster 500 people entered.
+BAR_QUANTILE = 0.99
+BAR_SAMPLE = 2000
+BAR_WEIGHTED = True
 
-    We only ever need to RANK our own lineups, so an honest monotone proxy for
-    win probability is enough: the best score a sample of the field reaches in
-    that same simulated world. Sampling understates the true field maximum, but
-    it understates it identically for every candidate, so the ordering holds.
+
+def field_bar(field_entries, mat, sims, sample=None, seed=0, quantile=None,
+              weighted=None):
+    """The score to beat per sim — the field's BAR_QUANTILE score.
+
+    Kept as a running top-k heap per sim rather than a sample x sims matrix,
+    which at 2,000 x 4,000 would be a quarter of a gigabyte of Python floats.
     """
     rng = random.Random(seed + 11)
     usable = [e for e in field_entries
               if e.get("cpt") is not None and len(e.get("flex") or []) == ROSTER_SIZE - 1]
     if not usable:
         return None, 0
-    picks = usable if len(usable) <= sample else rng.sample(usable, sample)
-    bar = [0.0] * sims
+    sample = sample or BAR_SAMPLE
+    q = BAR_QUANTILE if quantile is None else quantile
+    if BAR_WEIGHTED if weighted is None else weighted:
+        picks = rng.choices(usable, weights=[1.0 + (e.get("dupes") or 0.0)
+                                             for e in usable], k=sample)
+    else:
+        picks = usable if len(usable) <= sample else rng.sample(usable, sample)
+    rows = []
     for e in picks:
         cpt = mat.get(e["cpt"].dk_id)
-        rows = [mat.get(p.dk_id) for p in e["flex"]]
-        if cpt is None or any(r is None for r in rows):
+        fl = [mat.get(p.dk_id) for p in e["flex"]]
+        if cpt is None or any(r is None for r in fl):
             continue
-        for s in range(sims):
-            v = cpt[s] * CAPTAIN_MULT + sum(r[s] for r in rows)
-            if v > bar[s]:
-                bar[s] = v
-    return bar, len(picks)
+        rows.append((cpt, fl))
+    if not rows:
+        return None, 0
+    keep = max(1, int(round((1.0 - q) * len(rows))))     # k-th largest = bar
+    bar = [0.0] * sims
+    for s in range(sims):
+        h = []
+        for cpt, fl in rows:
+            v = cpt[s] * CAPTAIN_MULT + sum(r[s] for r in fl)
+            if len(h) < keep:
+                heapq.heappush(h, v)
+            elif v > h[0]:
+                heapq.heapreplace(h, v)
+        bar[s] = h[0]
+    return bar, len(rows)
 
 
 def win_rate(scores, bar, sims):
@@ -394,6 +427,32 @@ CAPTAIN_CAP = 0.28       # share of entries any one captain may hold. A rail:
 PLAYER_CAP = 0.65        # showdown must run high: 6 of ~68 players fill a lineup.
                          # This one DOES bind (49 of 75 on the real slate).
 MAX_OVERLAP = 4          # of 6, before two entries are near-duplicates
+
+# The most of your SIDE-TAKING entries that may sit on one team. The split
+# quotas above say how lopsided a lineup is; they say nothing about WHICH side,
+# and that was an unmanaged output. Construction is already even — it picks the
+# major team on a coin flip — but the vendor arm is a sample of the field, so it
+# inherits whichever way the crowd leaned. On SF @ LAR that came out 19 SF-major
+# to 43 LAR-major in the vendor arm against 32/32 in our own, and the crowd's
+# side lost: 82 of the contest's top 100 were the shape the vendor arm had three
+# of.
+#
+# Measured as a share of SIDE-TAKING entries, not of all entries. A fifth of a
+# showdown set is usually even (3-3), which is a bet on neither team, so a cap
+# written against the total leaves room for a 62/38 lean and calls it neutral.
+# The running form below compares each side against the sides taken so far, so
+# it converges on a genuine balance instead of a nominal one.
+#
+# 0.50 is neutral, NOT contrarian. It does not bet against the field, it only
+# stops an arm quietly betting with it. Raise toward 1.0 to let a lean through;
+# there is no setting here that deliberately fades the field, because the data
+# to justify one does not exist yet — two showdown slates is not a finding.
+SIDE_CAP = 0.50
+
+# Below this many entries on a side, the cap does not apply. Without it the
+# first few picks would have to alternate teams strictly, which hands the
+# ordering to whichever side happens to rank first rather than to merit.
+SIDE_SLACK = 6
 
 
 def _weighted_pick(cands, weights, rng):
@@ -640,7 +699,7 @@ def rank(lineups, mat, bar, sims, dupes_idx, own_lean=OWN_LEAN, dupe_scale=1.0,
 
 
 def select(lineups, n, *, captain_cap=CAPTAIN_CAP,
-           player_cap=PLAYER_CAP, max_overlap=MAX_OVERLAP,
+           player_cap=PLAYER_CAP, max_overlap=MAX_OVERLAP, side_cap=SIDE_CAP,
            split_targets=None, core_floors=None, prior=None):
     """Pick the final N under coverage rules rather than diversification ones.
 
@@ -693,10 +752,13 @@ def select(lineups, n, *, captain_cap=CAPTAIN_CAP,
         quota = {k: int(round(v * n)) for k, v in split_targets.items()}
     chosen, sets = [], []
     cross = max_overlap + 1
-    cpt_ct, ply_used, split_ct = {}, {}, {}
+    cpt_ct, ply_used, split_ct, side_used, split_side_ct = {}, {}, {}, {}, {}
     prior_sets = [set(lu.ids()) for lu in prior]
     for lu in prior:
         cpt_ct[lu.cpt.dk_id] = cpt_ct.get(lu.cpt.dk_id, 0) + 1
+        s = lu.major_side()
+        if s:
+            side_used[s] = side_used.get(s, 0) + 1
         for p in lu.players:
             ply_used[p.dk_id] = ply_used.get(p.dk_id, 0) + 1
 
@@ -705,12 +767,22 @@ def select(lineups, n, *, captain_cap=CAPTAIN_CAP,
         sets.append(set(lu.ids()))
         cpt_ct[lu.cpt.dk_id] = cpt_ct.get(lu.cpt.dk_id, 0) + 1
         split_ct[lu.split_label()] = split_ct.get(lu.split_label(), 0) + 1
+        s = lu.major_side()
+        if s:
+            side_used[s] = side_used.get(s, 0) + 1
+            k = (lu.split_label(), s)
+            split_side_ct[k] = split_side_ct.get(k, 0) + 1
         for p in lu.players:
             ply_used[p.dk_id] = ply_used.get(p.dk_id, 0) + 1
 
-    def ok(lu, overlap):
+    def ok(lu, overlap, honour_side=True):
         if cpt_ct.get(lu.cpt.dk_id, 0) >= cap_ct:
             return False
+        side = lu.major_side()
+        if honour_side and side_cap and side_cap < 1.0 and side:
+            taken_sides = sum(side_used.values()) + 1
+            if side_used.get(side, 0) >= max(SIDE_SLACK, side_cap * taken_sides):
+                return False
         if any(ply_used.get(i, 0) >= ply_ct for i in lu.ids()):
             return False
         s = set(lu.ids())
@@ -720,9 +792,12 @@ def select(lineups, n, *, captain_cap=CAPTAIN_CAP,
 
     taken = set()
 
-    def pass_over(overlap, want_split=None, limit=None, need=None, floor=None):
+    def pass_over(overlap, want_split=None, limit=None, need=None, floor=None,
+                  honour_side=True, want_side=None):
+        counter = split_side_ct if want_side else split_ct
+        ckey = (want_split, want_side) if want_side else want_split
         for lu in lineups:
-            if len(chosen) >= n or (limit is not None and split_ct.get(want_split, 0) >= limit):
+            if len(chosen) >= n or (limit is not None and counter.get(ckey, 0) >= limit):
                 return
             if floor is not None and ply_used.get(need, 0) >= floor:
                 return
@@ -730,25 +805,54 @@ def select(lineups, n, *, captain_cap=CAPTAIN_CAP,
                 continue
             if want_split and lu.split_label() != want_split:
                 continue
+            if want_side and lu.major_side() != want_side:
+                continue
             if need is not None and need not in lu.ids():
                 continue
-            if ok(lu, overlap):
+            if ok(lu, overlap, honour_side):
                 take(lu)
                 taken.add(id(lu))
 
     # Cores first, under the same caps and overlap as everything else — they
     # used to be swapped in afterwards past every cap. Then quotas, best-first
     # inside each shape, then fill on merit.
+    # A core is the sharp's explicit instruction, so it outranks the side cap:
+    # two cores on the same team would otherwise have their floors silently
+    # starved by a rail the user never asked for. The cap still shapes every
+    # other pass, so the lean it allows is only ever the lean the cores force.
     for cid, floor in (core_floors or {}).items():
-        pass_over(max_overlap, need=cid, floor=floor)
+        pass_over(max_overlap, need=cid, floor=floor, honour_side=False)
+    # Shape quotas, each lopsided shape split evenly between the two teams.
+    #
+    # Doing this INSIDE the shape quota rather than as a blanket cap is what
+    # keeps the two rules from fighting. A running side cap applied to every
+    # pass does balance the sides, but it balances them by rejecting the
+    # blocked side's 5-1 lineups and letting the merit fill replace them with
+    # 3-3s — measured, it pushed even lineups from 29 to 49 of 150 and blew
+    # past the 15% target for the one shape the field already over-builds.
+    # Pinning the side within each shape holds both at once.
+    teams_seen = [t for t, _ in sorted(
+        ((t, c) for t, c in side_used.items()), key=lambda kv: -kv[1])]
+    for lu in lineups:
+        s = lu.major_side()
+        if s and s not in teams_seen:
+            teams_seen.append(s)
     for shape, want in sorted(quota.items(), key=lambda kv: -kv[1]):
-        pass_over(max_overlap, want_split=shape, limit=want)
+        a, b = (int(x) for x in shape.split("-"))
+        if a == b or not side_cap or side_cap >= 1.0 or len(teams_seen) < 2:
+            pass_over(max_overlap, want_split=shape, limit=want)
+            continue
+        share = max(1, int(round(want * side_cap)))
+        for t in teams_seen:
+            pass_over(max_overlap, want_split=shape, want_side=t, limit=share,
+                      honour_side=False)
+        pass_over(max_overlap, want_split=shape, limit=want)   # any shortfall
     pass_over(max_overlap)
     for relax in (max_overlap + 1, ROSTER_SIZE):      # loosen rather than under-fill
         pass_over(relax)
     for cid, floor in (core_floors or {}).items():    # still short: overlap relaxed
         if ply_used.get(cid, 0) < floor:
-            pass_over(ROSTER_SIZE, need=cid, floor=floor)
+            pass_over(ROSTER_SIZE, need=cid, floor=floor, honour_side=False)
 
     # Still short. Relax the player cap but HOLD the captain cap: the captain is
     # the highest-dispersion decision in the format, so it is the last thing to
@@ -772,8 +876,8 @@ def select(lineups, n, *, captain_cap=CAPTAIN_CAP,
 
 
 def vendor_arm(field_entries, n, *, captain_cap=CAPTAIN_CAP,
-               player_cap=PLAYER_CAP, max_overlap=MAX_OVERLAP, dupe_scale=1.0,
-               core_floors=None, prior=None):
+               player_cap=PLAYER_CAP, max_overlap=MAX_OVERLAP, side_cap=SIDE_CAP,
+               dupe_scale=1.0, core_floors=None, prior=None):
     """Their pool, re-ranked on Win% / (1 + Dupes) and put through the same caps.
 
     This is the control arm for the A/B comparison, and on its own it is a
@@ -795,5 +899,12 @@ def vendor_arm(field_entries, n, *, captain_cap=CAPTAIN_CAP,
                       "score": (e.get("win", 0.0)) / (1.0 + d)}
         cands.append(lu)
     cands.sort(key=lambda l: -l.metrics["score"])
+    # The side cap matters MORE here than in our own arm. These lineups are a
+    # sample of the field, so whichever way the crowd leaned is baked into the
+    # supply: on SF @ LAR their in-pool lineups ran 42% LAR-major to 24%
+    # SF-major and this arm came out 43-19 the same way, while our own arm —
+    # which ranks on beating the field rather than resembling it — came out
+    # 32-32 without being told to.
     return select(cands, n, captain_cap=captain_cap, player_cap=player_cap,
-                  max_overlap=max_overlap, core_floors=core_floors, prior=prior)
+                  max_overlap=max_overlap, side_cap=side_cap,
+                  core_floors=core_floors, prior=prior)

@@ -126,6 +126,23 @@ class Lineup:
             counts[p.team] = counts.get(p.team, 0) + 1
         return max(counts, key=lambda t: counts[t])
 
+    def major_side(self) -> str | None:
+        """Which team this lineup is a bet ON — None if it is not a bet.
+
+        `major_team` breaks a tie arbitrarily, which is right for a log field
+        and wrong for anything that counts sides: an even 3-3 is not a call on
+        either team, and letting max() award it to whichever name sorts first
+        invents a lean that isn't there. Both the side cap and the side
+        breakdown in grading use this one.
+        """
+        counts: dict[str, int] = {}
+        for p in self.players:
+            counts[p.team] = counts.get(p.team, 0) + 1
+        best = sorted(counts.items(), key=lambda kv: -kv[1])
+        if len(best) < 2 or best[0][1] > best[1][1]:
+            return best[0][0] if best else None
+        return None
+
 
 def normalize_name(name: str) -> str:
     """Fold accents/punctuation/case/suffixes so names match across sources.

@@ -232,6 +232,54 @@ def _attach_dk_ids(players, dk):
     return hit, miss, no_cpt
 
 
+def _logged_side(ps):
+    """Which team a LOGGED lineup leaned on, or None if it leaned on neither.
+
+    Computed from the logged player records rather than read from the row's
+    `major_team`, so entries written before the side work can still be graded:
+    every log row has carried each player's team from the start.
+    """
+    counts = {}
+    for p in ps:
+        t = (p.get("team") or "").strip()
+        if t:
+            counts[t] = counts.get(t, 0) + 1
+    best = sorted(counts.items(), key=lambda kv: -kv[1])
+    if not best:
+        return None
+    if len(best) < 2 or best[0][1] > best[1][1]:
+        return best[0][0]
+    return None
+
+
+def _field_sides(field, fmt):
+    """How the OPPONENT field split itself between the two teams.
+
+    The leverage baseline, and the one number in this whole question that is
+    knowable before lock: on SF @ LAR the vendor's pool ran 42% LAR-major to
+    24% SF-major, the real contest ran 49% to 19%, and the shape the crowd
+    skipped took 82 of the top 100. Stored per build because the vendor file is
+    a one-off download — recomputing it a week later is not an option.
+    """
+    if fmt != "showdown" or not field:
+        return None
+    out = {}
+    for e in field:
+        cpt, flex = e.get("cpt"), e.get("flex") or []
+        if cpt is None:
+            continue
+        counts = {}
+        for p in [cpt] + list(flex):
+            if p is not None and p.team:
+                counts[p.team] = counts.get(p.team, 0) + 1
+        best = sorted(counts.items(), key=lambda kv: -kv[1])
+        w = 1.0 + (e.get("dupes") or 0.0)      # by ENTRIES, not distinct rosters
+        k = "even" if (len(best) > 1 and best[0][1] == best[1][1]) else best[0][0]
+        out[k] = out.get(k, 0.0) + w
+    total = sum(out.values()) or 1.0
+    return {k: round(100.0 * v / total, 1) for k, v in sorted(out.items())}
+
+
 def _roster(lu, fmt):
     """The lineup's players in the order DK's columns expect them."""
     if fmt == "showdown":
@@ -728,7 +776,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                         "so the default 45/55 is in force.")
     caps = dict(player_cap=_share(o.get("playerCap"), M.PLAYER_CAP))
     if fmt == "showdown":
-        caps.update(captain_cap=_share(o.get("captainCap"), E.CAPTAIN_CAP))
+        caps.update(captain_cap=_share(o.get("captainCap"), E.CAPTAIN_CAP),
+                    side_cap=_share(o.get("sideCap"), E.SIDE_CAP))
     else:
         caps.update(qb_cap=_share(o.get("qbCap"), C.QB_CAP),
                     dst_cap=_share(o.get("dstCap"), C.DST_CAP))
@@ -932,6 +981,31 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                 + ("" if 10 <= pct <= 90 else
                    " That is a large bet on one direction; the ownership lean "
                    "setting is what moves it."))
+    field_sides = _field_sides(field, fmt) if field else None
+    if field_sides:
+        ours = {}
+        for lu in chosen:
+            ours[lu.major_side() or "even"] = ours.get(lu.major_side() or "even", 0) + 1
+        say("info", "Which side you are on, yours vs the field: " + "; ".join(
+            f"{k} {100.0 * ours.get(k, 0) / len(chosen):.0f}% vs {field_sides.get(k, 0.0):.0f}%"
+            for k in sorted(set(ours) | set(field_sides))))
+        lean = max((v for k, v in field_sides.items() if k != "even"), default=0.0)
+        light = min((v for k, v in field_sides.items() if k != "even"), default=0.0)
+        if lean >= 2.0 * max(light, 0.1):
+            heavy = max((k for k in field_sides if k != "even"),
+                        key=lambda k: field_sides[k])
+            thin = min((k for k in field_sides if k != "even"),
+                       key=lambda k: field_sides[k])
+            # Said plainly and then left alone. This is the leverage number and
+            # it is the one thing about the side question that is knowable
+            # before lock, but two showdown slates is not enough to act on, so
+            # the tool reports it and the call stays yours.
+            say("info", f"The field is {lean:.0f}% on {heavy} against "
+                        f"{light:.0f}% on {thin}. Your entries are capped at an "
+                        f"even split, so you are not following that bet — but "
+                        f"nothing here is fading it either. Raise --side-cap "
+                        f"toward 1.0 to let a lean through.")
+
     if fmt == "classic" and field:
         def _depth(ps):
             q = next((p for p in ps if p.is_qb), None)
@@ -962,6 +1036,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                 "cores": sorted(core_names), "pool": sorted(pool_names)}
     if fmt == "showdown":
         settings.update({"captainCap": caps["captain_cap"],
+                         "sideCap": caps["side_cap"],
                          "splitTargets": shape_targets})
     else:
         settings.update({"qbCap": caps["qb_cap"], "dstCap": caps["dst_cap"],
@@ -976,6 +1051,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                           "expect_entries": expect or None,
                           "vendor_field_modelled": modelled,
                           "dupe_scale": round(dupe_scale, 3),
+                          "field_sides": field_sides,
                           "vegas": vegas},
     }
 
@@ -1126,6 +1202,7 @@ def grade(results_text, slate=None):
         if ok:
             graded.append({"score": round(total, 2), "source": r.get("source"),
                            "shape": (r.get("split") or r.get("shape") or "?").split(" |")[0],
+                           "side": _logged_side(ps),
                            "entry_id": r.get("entry_id"),
                            "head": r.get("captain") or r.get("qb"),
                            "proj": r.get("proj"), "own": r.get("own_sum")})
@@ -1137,10 +1214,11 @@ def grade(results_text, slate=None):
         sc = sorted((g["score"] for g in rowset), reverse=True)
         return {"n": len(sc), "best": sc[0], "median": sc[len(sc) // 2],
                 "mean": round(sum(sc) / len(sc), 2)}
-    arms, shapes = {}, {}
+    arms, shapes, byside = {}, {}, {}
     for g in graded:
         arms.setdefault(g["source"] or "?", []).append(g)
         shapes.setdefault(g["shape"] or "?", []).append(g)
+        byside.setdefault(g["side"] or "even", []).append(g)
     return {
         "slate": rows[0].get("slate"), "format": fmt,
         "entries": len(graded),
@@ -1148,6 +1226,12 @@ def grade(results_text, slate=None):
         "overall": stat(graded),
         "by_arm": {k: stat(v) for k, v in sorted(arms.items())},
         "by_shape": {k: stat(v) for k, v in sorted(shapes.items())},
+        # Which team you leaned on, against what the field's lean was at build
+        # time. One slate says nothing — the pair only becomes an answer across
+        # a season, which is why the field's lean is stored per build rather
+        # than recomputed later from a file that may be gone.
+        "by_side": {k: stat(v) for k, v in sorted(byside.items())},
+        "field_sides": rows[0].get("contest_state", {}).get("field_sides"),
         "top": graded[:5],
         "vegas": rows[0].get("contest_state", {}).get("vegas"),
     }
@@ -1329,6 +1413,9 @@ def main(argv=None):
                     help="override the auto-detected slate format")
     ap.add_argument("--own-lean", type=float, default=None)
     ap.add_argument("--captain-cap", type=float, default=E.CAPTAIN_CAP)
+    ap.add_argument("--side-cap", type=float, default=E.SIDE_CAP,
+                    help="showdown: most of your entries that may lean on one "
+                         "team (0.50 = neutral, 1 = off)")
     ap.add_argument("--player-cap", type=float, default=None)
     ap.add_argument("--qb-cap", type=float, default=C.QB_CAP)
     ap.add_argument("--dst-cap", type=float, default=C.DST_CAP)
@@ -1363,6 +1450,13 @@ def main(argv=None):
         for k, v in sorted(g["by_shape"].items(), key=lambda kv: -kv[1]["best"]):
             print(f"    {k:<12} n={v['n']:<4} best {v['best']:6.1f}  "
                   f"median {v['median']:6.1f}  mean {v['mean']:6.1f}")
+        if len(g.get("by_side") or {}) > 1:
+            fs = g.get("field_sides") or {}
+            print("  by side (the field's share of entries in brackets):")
+            for k, v in sorted(g["by_side"].items(), key=lambda kv: -kv[1]["best"]):
+                shr = f"[field {fs[k]:.0f}%]" if k in fs else ""
+                print(f"    {k:<8} n={v['n']:<4} best {v['best']:6.1f}  "
+                      f"median {v['median']:6.1f}  mean {v['mean']:6.1f}  {shr}")
         print("  best five:")
         for t in g["top"]:
             print(f"    {t['score']:6.1f}  {str(t['shape']):<12} {t['head']}")
@@ -1380,7 +1474,7 @@ def main(argv=None):
         "n": a.n, "split": a.split, "sims": a.sims, "seed": a.seed,
         "format": a.format,
         "ownLean": a.own_lean, "captainCap": a.captain_cap,
-        "playerCap": a.player_cap,
+        "sideCap": a.side_cap, "playerCap": a.player_cap,
         "qbCap": a.qb_cap, "dstCap": a.dst_cap, "bringBack": a.bring_back,
         "stackTargets": a.stack_targets,
         "maxLeftover": a.max_leftover, "minProj": a.min_proj,
