@@ -222,6 +222,24 @@ def _pick(cands, weights, rng):
     return cands[-1]
 
 
+def pool_exempt(p):
+    """Seats the sharp's sheet is not expected to cover. -> bool
+
+    DST only, and deliberately. Nobody writes a defence onto a pool sheet: it is
+    close to a coin flip, it is picked last out of whatever salary is left, and
+    it is the one seat where the sheet carries no opinion. Before this, a sheet
+    with no DST could not fill nine seats, so the pool stopped being a hard
+    filter for EVERY seat — one missing position quietly turned a 60-name sheet
+    into a shortlist across the whole roster. Exempting the seat keeps the other
+    eight binding and lets the builder take whatever defence fits.
+
+    This is not a general "fill the gaps" rule. A sheet missing tight ends is a
+    sheet with an opinion about tight ends, and that still drops the constraint
+    and says so.
+    """
+    return p.is_dst
+
+
 def build_candidates(players, n, *, rng=None, stack_targets=None,
                      bring_back_share=BRING_BACK_SHARE, max_off_pool=None,
                      min_proj=MIN_PROJ, max_leftover=MAX_LEFTOVER):
@@ -247,7 +265,7 @@ def build_candidates(players, n, *, rng=None, stack_targets=None,
     # 55-name sheet are effectively zero, so every candidate was rejected and
     # the build returned nothing at all.
     def allowed(p, off):
-        return (max_off_pool is None or p.in_pool or p.core
+        return (max_off_pool is None or p.in_pool or p.core or pool_exempt(p)
                 or off < max_off_pool)
 
     qbs = [p for p in pool if p.is_qb and allowed(p, 0)]
@@ -314,7 +332,7 @@ def build_candidates(players, n, *, rng=None, stack_targets=None,
             picked, got = trial, got + 1
             used.add(p.dk_id)
             salary += p.salary
-            if not (p.in_pool or p.core or licensed):
+            if not (p.in_pool or p.core or licensed or pool_exempt(p)):
                 off += 1
         if got < min(want, MIN_STACK):
             continue
@@ -331,7 +349,7 @@ def build_candidates(players, n, *, rng=None, stack_targets=None,
                         <= SALARY_CAP - 3000 * (ROSTER_SIZE - len(trial))):
                     picked, salary = trial, salary + p.salary
                     used.add(p.dk_id)
-                    if not (p.in_pool or p.core):
+                    if not (p.in_pool or p.core or pool_exempt(p)):
                         off += 1
 
         # Fill the rest, position-aware, keeping a legal roster reachable.
@@ -374,7 +392,7 @@ def build_candidates(players, n, *, rng=None, stack_targets=None,
             picked.append(p)
             used.add(p.dk_id)
             salary += p.salary
-            if not (p.in_pool or p.core):
+            if not (p.in_pool or p.core or pool_exempt(p)):
                 off += 1
         if not ok or not _legal_final(picked):
             continue

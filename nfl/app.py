@@ -84,37 +84,52 @@ def _share(v, d):
 def _pool_gaps(players, min_proj):
     """-> (off-pool players a legal classic roster needs, which seats are short)
 
-    Classic needs a QB, two RBs, three WRs, a TE, a flex and a DST out of the
-    same sheet. A pool that cannot cover all nine is not a constraint, it is a
-    build that returns nothing — and the failure is silent and slow, because the
-    builder spends its whole try budget rejecting rosters it can never complete.
-    So work out up front exactly how many seats the sheet cannot fill, and say
-    which ones.
+    Classic needs a QB, two RBs, three WRs, a TE and a flex out of the sheet. A
+    pool that cannot cover them is not a constraint, it is a build that returns
+    nothing — and the failure is silent and slow, because the builder spends its
+    whole try budget rejecting rosters it can never complete. So work out up
+    front exactly how many seats the sheet cannot fill, and say which ones.
+
+    The DST seat is not one of them: see `classic.pool_exempt`. Sheets do not
+    carry defences, so counting that seat made a full sheet look one short and
+    dropped the constraint on the other eight.
     """
-    have = {}
+    have, dst_ok = {}, False
     for p in players:
+        if C.pool_exempt(p):
+            dst_ok = dst_ok or (p.proj >= min_proj and p.salary > 0)
+            continue
         if p.in_pool and p.proj >= min_proj and p.salary > 0:
             have[p.pos] = have.get(p.pos, 0) + 1
     short = [f"{need} {pos}" + ("s" if need > 1 else "")
-             for pos, need in (("QB", 1), ("RB", 2), ("WR", 3),
-                               ("TE", 1), ("DST", 1))
+             for pos, need in (("QB", 1), ("RB", 2), ("WR", 3), ("TE", 1))
              if have.get(pos, 0) < need]
-    # The most in-pool players a legal roster could hold: each position capped at
-    # its maximum, and the RB/WR/TE seats capped at seven between them.
-    flexish = min(min(have.get("RB", 0), 3) + min(have.get("WR", 0), 4)
-                  + min(have.get("TE", 0), 2), 7)
-    usable = min(have.get("QB", 0), 1) + min(have.get("DST", 0), 1) + flexish
+    # The most seats a legal roster could fill from the sheet. Count the REQUIRED
+    # seats one position at a time and the flex separately, because pooling them
+    # lets a surplus cover a seat it is not eligible for: a sheet with no tight
+    # end used to come back needing nothing, since three spare receivers pushed
+    # the combined RB/WR/TE count to seven. That reported a full sheet, kept the
+    # hard filter on, and the build then returned nothing with no reason given.
+    # The DST comes from the slate, so it fills its seat whenever a slate has one.
+    rb, wr, te = have.get("RB", 0), have.get("WR", 0), have.get("TE", 0)
+    spare = max(0, rb - 2) + max(0, wr - 3) + max(0, te - 1)
+    usable = (min(have.get("QB", 0), 1) + min(rb, 2) + min(wr, 3) + min(te, 1)
+              + (1 if dst_ok else 0) + (1 if spare else 0))
     need_off = max(0, C.ROSTER_SIZE - usable)
     # Seats covered is not enough: a sheet of fifteen studs covers every seat
     # and still cannot make a roster under the cap. Price the cheapest legal
-    # roster the sheet allows so the failure has a reason attached.
+    # roster the sheet allows so the failure has a reason attached — with the
+    # cheapest DST on the SLATE, since that seat is not the sheet's to fill.
     cheapest = 0
     if need_off == 0:
         sal = {pos: sorted(p.salary for p in players
                            if p.in_pool and p.proj >= min_proj and p.salary > 0
                            and p.pos == pos)
-               for pos in ("QB", "RB", "WR", "TE", "DST")}
-        base = sal["QB"][:1] + sal["RB"][:2] + sal["WR"][:3] + sal["TE"][:1] + sal["DST"][:1]
+               for pos in ("QB", "RB", "WR", "TE")}
+        dst = sorted(p.salary for p in players
+                     if C.pool_exempt(p) and p.proj >= min_proj and p.salary > 0)
+        base = (sal["QB"][:1] + sal["RB"][:2] + sal["WR"][:3] + sal["TE"][:1]
+                + dst[:1])
         rest = sorted(sal["RB"][2:] + sal["WR"][3:] + sal["TE"][1:])
         cheapest = sum(base) + (rest[0] if rest else 0)
     return need_off, short, cheapest
@@ -175,8 +190,10 @@ def _pool_gaps_note(players, mat, sims, min_proj):
     owns = sorted(p.ownership for p in playable)
     up_bar = ups[len(ups) // 2]            # above-median upside
     own_bar = owns[len(owns) // 2]         # below-median ownership
+    # A defence is never a gap in the sheet — the sheet is not expected to hold
+    # one, so suggesting it is noise on every main slate build.
     gaps = [p for p in playable
-            if not p.in_pool and not p.core
+            if not p.in_pool and not p.core and not p.is_dst
             and p90[p.dk_id] >= up_bar and p.ownership <= own_bar]
     # Highest ceiling first, not best points-per-dollar. Per-dollar hands back a
     # list of cheap quarterbacks every time — QB scoring is high relative to QB
@@ -788,7 +805,9 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
         say("info", "Pool is a build constraint: "
                     + ("every player must come from it."
                        if not off_pool else
-                       f"up to {off_pool} off-pool player(s) per lineup."))
+                       f"up to {off_pool} off-pool player(s) per lineup.")
+                    + (" The DST seat is exempt — the builder takes whichever "
+                       "defence fits the salary left." if fmt == "classic" else ""))
 
     if pool_names:
         gaps = _pool_gaps_note(players, mat, sims, _f(o.get("minProj"), M.MIN_PROJ))
@@ -922,7 +941,11 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
             if off_pool is not None:
                 def _off(e):
                     ps = ([e["cpt"]] + e["flex"]) if fmt == "showdown" else e["flex"]
-                    return sum(1 for p in ps if p and not p.in_pool and not p.core)
+                    # Same exemption the builder uses, or their lineups would be
+                    # judged against a sheet the sheet was never meant to cover
+                    # and almost all of them would be thrown out over a defence.
+                    return sum(1 for p in ps if p and not p.in_pool and not p.core
+                               and not (fmt == "classic" and C.pool_exempt(p)))
                 vfield = [e for e in vfield if _off(e) <= off_pool]
                 say("info" if vfield else "warn",
                     f"Vendor pool filtered to your player pool: "
