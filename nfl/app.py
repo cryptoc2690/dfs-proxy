@@ -232,6 +232,50 @@ def _attach_dk_ids(players, dk):
     return hit, miss, no_cpt
 
 
+def _exposure(chosen, fmt):
+    """Who and what you actually ended up on. -> {"players": [...], "teams": [...]}
+
+    Exposure is reported against the field's projected ownership rather than on
+    its own, because a share is only meaningful next to what everyone else has.
+    Being on a player 40% of the time is aggressive at 8% field ownership and
+    timid at 60%, and the raw number alone cannot tell you which — that gap is
+    the whole reason to look.
+
+    Showdown counts a captain as exposure to the player, not to a separate
+    thing: he is the same body, and splitting him in two would understate how
+    concentrated the set really is. The captain share is carried alongside.
+    """
+    n = len(chosen) or 1
+    ply, teams, cpt = {}, {}, {}
+    for lu in chosen:
+        for p in lu.players:
+            rec = ply.setdefault(p.dk_id, {"name": p.name, "pos": p.pos,
+                                           "team": p.team, "n": 0, "own": p.ownership})
+            rec["n"] += 1
+            teams.setdefault(p.team, {"team": p.team, "slots": 0, "lineups": 0})["slots"] += 1
+        for t in {p.team for p in lu.players}:
+            teams.setdefault(t, {"team": t, "slots": 0, "lineups": 0})["lineups"] += 1
+        if fmt == "showdown" and lu.cpt is not None:
+            cpt[lu.cpt.dk_id] = cpt.get(lu.cpt.dk_id, 0) + 1
+    out = []
+    for k, r in ply.items():
+        pct = 100.0 * r["n"] / n
+        out.append({"name": r["name"], "pos": r["pos"], "team": r["team"],
+                    "n": r["n"], "pct": round(pct, 1),
+                    "own": round(r["own"], 1),
+                    # The leverage number: how far above or below the field you
+                    # are on this player, in points of ownership.
+                    "edge": round(pct - r["own"], 1),
+                    "cpt": cpt.get(k, 0)})
+    out.sort(key=lambda r: -r["n"])
+    tm = []
+    for t, r in teams.items():
+        tm.append({"team": t, "lineups": r["lineups"],
+                   "pct": round(100.0 * r["lineups"] / n, 1), "slots": r["slots"]})
+    tm.sort(key=lambda r: -r["lineups"])
+    return {"players": out, "teams": tm}
+
+
 def _logged_side(ps):
     """Which team a LOGGED lineup leaned on, or None if it leaned on neither.
 
@@ -1127,6 +1171,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
             "dupeAvg": round(sum(lu.metrics.get("dupes", 0) for lu in chosen)
                              / len(chosen), 2),
         },
+        "exposure": _exposure(chosen, fmt),
         "lineups": [_lineup_payload(lu, fmt) for lu in chosen],
         "dkCsv": dk_csv,
         "logPath": LOG_PATH,
@@ -1496,6 +1541,22 @@ def main(argv=None):
     print(f"  salary    {s['salaryLo']}-{s['salaryHi']}")
     print(f"  proj avg  {s['projAvg']}   own avg {s['ownAvg']}   "
           f"dupes avg {s['dupeAvg']}")
+    exp = res.get("exposure") or {}
+    if exp.get("teams"):
+        print("\n  teams — lineups holding at least one, and total roster slots:")
+        for t in exp["teams"]:
+            print(f"    {t['team']:<5} {t['pct']:>5.1f}%  ({t['lineups']:>3} of "
+                  f"{s['n']})   {t['slots']:>3} slots")
+    if exp.get("players"):
+        top = exp["players"][:20]
+        print(f"\n  players — your share against the field's projected ownership "
+              f"(top {len(top)} of {len(exp['players'])}):")
+        print(f"    {'player':<22}{'pos':<5}{'team':<6}{'yours':>7}{'field':>7}"
+              f"{'edge':>7}")
+        for p in top:
+            cpt = f"  ({p['cpt']} as CPT)" if p.get("cpt") else ""
+            print(f"    {p['name'][:21]:<22}{p['pos']:<5}{p['team']:<6}"
+                  f"{p['pct']:>6.1f}%{p['own']:>6.1f}%{p['edge']:>+7.1f}{cpt}")
     if res.get("dkCsv"):
         with open(a.out, "w", encoding="utf-8") as fh:
             fh.write(res["dkCsv"])

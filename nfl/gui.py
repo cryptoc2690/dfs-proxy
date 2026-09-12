@@ -80,6 +80,16 @@ INDEX_HTML = r"""<!doctype html>
   .arm.vendor{color:#c8a0e8;border-color:#5b3f7a}
   .cpt{color:var(--accent2);font-weight:650}
   .tblwrap{max-height:60vh;overflow:auto;border:1px solid var(--line);border-radius:9px}
+  .exp{margin:14px 0 4px}
+  .exp>summary{cursor:pointer;font-size:12.5px;color:var(--muted);padding:4px 0}
+  .expwrap{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,2fr);
+    gap:14px;margin-top:6px}
+  @media (max-width:820px){.expwrap{grid-template-columns:minmax(0,1fr)}}
+  .exptitle{font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+    color:var(--muted);margin-bottom:2px}
+  .exp .tblwrap{max-height:46vh}
+  td.num.up{color:#6ee7a0}
+  td.num.down{color:#ff9f9f}
   .spin{display:inline-block;width:13px;height:13px;margin-right:7px;
     border:2px solid rgba(255,255,255,.3);border-top-color:#06101f;border-radius:50%;
     animation:sp .7s linear infinite;vertical-align:-2px}
@@ -589,6 +599,41 @@ function renderGrade(g){
   $('#welcome').style.display = 'none';
 }
 
+// Exposure, shown against the field's projected ownership. A share on its own
+// says nothing — 40% is aggressive at 8% field and timid at 60% — so the gap
+// is the column worth reading, and it is the one that is coloured.
+function exposureHtml(e, n, sd){
+  if(!e || !e.players || !e.players.length) return '';
+  let h = '<details class="exp" open><summary>Exposure — who you are actually on</summary>';
+  h += '<div class="expwrap">';
+  h += '<div><div class="exptitle">Teams</div><div class="tblwrap"><table><thead><tr>'
+     + '<th>team</th><th class="num">lineups</th><th class="num">share</th>'
+     + '<th class="num">slots</th></tr></thead><tbody>';
+  e.teams.forEach(t => {
+    h += '<tr><td>'+esc(t.team)+'</td><td class="num">'+t.lineups+'</td>'
+      + '<td class="num">'+t.pct.toFixed(0)+'%</td>'
+      + '<td class="num">'+t.slots+'</td></tr>';
+  });
+  h += '</tbody></table></div></div>';
+  h += '<div><div class="exptitle">Players — yours vs the field</div>'
+     + '<div class="tblwrap"><table><thead><tr><th>player</th><th>pos</th>'
+     + '<th>team</th><th class="num">yours</th><th class="num">field</th>'
+     + '<th class="num">edge</th>'+(sd?'<th class="num">as CPT</th>':'')
+     + '</tr></thead><tbody>';
+  e.players.forEach(p => {
+    const cls = p.edge >= 10 ? 'up' : (p.edge <= -10 ? 'down' : '');
+    h += '<tr><td>'+esc(p.name)+'</td><td>'+esc(p.pos)+'</td>'
+      + '<td>'+esc(p.team)+'</td>'
+      + '<td class="num">'+p.pct.toFixed(0)+'%</td>'
+      + '<td class="num">'+p.own.toFixed(0)+'%</td>'
+      + '<td class="num '+cls+'">'+(p.edge>0?'+':'')+p.edge.toFixed(0)+'</td>'
+      + (sd?'<td class="num">'+(p.cpt||'')+'</td>':'')
+      + '</tr>';
+  });
+  h += '</tbody></table></div></div></div></details>';
+  return h;
+}
+
 function render(d){
   let h = '';
   (d.notes||[]).forEach(n => {
@@ -616,6 +661,7 @@ function render(d){
   h += '<div style="font-size:12.5px;color:var(--muted);margin-bottom:6px">Top '
      + (s.headLabel || 'captains') + ': '
      + s.topCaptains.map(c => esc(c[0])+' '+c[1]).join(' · ') + '</div>';
+  h += exposureHtml(d.exposure, s.n, sd);
   h += '<div class="tblwrap"><table><thead><tr>'
      + '<th>#</th><th>arm</th><th>' + (sd ? 'split' : 'stack') + '</th>'
      + (sd ? '<th>captain</th><th>flex</th>' : '<th>QB</th><th>rest of the roster</th>')
