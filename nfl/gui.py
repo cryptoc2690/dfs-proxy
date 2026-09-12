@@ -219,6 +219,9 @@ INDEX_HTML = r"""<!doctype html>
       </div>
       <div class="chips" id="poolchips"></div>
       <div class="picknote" id="poolnote"></div>
+      <div class="picknote">Paste the whole sheet at once — names separated by
+        commas, or one per line. Anything that matches nobody is named back to
+        you rather than dropped quietly.</div>
       <label>Players from outside the pool, per lineup</label>
       <select id="offpool">
         <option value="0" selected>0 — build only from the pool</option>
@@ -241,8 +244,9 @@ INDEX_HTML = r"""<!doctype html>
         <div class="menu" id="coremenu"></div>
       </div>
       <div class="chips" id="corechips"></div>
-      <div class="picknote">Type a few letters, click or press Enter. Cores count
-        as in-pool automatically. Click a chip to remove it.</div>
+      <div class="picknote">Type a few letters, click or press Enter — or paste a
+        comma-separated list. Cores count as in-pool automatically. Click a chip
+        to remove it.</div>
     </div>
   </div>
 </details>
@@ -402,6 +406,15 @@ async function loadRoster(text){
   }catch(e){ /* picker just stays disabled */ }
 }
 
+// The same folding the server does in normalize_name: accents, punctuation,
+// case and the Jr/Sr/III suffixes. A pasted sheet says "Chris Godwin Jr." where
+// the projections say "Chris Godwin", and matching has to survive that.
+function norm(s){
+  return (s || '').normalize('NFKD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().replace(/[.'\-,]/g, '').replace(/\s+/g, ' ').trim()
+    .replace(/\b(jr|sr|ii|iii|iv|v)\b/g, '').trim();
+}
+
 function picker(kind, inputId, menuId, chipsId){
   const input = $('#'+inputId), menu = $('#'+menuId), chips = $('#'+chipsId);
   let hits = [], cur = -1;
@@ -460,6 +473,33 @@ function picker(kind, inputId, menuId, chipsId){
     if(kind === 'core') pickers.pool.draw();
     input.focus();
   };
+
+  // Paste a whole sheet at once. The sharp's list arrives as a screenshot from
+  // Discord and gets retyped, so sixty names one chip at a time was the slowest
+  // step in the whole build. Anything with a separator in it is treated as a
+  // list; a single name still goes through the normal autocomplete.
+  const paste = txt => {
+    const parts = txt.split(/[,;\t\n\r]+/).map(s => s.trim()).filter(s => s.length > 1);
+    if(parts.length < 2) return false;
+    const hit = [], miss = [];
+    parts.forEach(q => {
+      const k = norm(q);
+      if(!k) return;
+      const p = roster.find(x => norm(x.name) === k)
+             || roster.find(x => norm(x.name).startsWith(k));
+      if(p) { sel[kind].add(p.name); if(kind === 'core') sel.pool.delete(p.name); hit.push(p.name); }
+      else miss.push(q);
+    });
+    input.value = ''; close(); draw();
+    if(kind === 'core') pickers.pool.draw();
+    $('#status').textContent = 'Added ' + hit.length + ' to ' + kind
+      + (miss.length ? ' — no match for: ' + miss.join(', ') : '');
+    return true;
+  };
+  input.addEventListener('paste', e => {
+    const txt = (e.clipboardData || window.clipboardData).getData('text') || '';
+    if(paste(txt)) e.preventDefault();
+  });
 
   input.addEventListener('input', () => { cur = -1; show(); });
   input.addEventListener('focus', show);

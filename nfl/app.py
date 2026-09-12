@@ -675,6 +675,18 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
     if pool_names or core_names:
         say("info", f"Sharp's sheet: {sum(1 for p in players if p.core)} cores, "
                     f"{sum(1 for p in players if p.in_pool)} in pool.")
+        # A name that matches nobody is silent otherwise: the sheet just comes
+        # back smaller than you typed. That matters more now the sheet can be
+        # pasted as one comma-separated line, where a typo or a stray field
+        # looks exactly like a name that did not make this slate.
+        known = {normalize_name(p.name) for p in players}
+        missed = sorted((pool_names | core_names) - known)
+        if missed:
+            say("warn", f"{len(missed)} name(s) on your sheet match no player on "
+                        f"this slate and were ignored: "
+                        + ", ".join(missed[:12])
+                        + (" …" if len(missed) > 12 else "")
+                        + ". Check the spelling, or they are not playing.")
 
     # The arithmetic check for the per-slot ownership trap. Showdown reports
     # ownership per ROSTER SLOT across two columns on different denominators:

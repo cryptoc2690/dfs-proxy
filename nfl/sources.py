@@ -409,15 +409,47 @@ def read_linestar(text):
 
 
 # --- 5. The sharp's sheet -------------------------------------------------
-def read_sharp(text):
-    """One name per line, first tab/comma field. -> set of normalized names.
+# Field labels and position codes that turn up in a pasted spreadsheet row and
+# are never a player. Team codes are caught by shape instead: nothing two or
+# three characters long and entirely upper case is a person.
+SHARP_SKIP = {"qb", "rb", "wr", "te", "dst", "def", "d/st", "k", "flex", "pos",
+              "position", "team", "salary", "sal", "name", "player", "core",
+              "opp", "opponent", "proj", "projection", "own", "ownership",
+              "value", "notes", "x"}
 
-    Deliberately the same permissive reader the WNBA tool uses, so a pasted
-    column out of a spreadsheet works without cleaning.
+
+def _sharp_cell(cell):
+    """Does this field look like a player's name? -> bool"""
+    cell = (cell or "").strip().strip('"').strip()
+    if len(cell) < 2:
+        return False
+    low = cell.lower()
+    if low in SHARP_SKIP or low.startswith(("name", "player")):
+        return False
+    if not any(ch.isalpha() for ch in cell):
+        return False            # 6900, $5,300, 12.4 — a salary or a projection
+    if len(cell) <= 3 and cell.isupper():
+        return False            # SF, LV, CIN — a team code, never a person
+    return True
+
+
+def read_sharp(text):
+    """The sharp's sheet, however it was pasted. -> set of normalized names.
+
+    Accepts both shapes without being told which:
+
+      one per line          a column dragged out of a spreadsheet, possibly
+                            with POS / SALARY / TEAM columns alongside it
+      comma separated       a list typed or pasted on a single line
+
+    The old reader took the first comma field of each line, which is right for
+    the first and silently wrong for the second — a sixty-name list pasted on
+    one line came back with one name in it and no complaint. So split on every
+    separator and decide field by field whether the thing is name-shaped, which
+    handles either layout and a mix of the two.
     """
     names = set()
-    for line in (text or "").splitlines():
-        cell = line.split("\t")[0].split(",")[0].strip()
-        if len(cell) > 1 and not cell.lower().startswith(("name", "player")):
+    for cell in re.split(r"[\t,;\r\n]", text or ""):
+        if _sharp_cell(cell):
             names.add(normalize_name(_name_and_id(cell)[0]))
     return names
