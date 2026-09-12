@@ -165,6 +165,17 @@ def _stack_targets(raw):
     return {d: w / total for d, w in out.items()}
 
 
+# A name has to clear both bars to be called a gap: real upside for its
+# position, and ownership that lags that upside by a wide margin. Measured on a
+# 204-player main slate against a 60-name sheet, these return one name. The old
+# slate-wide medians returned twenty-four, of which nine were quarterbacks whose
+# ceilings only looked high because they were being compared to receivers.
+GAP_MIN_CEILING = 0.70     # top 30% of the position on simulated upside
+GAP_MIN_LEVERAGE = 0.20    # ceiling rank must beat ownership rank by this much
+GAP_MIN_POS = 5            # below this, rank against the whole board instead
+GAP_SHOW = 12              # listed in full up to here, then a count
+
+
 def _pool_gaps_note(players, mat, sims, min_proj):
     """Strong, low-owned plays the sharp's sheet does not list. -> [(Player, ceiling)]
 
@@ -172,11 +183,33 @@ def _pool_gaps_note(players, mat, sims, min_proj):
     the call where it belongs. The list recomputes every build, so once a name
     is added to the pool it drops off on its own.
 
-    The bars come from the SLATE, not from constants. A showdown board has ~30
-    playable players and a main slate ~330, and any fixed ceiling-and-ownership
-    threshold that suits one is noise on the other. Upside is the simulated 90th
-    percentile — the real one out of the correlated sim, not a vendor Ceiling
-    column, which is just projection plus 0.675 sigma and says nothing new.
+    Upside is the simulated 90th percentile — the real one out of the correlated
+    sim, not a vendor Ceiling column, which is just projection plus 0.675 sigma
+    and says nothing new.
+
+    Everything else here is a correction of the first version, which showed the
+    top four of a set it never revealed the size of. On a 204-player main slate
+    that set held TWENTY-FOUR names: add the four it showed and the next four
+    appeared, six builds in a row, with no way to tell whether you were nearly
+    done or had barely started. A suggestion list you cannot finish is a
+    treadmill, so this one shows all of it and is built to be exhaustible.
+
+    Two things made that set so large:
+
+    RANK WITHIN THE POSITION, not the slate. Compared across all positions a
+    quarterback's ceiling beats nearly every receiver's — the positional median
+    ceiling here was 26.2 for QBs against 17.2 for WRs — so "above median
+    upside" quietly meant "is a quarterback", and nine of those twenty-four
+    were. The old code capped the list at two per position, which treated the
+    symptom. Ranked among quarterbacks, the same names are unremarkable.
+
+    OWNERSHIP AS A RANK GAP, not a level. Ownership is heavily skewed: the
+    positional median is 3.5% for QBs and 0.9% for RBs, because half of every
+    position is a body nobody rosters. "Below median ownership" therefore
+    excluded every real player and admitted the entire tail. What actually
+    marks a leverage play is ownership that is LOW FOR ITS OWN UPSIDE — so the
+    test is the gap between where a player ranks on ceiling and where he ranks
+    on ownership within his position.
     """
     playable = [p for p in players
                 if p.proj >= min_proj and p.salary > 0 and p.dk_id in mat]
@@ -186,29 +219,29 @@ def _pool_gaps_note(players, mat, sims, min_proj):
     for p in playable:
         row = sorted(mat[p.dk_id])
         p90[p.dk_id] = row[min(int(sims * 0.90), sims - 1)]
-    ups = sorted(p90.values())
-    owns = sorted(p.ownership for p in playable)
-    up_bar = ups[len(ups) // 2]            # above-median upside
-    own_bar = owns[len(owns) // 2]         # below-median ownership
+
+    # Percentiles within the position, falling back to the whole board where a
+    # position is too thin to rank against itself — a showdown board can carry
+    # three quarterbacks, and a percentile over three players is noise.
+    pct = {}
+    for pos in {p.pos for p in playable}:
+        grp = [p for p in playable if p.pos == pos]
+        ref = grp if len(grp) >= GAP_MIN_POS else playable
+        ups = sorted(p90[q.dk_id] for q in ref)
+        owns = sorted(q.ownership for q in ref)
+        for p in grp:
+            pct[p.dk_id] = (
+                sum(1 for x in ups if x < p90[p.dk_id]) / len(ups),
+                sum(1 for x in owns if x < p.ownership) / len(owns))
+
     # A defence is never a gap in the sheet — the sheet is not expected to hold
     # one, so suggesting it is noise on every main slate build.
     gaps = [p for p in playable
             if not p.in_pool and not p.core and not p.is_dst
-            and p90[p.dk_id] >= up_bar and p.ownership <= own_bar]
-    # Highest ceiling first, not best points-per-dollar. Per-dollar hands back a
-    # list of cheap quarterbacks every time — QB scoring is high relative to QB
-    # salary — and you roster one of those, so four of them is not a list you
-    # can act on. Capped at two per position for the same reason.
-    gaps.sort(key=lambda p: -p90[p.dk_id])
-    out, per = [], {}
-    for p in gaps:
-        if per.get(p.pos, 0) >= 2:
-            continue
-        per[p.pos] = per.get(p.pos, 0) + 1
-        out.append((p, p90[p.dk_id]))
-        if len(out) >= 4:
-            break
-    return out
+            and pct[p.dk_id][0] >= GAP_MIN_CEILING
+            and pct[p.dk_id][0] - pct[p.dk_id][1] >= GAP_MIN_LEVERAGE]
+    gaps.sort(key=lambda p: -(pct[p.dk_id][0] - pct[p.dk_id][1]))
+    return [(p, p90[p.dk_id], pct[p.dk_id]) for p in gaps]
 
 
 def _stack_targets_valid(raw):
@@ -812,20 +845,27 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
     if pool_names:
         gaps = _pool_gaps_note(players, mat, sims, _f(o.get("minProj"), M.MIN_PROJ))
         if gaps:
-            say("good", "Pool gaps — high-upside, low-owned plays NOT on your "
-                        "sheet: "
-                        + "; ".join(f"{p.name.strip()} ({up:.0f} ceiling, "
+            shown = gaps[:GAP_SHOW]
+            say("good", f"Pool gaps — {len(gaps)} play"
+                        + ("" if len(gaps) == 1 else "s")
+                        + " with real upside for the position and ownership "
+                          "that lags it, NOT on your sheet"
+                        + (f" (showing {len(shown)})" if len(gaps) > len(shown) else "")
+                        + ": "
+                        + "; ".join(f"{p.name.strip()} ({up:.0f} ceiling, top "
+                                    f"{100 - cp * 100:.0f}% of {p.pos}s, "
                                     f"{p.ownership:.0f}% owned, ${p.salary:,})"
-                                    for p, up in gaps)
-                        + ". Your sharp may have passed on purpose. If not, add "
-                          "them — each drops off this list once you do.")
+                                    for p, up, (cp, _op) in shown)
+                        + ". That is the whole list, not a sample — add them and "
+                          "it empties. Your sharp may have passed on purpose.")
         elif fmt == "showdown":
             say("info", "No pool gaps. On a ~30 player showdown board ownership "
                         "tracks upside closely, so there is rarely anything both "
                         "strong and unowned — expect this line most nights.")
         else:
-            say("info", "No pool gaps: nothing outside your sheet combines "
-                        "above-median upside with below-median ownership.")
+            say("info", "No pool gaps: nothing off your sheet has real upside "
+                        "for its position at ownership that lags it. The list "
+                        "is empty, not truncated.")
 
     n_mine = n if split <= 0 else min(split, n)
     n_vendor = n - n_mine
