@@ -1128,6 +1128,29 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
         else:
             say("good", f"Every core is in at least {want} of {len(chosen)} "
                         f"entries.")
+        # Did the floor actually DO anything? A core the ranking already wanted
+        # past its floor is a setting that changed nothing, and that is invisible
+        # otherwise — the build reports a guarantee met either way. It matters
+        # because the two cases mean opposite things: a core sitting near its
+        # floor is being carried by the guarantee, and one far above it would
+        # have been there regardless. Measured on the real slate, naming the
+        # chalk as cores moved one of three players; naming three the ranking
+        # disliked moved all three by 20 to 30 entries each.
+        held = []
+        for p in players:
+            if not p.core or p.proj <= 0:
+                continue
+            got = sum(1 for lu in chosen if p.dk_id in lu.ids())
+            held.append((p.name.strip(), got,
+                         "carried by the floor" if got <= want * 1.25
+                         else "wanted anyway"))
+        if held:
+            say("info", "What the cores changed: "
+                        + "; ".join(f"{nm} in {got} of {len(chosen)} — {why}"
+                                    for nm, got, why in held)
+                        + ". A core only moves a player the ranking would "
+                          "otherwise under-use; on one it already likes, the "
+                          "setting is close to inert.")
 
 
     # Belt and braces. Every path above dedupes, but this is the one error that
