@@ -431,9 +431,15 @@ function picker(kind, inputId, menuId, chipsId){
     chips.querySelectorAll('.chip').forEach(c =>
       c.addEventListener('click', () => { sel[kind].delete(c.dataset.n); draw(); }));
     if(kind === 'pool'){
-      const n = sel.pool.size + sel.core.size;
+      // Show the arithmetic, not just the total. Adding a player as a core
+      // removes his chip from this box and still counts him in the pool, so a
+      // 60-name sheet with 3 cores shows 57 chips above the number 60 — which
+      // reads as three names that failed to paste.
+      const np = sel.pool.size, nc = sel.core.size, n = np + nc;
       $('#poolnote').textContent = n
-        ? n + ' player(s) in the pool (cores included automatically)'
+        ? (nc ? n + ' player(s) in the pool — ' + np + ' here + ' + nc
+                + ' core(s), which count as in-pool and show as chips below'
+              : n + ' player(s) in the pool')
         : 'Leave empty to build from the whole slate.';
     }
   };
