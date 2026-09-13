@@ -454,6 +454,46 @@ def _check_upload(entries, lineups, slots, fmt, dk):
     return bad
 
 
+def _contests(entries):
+    """Split a DK export into its contests, in file order. -> [(id, name, [entry])]
+
+    One download can carry entries for several contests at once — a 150-max at
+    $0.50 and a 150-entry qualifier at a cent come back in the same file, 300
+    rows deep. Reading it as one flat list filled the first contest and left the
+    second empty, which looks exactly like a working build right up until the
+    second contest locks with no lineups in it.
+    """
+    order, byid = [], {}
+    for e in entries:
+        cid = e.get("contest_id") or ""
+        if cid not in byid:
+            byid[cid] = []
+            order.append(cid)
+        byid[cid].append(e)
+    return [(cid, (byid[cid][0].get("contest") or "").strip(), byid[cid])
+            for cid in order]
+
+
+def _assign(contests, lineups):
+    """Give every contest its own copy of the ranked lineups. -> [(entry, lineup)]
+
+    The same 150 lineups go into each contest rather than being split between
+    them. They are separate contests with separate prize pools, so a lineup
+    entered in both is two independent shots at first place, not a duplicate —
+    the duplication that costs you is two of YOUR entries on one roster inside
+    ONE contest, and that is still forbidden.
+
+    A contest smaller than the build takes the top of the ranking rather than a
+    slice of it: if a qualifier holds fifteen entries, it gets the fifteen best
+    lineups, not fifteen arbitrary ones.
+    """
+    pairs = []
+    for _cid, _name, ents in contests:
+        for e, lu in zip(ents, lineups):
+            pairs.append((e, lu))
+    return pairs
+
+
 def _dk_rows(entries, lineups, header, fmt):
     lines = [header]
     for e, lu in zip(entries, lineups):
@@ -720,13 +760,23 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
     # 150 against a 40-entry DK file used to write the first 40 and drop the
     # rest, which quietly deleted the whole vendor arm and left the diagnostics
     # describing 150 lineups that were never uploaded.
-    if dk and dk.get("entries") and len(dk["entries"]) < n:
-        say("warn", f"The DK file has {len(dk['entries'])} entries, so building "
-                    f"{len(dk['entries'])} lineups, not {n}. Enter or reserve "
+    # Size against the BIGGEST contest in the file, not the total entry count.
+    # One download can hold several contests, and each gets its own copy of the
+    # ranked lineups — so 150 lineups fill a 150-entry contest and a 150-entry
+    # qualifier alike, and summing them to 300 would build twice what is needed.
+    biggest = 0
+    if dk and dk.get("entries"):
+        per = {}
+        for e in dk["entries"]:
+            per[e.get("contest_id") or ""] = per.get(e.get("contest_id") or "", 0) + 1
+        biggest = max(per.values())
+    if biggest and biggest < n:
+        say("warn", f"The biggest contest in the DK file holds {biggest} entries, "
+                    f"so building {biggest} lineups, not {n}. Enter or reserve "
                     f"the rest on DK and download again if you want more.")
         if split > 0:      # keep the A/B ratio you asked for, at the new size
-            split = max(1, round(split * len(dk["entries"]) / n))
-        n = len(dk["entries"])
+            split = max(1, round(split * biggest / n))
+        n = biggest
         split = min(split, n) if split > 0 else split
 
     mat = E.simulate(players, sims=sims, seed=seed)
@@ -1182,17 +1232,30 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                         f"upload file written. Is that the entries export for "
                         f"this slate?")
         else:
-            ents = dk["entries"][:len(chosen)]
-            if len(ents) < len(chosen):
-                say("warn", f"The DK file has {len(ents)} entries but {len(chosen)} "
-                            f"lineups were built — writing the first {len(ents)}.")
-                chosen = chosen[:len(ents)]
+            contests = _contests(dk["entries"])
+            if len(contests) > 1:
+                say("info", f"{len(contests)} contests in this DK file. The same "
+                            f"{len(chosen)} lineups go into each — separate prize "
+                            f"pools, so a lineup entered in both is two shots at "
+                            f"first place, not a duplicate: "
+                            + "; ".join(f"{len(ents)} entries in {name or cid}"
+                                        for cid, name, ents in contests))
+            short = [(name or cid, len(ents)) for cid, name, ents in contests
+                     if len(ents) > len(chosen)]
+            for name, have in short:
+                say("warn", f"{name} has {have} entries but only {len(chosen)} "
+                            f"lineups were built — {have - len(chosen)} of its "
+                            f"entries will have no lineup. Raise the lineup count "
+                            f"to fill it.")
+            pairs = _assign(contests, chosen)
+            ents = [e for e, _lu in pairs]
+            rostered = [lu for _e, lu in pairs]
             header = ("Entry ID,Contest Name,Contest ID,Entry Fee,"
                       + ",".join(dk["slots"]))
             # Check the finished rows before there is a file to download. A file
             # DK bounces is worse than no file: you find out at lock, with no
             # time to rebuild.
-            problems = _check_upload(ents, chosen, dk["slots"], fmt, dk)
+            problems = _check_upload(ents, rostered, dk["slots"], fmt, dk)
             if problems:
                 say("warn", f"NOT writing an upload file — {len(problems)} "
                             f"problem(s) DraftKings would reject:")
@@ -1204,11 +1267,16 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                             "this means a player's name differs between the "
                             "Stokastic and DK exports — re-download both.")
             else:
-                dk_csv = _dk_rows(ents, chosen, header, fmt)
-                say("good", f"Upload file checked: {len(ents)} rows, every player "
-                            f"ID valid for its slot, no repeats, none over the cap.")
+                dk_csv = _dk_rows(ents, rostered, header, fmt)
+                say("good", f"Upload file checked: {len(ents)} rows"
+                            + (f" across {len(contests)} contests"
+                               if len(contests) > 1 else "")
+                            + f", every player ID valid for its slot, no repeats, "
+                              f"none over the cap.")
                 meta["entry_ids"] = [e["entry_id"] for e in ents]
                 meta["contest_id"] = ents[0]["contest_id"]
+                meta["contests"] = [{"id": cid, "name": name, "entries": len(es)}
+                                    for cid, name, es in contests]
     else:
         say("warn", "No DK entries file, so there is no uploadable CSV — that "
                     "export is the only source of your Entry IDs and DK's "
