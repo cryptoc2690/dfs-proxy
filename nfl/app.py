@@ -935,8 +935,36 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                                     f"{100 - cp * 100:.0f}% of {p.pos}s, "
                                     f"{p.ownership:.0f}% owned, ${p.salary:,})"
                                     for p, up, (cp, _op) in shown)
-                        + ". That is the whole list, not a sample — add them and "
-                          "it empties. Your sharp may have passed on purpose.")
+                        + ". That is the whole list, not a sample. Adding a name "
+                          "to the POOL only makes him legal, and on a contested "
+                          "seat that can mean no lineups at all — make him a "
+                          "CORE to guarantee he is used. Your sharp may have "
+                          "passed on purpose.")
+            # A suggestion you can act on and get nothing from is worse than no
+            # suggestion. The main slate stacks every quarterback with at least
+            # one of his own pass-catchers, so a suggested QB whose team has
+            # none on the sheet cannot be built AT ALL — measured, Josh Allen
+            # reached 0 of 4,000 candidates as the only Buffalo name on a
+            # 61-player sheet. Say what else has to be added, and name the best
+            # partner rather than leaving it to be worked out.
+            if fmt == "classic":
+                for p, _up, _pc in shown:
+                    if not p.is_qb:
+                        continue
+                    mates = [q for q in players
+                             if q.team == p.team and q.pos in ("WR", "TE")
+                             and q.proj >= _f(o.get("minProj"), M.MIN_PROJ)]
+                    if any(q.in_pool or q.core for q in mates):
+                        continue
+                    best = sorted(mates, key=lambda q: -q.proj)[:3]
+                    say("warn", f"{p.name.strip()} cannot be built from this "
+                                f"sheet — every QB is stacked with a pass-catcher "
+                                f"from his own team and no {p.team} receiver or "
+                                f"tight end is on it. Add one with him or he "
+                                f"lands in zero lineups"
+                                + (": " + ", ".join(f"{q.name.strip()} "
+                                                    f"({q.proj:.0f} proj, ${q.salary:,})"
+                                                    for q in best) if best else "."))
         elif fmt == "showdown":
             say("info", "No pool gaps. On a ~30 player showdown board ownership "
                         "tracks upside closely, so there is rarely anything both "
