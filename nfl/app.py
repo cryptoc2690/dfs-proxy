@@ -300,7 +300,9 @@ def _exposure(chosen, fmt):
     for lu in chosen:
         for p in lu.players:
             rec = ply.setdefault(p.dk_id, {"name": p.name, "pos": p.pos,
-                                           "team": p.team, "n": 0, "own": p.ownership})
+                                           "team": p.team, "n": 0, "own": p.ownership,
+                                           "core": p.core,
+                                           "off": _off_sheet(p, fmt)})
             rec["n"] += 1
             teams.setdefault(p.team, {"team": p.team, "slots": 0, "lineups": 0})["slots"] += 1
         for t in {p.team for p in lu.players}:
@@ -313,6 +315,7 @@ def _exposure(chosen, fmt):
         out.append({"name": r["name"], "pos": r["pos"], "team": r["team"],
                     "n": r["n"], "pct": round(pct, 1),
                     "own": round(r["own"], 1),
+                    "core": r["core"], "off": r["off"],
                     # The leverage number: how far above or below the field you
                     # are on this player, in points of ownership.
                     "edge": round(pct - r["own"], 1),
@@ -562,6 +565,19 @@ def _log(lineups, meta):
         print(f"  ! log write failed: {exc}", file=sys.stderr)
 
 
+def _off_sheet(p, fmt):
+    """Is this player an addition the sharp did not ask for? -> bool
+
+    Not the same as `not in_pool`. On a main slate the DST seat is exempt from
+    the sheet by design (see classic.pool_exempt), so every defence reads as
+    off-pool and would swamp the marker: on a 150-lineup build that is 150
+    slots of noise hiding the hundred that are real additions.
+    """
+    if p is None or p.in_pool or p.core:
+        return False
+    return not (fmt == "classic" and C.pool_exempt(p))
+
+
 def _lineup_payload(lu, fmt="showdown"):
     if fmt == "showdown":
         players = [{"slot": "CPT" if i == 0 else "FLEX", "name": p.name.strip(),
@@ -569,14 +585,15 @@ def _lineup_payload(lu, fmt="showdown"):
                     "salary": p.cpt_salary() if i == 0 else p.salary,
                     "proj": round(p.proj * (1.5 if i == 0 else 1.0), 1),
                     "own": round(p.cpt_own if i == 0 else p.ownership, 1),
-                    "core": p.core, "pool": p.in_pool}
+                    "core": p.core, "pool": p.in_pool,
+                    "off": _off_sheet(p, fmt)}
                    for i, p in enumerate([lu.cpt] + lu.flex)]
         shape = lu.split_label()
     else:
         players = [{"slot": s, "name": p.name.strip(), "team": p.team,
                     "pos": p.pos, "salary": p.salary, "proj": round(p.proj, 1),
                     "own": round(p.ownership, 1), "core": p.core,
-                    "pool": p.in_pool}
+                    "pool": p.in_pool, "off": _off_sheet(p, fmt)}
                    for s, p in zip(C.ROSTER, lu.slots()) if p is not None]
         shape = lu.stack_label()
     return {
@@ -1150,6 +1167,27 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                 + ("" if 10 <= pct <= 90 else
                    " That is a large bet on one direction; the ownership lean "
                    "setting is what moves it."))
+    # Who the builder reached for outside the sheet, by name. Allowing "1 off
+    # pool per lineup" is a decision you cannot check without this: the setting
+    # says how many, never who, and the answer is spread across 150 rows.
+    if pool_names:
+        added = {}
+        for lu in chosen:
+            for p in lu.players:
+                if _off_sheet(p, fmt):
+                    added[p.name.strip()] = added.get(p.name.strip(), 0) + 1
+        if added:
+            top = sorted(added.items(), key=lambda kv: -kv[1])
+            say("info", f"Off-sheet additions: {sum(added.values())} roster slots "
+                        f"across {len(chosen)} lineups, {len(added)} different "
+                        f"players"
+                        + (" (the DST seat is exempt and not counted)"
+                           if fmt == "classic" else "")
+                        + ". Most used: "
+                        + "; ".join(f"{k} in {v}" for k, v in top[:10])
+                        + (f"; and {len(top) - 10} more" if len(top) > 10 else "")
+                        + ". They are marked in the lineup and exposure tables.")
+
     field_sides = _field_sides(field, fmt) if field else None
     if field_sides:
         ours = {}
@@ -1696,9 +1734,11 @@ def main(argv=None):
               f"(top {len(top)} of {len(exp['players'])}):")
         print(f"    {'player':<22}{'pos':<5}{'team':<6}{'yours':>7}{'field':>7}"
               f"{'edge':>7}")
+        print("    (* = not on your sheet, ^ = a core)")
         for p in top:
             cpt = f"  ({p['cpt']} as CPT)" if p.get("cpt") else ""
-            print(f"    {p['name'][:21]:<22}{p['pos']:<5}{p['team']:<6}"
+            mark = "*" if p.get("off") else ("^" if p.get("core") else " ")
+            print(f"  {mark} {p['name'][:21]:<22}{p['pos']:<5}{p['team']:<6}"
                   f"{p['pct']:>6.1f}%{p['own']:>6.1f}%{p['edge']:>+7.1f}{cpt}")
     if res.get("dkCsv"):
         with open(a.out, "w", encoding="utf-8") as fh:

@@ -90,6 +90,11 @@ INDEX_HTML = r"""<!doctype html>
   .exp .tblwrap{max-height:46vh}
   td.num.up{color:#6ee7a0}
   td.num.down{color:#ff9f9f}
+  /* Not on the sharp's sheet. Dotted underline rather than a colour swap so it
+     reads as an annotation on the name and not as a score. */
+  .offsheet{color:var(--accent2);border-bottom:1px dotted var(--accent2)}
+  .offsheet::after{content:'*'}
+  .coremark{font-weight:650}
   .spin{display:inline-block;width:13px;height:13px;margin-right:7px;
     border:2px solid rgba(255,255,255,.3);border-top-color:#06101f;border-radius:50%;
     animation:sp .7s linear infinite;vertical-align:-2px}
@@ -662,7 +667,10 @@ function exposureHtml(e, n, sd){
      + '</tr></thead><tbody>';
   e.players.forEach(p => {
     const cls = p.edge >= 10 ? 'up' : (p.edge <= -10 ? 'down' : '');
-    h += '<tr><td>'+esc(p.name)+'</td><td>'+esc(p.pos)+'</td>'
+    const nm = p.off ? '<span class="offsheet" title="not on your sheet">'+esc(p.name)+'</span>'
+             : p.core ? '<span class="coremark" title="core">'+esc(p.name)+'</span>'
+             : esc(p.name);
+    h += '<tr><td>'+nm+'</td><td>'+esc(p.pos)+'</td>'
       + '<td>'+esc(p.team)+'</td>'
       + '<td class="num">'+p.pct.toFixed(0)+'%</td>'
       + '<td class="num">'+p.own.toFixed(0)+'%</td>'
@@ -702,13 +710,24 @@ function render(d){
      + (s.headLabel || 'captains') + ': '
      + s.topCaptains.map(c => esc(c[0])+' '+c[1]).join(' · ') + '</div>';
   h += exposureHtml(d.exposure, s.n, sd);
+  const nOff = (d.exposure && d.exposure.players || []).filter(p => p.off).length;
+  if(nOff) h += '<div class="picknote" style="margin:8px 0"><span class="offsheet">'
+    + 'name</span> = not on your sheet (' + nOff + ' of them below)'
+    + (sd ? '' : '; the DST seat is exempt and never marked')
+    + ' · <span class="coremark">name</span> = a core.</div>';
   h += '<div class="tblwrap"><table><thead><tr>'
      + '<th>#</th><th>arm</th><th>' + (sd ? 'split' : 'stack') + '</th>'
      + (sd ? '<th>captain</th><th>flex</th>' : '<th>QB</th><th>rest of the roster</th>')
      + '<th class="num">salary</th><th class="num">proj</th>'
      + '<th class="num">own</th><th class="num">win%</th><th class="num">dupes</th>'
      + '</tr></thead><tbody>';
-  const who = p => esc(p.name)
+  // Off-sheet names are flagged where you read the roster, not only in a note
+  // above it. A core is flagged too, in the other direction, so the two kinds
+  // of deliberate pick are told apart at a glance.
+  const who = p => (p.off ? '<span class="offsheet" title="not on your sheet">'
+                            + esc(p.name) + '</span>'
+                          : (p.core ? '<span class="coremark" title="core">'
+                                      + esc(p.name) + '</span>' : esc(p.name)))
     + ' <span style="color:var(--muted)">('+p.team+(sd?'':' '+p.slot)+')</span>';
   d.lineups.forEach((l,i) => {
     // Showdown leads with the captain; classic leads with the QB, because that
