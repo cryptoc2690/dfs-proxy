@@ -348,6 +348,23 @@ def win_rate(scores, bar, sims):
 
 
 # --- duplication ---------------------------------------------------------
+# Share of a real contest's entries that the vendor's rosters actually account
+# for. Scaling by contest_size / modelled assumes their ~10,000 rosters are a
+# census of the field; they are a sample of it, and the entries that played
+# something the vendor never generated must not be charged to the rosters it
+# did. Measured against two finished showdown contests by matching every vendor
+# roster to the standings:
+#
+#   SF @ LAR   177,958 entries, 26,392 distinct rosters   vendor covered 75.4%
+#   DAL @ NYG  118,418 entries, 20,500 distinct rosters   vendor covered 76.9%
+#
+# and the resulting over-charge is flat across the range — predicted/actual came
+# in at 0.72 and 0.73 for every band above d = 5, on fields 60,000 apart with
+# scale factors of 3.57 and 2.38. Without this, a roster 54 opponents held was
+# charged as though 86 did.
+FIELD_COVERAGE = 0.76
+
+
 def field_size(field_entries):
     """How many opponent entries the vendor pool actually models.
 

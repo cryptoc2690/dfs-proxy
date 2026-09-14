@@ -836,7 +836,11 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
     fill_pct = _f(o.get("fillPct"), 100.0)
     fill_pct = min(max(fill_pct, 1.0), 100.0)
     expect = _i(o.get("expectEntries"), 0) or int(round(field_cap * fill_pct / 100.0))
-    dupe_scale = max(1.0, expect / modelled) if (modelled and expect) else 1.0
+    # Only the share of the field the vendor's rosters actually account for is
+    # theirs to be charged for. See M.FIELD_COVERAGE.
+    cover = getattr(M, "FIELD_COVERAGE", 1.0)
+    dupe_scale = (max(1.0, expect * cover / modelled)
+                  if (modelled and expect) else 1.0)
 
     if bar:
         srt = sorted(bar)
@@ -847,8 +851,11 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
         if expect:
             say("info", f"Scaling duplication ×{dupe_scale:.2f} for a "
                         f"{expect:,}-entry field"
-                        + (f" ({fill_pct:.0f}% of {field_cap:,})."
-                           if field_cap and fill_pct < 100 else "."))
+                        + (f" ({fill_pct:.0f}% of {field_cap:,})"
+                           if field_cap and fill_pct < 100 else "")
+                        + (f", after allowing for the {100 * cover:.0f}% of "
+                           f"entries their rosters actually cover." if cover < 1.0
+                           else "."))
         elif modelled:
             say("warn", f"No contest size given, so duplication is measured "
                         f"against the {modelled:,.0f} opponents the vendor "

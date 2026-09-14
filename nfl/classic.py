@@ -75,6 +75,20 @@ MIN_PROJ = 3.0            # a roster spot needs some path to a useful score
 MAX_LEFTOVER = 2000
 CORE_BOOST = 3.0          # construction weight on a core, so its floor is reachable
 
+# Share of a real contest's entries the vendor's rosters account for; see the
+# note on engine.FIELD_COVERAGE. Left at 1.0 here, which preserves the existing
+# behaviour, because the measurement on a finished main slate says the classic
+# duplication model has a far larger problem than a coverage factor can fix.
+# Contest 193028212: 415,601 entries across 383,126 DISTINCT rosters, 96.4% of
+# them played exactly once, and every one of the top 100 finishers was unique
+# (median 0 duplicates, max 1). The vendor's 9,860 rosters matched 79 of those
+# 415,601 entries — 0.0%. Scaling 10,000 modelled entries up to the full field
+# gives x41.56, which is why every vendor lineup reports ~41.6 duplicates when
+# the true figure at the top of a main slate is zero. Changing that number is a
+# behaviour change on its own evidence, so it waits for its own measurement
+# rather than riding along with the showdown fix.
+FIELD_COVERAGE = 1.0
+
 # The score to beat. Ranking on "beat the field's single BEST score" was too
 # coarse a target. Measured on the real main slate with 3,000 fixed candidates:
 # 764-828 of them cleared it in ZERO simulations, the rest took one of only
