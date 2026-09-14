@@ -957,11 +957,12 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                     if any(q.in_pool or q.core for q in mates):
                         continue
                     best = sorted(mates, key=lambda q: -q.proj)[:3]
-                    say("warn", f"{p.name.strip()} cannot be built from this "
-                                f"sheet — every QB is stacked with a pass-catcher "
-                                f"from his own team and no {p.team} receiver or "
-                                f"tight end is on it. Add one with him or he "
-                                f"lands in zero lineups"
+                    say("info", f"{p.name.strip()} has no {p.team} receiver or "
+                                f"tight end on this sheet, so he will be built "
+                                f"UNSTACKED and ranked on merit like any other "
+                                f"lineup. That is taken as your call, not an "
+                                f"oversight — add a pass-catcher if you wanted "
+                                f"him stacked"
                                 + (": " + ", ".join(f"{q.name.strip()} "
                                                     f"({q.proj:.0f} proj, ${q.salary:,})"
                                                     for q in best) if best else "."))

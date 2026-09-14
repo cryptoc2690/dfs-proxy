@@ -334,7 +334,16 @@ def build_candidates(players, n, *, rng=None, stack_targets=None,
             salary += p.salary
             if not (p.in_pool or p.core or licensed or pool_exempt(p)):
                 off += 1
-        if got < min(want, MIN_STACK):
+        # A quarterback the pool allows but cannot stack is built UNSTACKED
+        # rather than not at all. The sheet is the instruction: naming a QB and
+        # none of his receivers is a decision, and MIN_STACK was overriding it
+        # silently — Josh Allen reached 0 of 4,000 candidates as the only
+        # Buffalo name on a 61-player sheet while the build reported no legal
+        # lineup and gave no reason. This does not loosen the stack rule for
+        # anyone else: the floor still applies to every QB who HAS a legal
+        # partner, so a stack is skipped only where one was never possible.
+        need_stack = MIN_STACK if mates else 0
+        if got < min(want, need_stack):
             continue
 
         # Optional bring-back from the QB's opponent.
