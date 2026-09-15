@@ -108,6 +108,25 @@ class Lineup:
         captain is a genuinely different lineup, and DK treats it as one."""
         return (self.cpt.dk_id, frozenset(p.dk_id for p in self.flex))
 
+    def overlap_ids(self) -> list[str]:
+        """Ids for the near-duplicate test, with the CAPTAIN SLOT marked.
+
+        key() above says captain variants are different lineups. The overlap
+        rule then compared plain dk_ids, under which the same six players with
+        two different captains look 6-of-6 identical — so it deleted every
+        variant after the first. That is not a near-duplicate filter in
+        showdown, it is a ban on the format's main axis of diversity: an
+        independent audit of four contests found captain variants of one
+        six-player set are what pays, and that the roster which won DEN @ KC
+        was the SECOND captain variant of its six and was dropped for exactly
+        this reason. Marking the captain's slot makes two variants of one six
+        overlap at four, which is what they actually share.
+
+        Player exposure still counts plain dk_id — a player is the same player
+        whichever slot he fills.
+        """
+        return [self.cpt.dk_id + "#cpt"] + [p.dk_id for p in self.flex]
+
     def team_split(self) -> tuple[int, int]:
         """(bigger side, smaller side), e.g. (5, 1) or (3, 3)."""
         counts: dict[str, int] = {}

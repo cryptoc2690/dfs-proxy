@@ -601,6 +601,9 @@ def _lineup_payload(lu, fmt="showdown"):
         "salary": lu.salary, "leftover": SALARY_CAP - lu.salary,
         "proj": lu.proj, "ownSum": lu.own_sum,
         "win": round(lu.metrics.get("win", 0.0), 5),
+        # The vendor arm ranks on Top 10%, not Win% — show the number that
+        # actually drove the ordering rather than one that did not.
+        "top10": round(lu.metrics.get("top10", 0.0), 5),
         "dupes": round(lu.metrics.get("dupes", 0.0), 2),
         "players": players,
     }
@@ -836,11 +839,10 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
     fill_pct = _f(o.get("fillPct"), 100.0)
     fill_pct = min(max(fill_pct, 1.0), 100.0)
     expect = _i(o.get("expectEntries"), 0) or int(round(field_cap * fill_pct / 100.0))
-    # Only the share of the field the vendor's rosters actually account for is
-    # theirs to be charged for. See M.FIELD_COVERAGE.
-    cover = getattr(M, "FIELD_COVERAGE", 1.0)
-    dupe_scale = (max(1.0, expect * cover / modelled)
-                  if (modelled and expect) else 1.0)
+    # Raw ratio of real entries to modelled ones. How many opponents actually
+    # hold a given roster is no longer a flat share of this — see
+    # M.expected_copies, which fits the floor and the slope separately.
+    dupe_scale = max(1.0, expect / modelled) if (modelled and expect) else 1.0
 
     if bar:
         srt = sorted(bar)
@@ -853,9 +855,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                         f"{expect:,}-entry field"
                         + (f" ({fill_pct:.0f}% of {field_cap:,})"
                            if field_cap and fill_pct < 100 else "")
-                        + (f", after allowing for the {100 * cover:.0f}% of "
-                           f"entries their rosters actually cover." if cover < 1.0
-                           else "."))
+                        + ".")
         elif modelled:
             say("warn", f"No contest size given, so duplication is measured "
                         f"against the {modelled:,.0f} opponents the vendor "

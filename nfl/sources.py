@@ -223,8 +223,8 @@ def read_field(text, by_id=None, by_name=None):
     every lineup would resolve to one flex player instead of five, and the whole
     field model would come back empty without erroring.
 
-    Each entry: {"cpt": Player|None, "flex": [Player], "dupes", "win"} — the
-    two vendor columns the build actually uses. Slots resolve against the
+    Each entry: {"cpt", "flex", "dupes", "win", "top10"} — the vendor columns
+    the build actually uses. Slots resolve against the
     projections pool, so the field and our own builds share Player objects.
     """
     rows = list(csv.reader(io.StringIO((text or "").lstrip("﻿"))))
@@ -264,7 +264,8 @@ def read_field(text, by_id=None, by_name=None):
                     return i
         return None
 
-    ci = {"dupes": col("dupes"), "win": col("win%", "win")}
+    ci = {"dupes": col("dupes"), "win": col("win%", "win"),
+          "top10": col("top10%", "top10")}
 
     by_id = by_id or {}
     by_name = by_name or {}
@@ -290,10 +291,12 @@ def read_field(text, by_id=None, by_name=None):
             continue
         entries.append({
             "cpt": cpt, "flex": flex,
-            # Their Win% is a PERCENT ("0.065%"); ours is a fraction. Stored
-            # raw, the two were compared and displayed as if they were the same
-            # unit, making the vendor arm look 100x better than it is.
+            # Win% and Top 10% are both PERCENTS ("0.065%"); ours are
+            # fractions. Stored raw, the two were compared and displayed as if
+            # they were the same unit, making the vendor arm look 100x better
+            # than it is.
             "dupes": num(r, "dupes"), "win": num(r, "win") / 100.0,
+            "top10": num(r, "top10") / 100.0,
         })
     return entries, {"format": "showdown" if cpt_i is not None else "classic",
                      "rows": len(rows) - 1, "parsed": len(entries),

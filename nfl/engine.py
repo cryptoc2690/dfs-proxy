@@ -348,21 +348,61 @@ def win_rate(scores, bar, sims):
 
 
 # --- duplication ---------------------------------------------------------
-# Share of a real contest's entries that the vendor's rosters actually account
-# for. Scaling by contest_size / modelled assumes their ~10,000 rosters are a
-# census of the field; they are a sample of it, and the entries that played
-# something the vendor never generated must not be charged to the rosters it
-# did. Measured against two finished showdown contests by matching every vendor
-# roster to the standings:
+# How many real entries hold a roster the vendor lists with Dupes = D.
 #
-#   SF @ LAR   177,958 entries, 26,392 distinct rosters   vendor covered 75.4%
-#   DAL @ NYG  118,418 entries, 20,500 distinct rosters   vendor covered 76.9%
+# This was a single coverage factor of 0.76 on (1 + D), fitted to the fact that
+# the vendor's rosters account for only ~75% of a real field. That factor is
+# right on average and wrong where the tool actually picks: split by band
+# against four finished contests, it left D >= 1 well calibrated but pushed the
+# D = 0 band from 1.2-1.3 to 1.6-1.7 actual/predicted — and D = 0 rows are
+# almost the entire selected set. It fixed the rows we never take and degraded
+# the ones we do.
 #
-# and the resulting over-charge is flat across the range — predicted/actual came
-# in at 0.72 and 0.73 for every band above d = 5, on fields 60,000 apart with
-# scale factors of 3.57 and 2.38. Without this, a roster 54 opponents held was
-# charged as though 86 did.
-FIELD_COVERAGE = 0.76
+# The straight-line fit below is the same measurement done properly, fitted
+# leave-one-slate-out over the four contests: a vendor singleton is really held
+# by about 1.2-1.3 x scale opponents, not 0.76 x scale, because the field
+# reaches rosters the vendor never generated. A is the floor every roster
+# carries, B is what each modelled copy is worth.
+DUPE_A = 0.45            # intercept, in units of scale
+DUPE_B = 0.67            # slope per (1 + Dupes)
+
+# How hard duplication is charged: score = signal / (1 + d) ** DUPE_EXP.
+#
+# This was 1.0, which implies the payout is "first place, split n ways". It is
+# not. A roster 206 entries share does not collect first prize divided by 206,
+# it collects the whole block of ranks 1-206 divided by 206 — and ranks 1-100
+# alone hold ~44% of the pool. The DEN @ KC winner was held by 206 entries and
+# still paid about $200 each; at exponent 1.0 the tool scored it as 83x worse
+# than a singleton of equal win probability and ranked it 3,539th.
+#
+# Priced on realised prize money across four finished contests, exponent 1.0
+# returned $168 per 600 entries against $497 at 0.25, and the ordering held with
+# the largest slate removed. 0.25 is kept rather than 0 because it costs nothing
+# in money ($556 vs $561 for no penalty at all) while halving the duplication
+# the portfolio carries — the same expected return with less of the portfolio
+# riding on one roster.
+DUPE_EXP = 0.25
+
+# Which vendor column the re-ranked arm sorts on.
+#
+# Win% is unusable as a ranking key: on the four contests measured it takes only
+# 45-67 distinct values across ~10,000 rows and 39-43% of those rows are exactly
+# zero, so nearly half the pool is one undifferentiated tie and the order inside
+# it is whatever the sort happened to do. The roster that won SF @ LAR sat in
+# that tie at Win% = 0.000, which is why it ranked 9,105th of 9,567 — the signal
+# could not see it, and no duplication rule was involved.
+#
+# Top 10% is the same vendor simulation read at a resolvable threshold: 227-313
+# distinct values, 4-6% zeros. It correlates with the vendor's ROI (+0.78) and
+# Cash% (+0.72) far more than with projection (+0.49) or ownership (+0.41), so
+# it is a tail estimate rather than a projection proxy. Ranked on realised
+# money it returned $561 per 600 entries against $168 for Win%.
+VENDOR_SIGNAL = "top10"
+
+
+def expected_copies(dupes, scale):
+    """Opponents expected to hold a roster the vendor lists at this Dupes count."""
+    return max(0.0, scale * (DUPE_A + DUPE_B * (1.0 + (dupes or 0.0))))
 
 
 def field_size(field_entries):
@@ -409,7 +449,8 @@ def estimated_dupes(lu, idx, scale=1.0, field_n=0.0):
     """
     hit = idx.get(lu.key())
     if hit is not None:
-        return max(0.0, hit * scale)
+        # hit is (1 + Dupes) summed over the vendor rows holding this roster.
+        return max(0.0, scale * (DUPE_A + DUPE_B * hit))
     # Not in the vendor pool at all -> the field is unlikely to build it. Use a
     # small ownership-driven estimate rather than claiming zero, against the
     # size of the field actually modelled rather than a hard-coded number.
@@ -441,8 +482,15 @@ OWN_LEAN = 0.35          # POSITIVE = lean toward the field. See below.
 CAPTAIN_CAP = 0.28       # share of entries any one captain may hold. A rail:
                          # on the slates built so far the top captain sat at
                          # 12-13 of 75, so it has never bound.
-PLAYER_CAP = 0.65        # showdown must run high: 6 of ~68 players fill a lineup.
-                         # This one DOES bind (49 of 75 on the real slate).
+PLAYER_CAP = 0.85        # showdown must run high: 6 of ~68 players fill a lineup.
+                         # Was 0.65, which bound hard and cost real money: an
+                         # audit of four finished contests priced 0.65 at -$58
+                         # per 600 entries against 0.85, and meeting it forced
+                         # the selector 9,337 rows deep into the ranking where
+                         # 0.85 is satisfied inside 277. It still binds — it is
+                         # the only brake on the two-player concentration the
+                         # same audit flagged (60-65% of entries on each of the
+                         # two chalkiest players), so it is loosened, not cut.
 MAX_OVERLAP = 4          # of 6, before two entries are near-duplicates
 
 # The most of your SIDE-TAKING entries that may sit on one team. The split
@@ -710,7 +758,7 @@ def rank(lineups, mat, bar, sims, dupes_idx, own_lean=OWN_LEAN, dupe_scale=1.0,
             "mean": round(sum(sc) / sims, 2),
             "ownLean": round(1 + own_lean * (2 * on - 1), 3),
         })
-        lu.metrics["score"] = (w / (1.0 + d)) * lu.metrics["ownLean"]
+        lu.metrics["score"] = (w / (1.0 + d) ** DUPE_EXP) * lu.metrics["ownLean"]
     lineups.sort(key=lambda l: -l.metrics["score"])
     return lineups
 
@@ -770,7 +818,7 @@ def select(lineups, n, *, captain_cap=CAPTAIN_CAP,
     chosen, sets = [], []
     cross = max_overlap + 1
     cpt_ct, ply_used, split_ct, side_used, split_side_ct = {}, {}, {}, {}, {}
-    prior_sets = [set(lu.ids()) for lu in prior]
+    prior_sets = [set(lu.overlap_ids()) for lu in prior]
     for lu in prior:
         cpt_ct[lu.cpt.dk_id] = cpt_ct.get(lu.cpt.dk_id, 0) + 1
         s = lu.major_side()
@@ -781,7 +829,7 @@ def select(lineups, n, *, captain_cap=CAPTAIN_CAP,
 
     def take(lu):
         chosen.append(lu)
-        sets.append(set(lu.ids()))
+        sets.append(set(lu.overlap_ids()))
         cpt_ct[lu.cpt.dk_id] = cpt_ct.get(lu.cpt.dk_id, 0) + 1
         split_ct[lu.split_label()] = split_ct.get(lu.split_label(), 0) + 1
         s = lu.major_side()
@@ -802,7 +850,7 @@ def select(lineups, n, *, captain_cap=CAPTAIN_CAP,
                 return False
         if any(ply_used.get(i, 0) >= ply_ct for i in lu.ids()):
             return False
-        s = set(lu.ids())
+        s = set(lu.overlap_ids())
         if any(len(s & t) > cross for t in prior_sets):
             return False
         return not any(len(s & t) > overlap for t in sets)
@@ -923,9 +971,11 @@ def vendor_arm(field_entries, n, *, captain_cap=CAPTAIN_CAP,
         lu = Lineup(cpt, flex, source="vendor")
         # Every field copy is an opponent once we enter it — the same count
         # our own arm is charged (see estimated_dupes), not one fewer.
-        d = (1.0 + (e.get("dupes") or 0.0)) * dupe_scale
-        lu.metrics = {"win": e.get("win", 0.0), "dupes": d,
-                      "score": (e.get("win", 0.0)) / (1.0 + d)}
+        d = expected_copies(e.get("dupes"), dupe_scale)
+        signal = e.get(VENDOR_SIGNAL, 0.0) or 0.0
+        lu.metrics = {"win": e.get("win", 0.0), "top10": e.get("top10", 0.0),
+                      "dupes": d,
+                      "score": signal / (1.0 + d) ** DUPE_EXP}
         cands.append(lu)
     cands.sort(key=lambda l: -l.metrics["score"])
     # The side cap matters MORE here than in our own arm. These lineups are a

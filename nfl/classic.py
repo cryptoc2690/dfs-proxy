@@ -75,10 +75,10 @@ MIN_PROJ = 3.0            # a roster spot needs some path to a useful score
 MAX_LEFTOVER = 2000
 CORE_BOOST = 3.0          # construction weight on a core, so its floor is reachable
 
-# Share of a real contest's entries the vendor's rosters account for; see the
-# note on engine.FIELD_COVERAGE. Left at 1.0 here, which preserves the existing
-# behaviour, because the measurement on a finished main slate says the classic
-# duplication model has a far larger problem than a coverage factor can fix.
+# Share of a real contest's entries the vendor's rosters account for. Left at
+# 1.0 here, which preserves the existing behaviour, because the measurement on a
+# finished main slate says the classic duplication model has a far larger
+# problem than any coverage factor can fix.
 # Contest 193028212: 415,601 entries across 383,126 DISTINCT rosters, 96.4% of
 # them played exactly once, and every one of the top 100 finishers was unique
 # (median 0 duplicates, max 1). The vendor's 9,860 rosters matched 79 of those

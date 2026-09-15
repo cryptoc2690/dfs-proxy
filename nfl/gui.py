@@ -725,7 +725,9 @@ function render(d){
      + '<th>#</th><th>arm</th><th>' + (sd ? 'split' : 'stack') + '</th>'
      + (sd ? '<th>captain</th><th>flex</th>' : '<th>QB</th><th>rest of the roster</th>')
      + '<th class="num">salary</th><th class="num">proj</th>'
-     + '<th class="num">own</th><th class="num">win%</th><th class="num">dupes</th>'
+     + '<th class="num">own</th><th class="num">win%</th>'
+     + (sd ? '<th class="num" title="the vendor column the re-ranked arm sorts on">top10%</th>' : '')
+     + '<th class="num">dupes</th>'
      + '</tr></thead><tbody>';
   // Off-sheet names are flagged where you read the roster, not only in a note
   // above it. A core is flagged too, in the other direction, so the two kinds
@@ -750,6 +752,7 @@ function render(d){
       + '<td class="num">'+l.proj.toFixed(1)+'</td>'
       + '<td class="num">'+l.ownSum.toFixed(0)+'</td>'
       + '<td class="num">'+(l.win*100).toFixed(2)+'</td>'
+      + (sd ? '<td class="num">'+(l.top10 ? (l.top10*100).toFixed(2) : '—')+'</td>' : '')
       + '<td class="num">'+l.dupes.toFixed(1)+'</td></tr>';
   });
   h += '</tbody></table></div>';
