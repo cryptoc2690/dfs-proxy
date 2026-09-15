@@ -92,6 +92,17 @@ INDEX_HTML = r"""<!doctype html>
   .boardsum{grid-column:1/-1;border-top:1px solid var(--line);padding-top:14px;margin-top:2px}
   .bgroup{display:flex;align-items:baseline;gap:9px;margin-bottom:7px;flex-wrap:wrap}
   .bgroup>b{font-size:11.5px;color:var(--muted);font-weight:600;min-width:74px}
+  .pick{position:relative}
+  .menu{position:absolute;z-index:40;left:0;right:0;top:100%;margin-top:3px;
+    background:var(--panel2);border:1px solid var(--line);border-radius:9px;
+    max-height:230px;overflow:auto;display:none;box-shadow:0 8px 22px rgba(0,0,0,.5)}
+  .menu.open{display:block}
+  .menu div{padding:7px 10px;cursor:pointer;font-size:13px;display:flex;gap:8px}
+  .menu div:hover,.menu div.sel{background:#2a3340}
+  .menu .mt{color:var(--muted);font-size:11.5px;margin-left:auto;
+    font-variant-numeric:tabular-nums}
+  .picknote{font-size:11.5px;color:var(--muted);margin-top:5px}
+  .chip.core{border-color:var(--accent2);color:#8fc9ff}
   .chips{display:flex;flex-wrap:wrap;gap:6px}
   .chip{background:var(--chip);border:1px solid var(--line);border-radius:15px;padding:3px 10px;
     font-size:12.5px;cursor:pointer;user-select:none}
@@ -231,6 +242,28 @@ INDEX_HTML = r"""<!doctype html>
 <details id="setwrap">
   <summary id="setsum">Settings</summary>
   <div class="setgrid">
+    <div>
+      <label>Sharp's pool</label>
+      <div class="pick">
+        <input id="poolin" type="text" autocomplete="off" disabled
+               placeholder="type a name, or paste the whole list">
+        <div class="menu" id="poolmenu"></div>
+      </div>
+      <div class="chips" id="poolchips"></div>
+      <div class="picknote" id="poolnote"></div>
+
+      <label>Sharp's cores</label>
+      <div class="pick">
+        <input id="corein" type="text" autocomplete="off" disabled
+               placeholder="type a name, or paste a list">
+        <div class="menu" id="coremenu"></div>
+      </div>
+      <div class="chips" id="corechips"></div>
+      <div class="picknote">Paste straight from the sharp's sheet — commas, tabs
+        or one per line all work. Cores count as in-pool automatically. Click a
+        chip to remove it. The ★ ◆ marks on the slate rows still work and stay
+        in step with these boxes.</div>
+    </div>
     <div>
       <label>Lineups</label><input id="n" type="number" value="20" min="1" max="150">
       <label>Min game stack</label><input id="stack" type="number" value="2" min="1" max="4">
@@ -435,9 +468,10 @@ wireSlot('#f-slate','#file', f=>readFile(f, txt=>{
   markSlot('#f-slate', f.name, 'loaded '+stamp()+' — click to replace');
   $('#f-slate').classList.remove('req');
   $('#go').disabled=false; $('#slatefilter').disabled=false;
+  $('#poolin').disabled=false; $('#corein').disabled=false;
   $('#slateempty').style.display='none';
   if(swapText) $('#swapgo').disabled=false;
-  renderSlate(); railMeta();
+  renderSlate(); railMeta(); drawPicks();
 }));
 wireSlot('#f-min','#minfile', f=>readFile(f, txt=>{
   minText=txt; markSlot('#f-min', f.name, 'loaded '+stamp()); railMeta();
@@ -451,12 +485,140 @@ wireSlot('#f-con','#confile', f=>readFile(f, txt=>{
   conText=txt; markSlot('#f-con', f.name, 'loaded '+stamp()); railMeta();
 }));
 
+// ---- pool & cores: type, or paste the sharp's whole sheet ----
+// The slate-row toggles stay, but they were the ONLY way in, and a 60-name
+// sheet one click at a time was the slowest step in the build. These boxes
+// write to the same sel sets, so the two stay in step in both directions.
+function esc(s){
+  return String(s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function norm(s){
+  return (s || '').normalize('NFKD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().replace(/[.'\-,]/g, '').replace(/\s+/g, ' ').trim()
+    .replace(/\b(jr|sr|ii|iii|iv|v)\b/g, '').trim();
+}
+function picker(kind, inputId, menuId, chipsId){
+  const input = $('#'+inputId), menu = $('#'+menuId), chips = $('#'+chipsId);
+  let hits = [], cur = -1;
+
+  const draw = () => {
+    chips.innerHTML = [...sel[kind]].map(n =>
+      '<span class="chip'+(kind==='core'?' core':'')+'" data-n="'+esc(n)+'">'
+      + esc(n)+'</span>').join('');
+    chips.querySelectorAll('.chip').forEach(c =>
+      c.addEventListener('click', () => {
+        sel[kind].delete(c.dataset.n); draw(); renderSlate(); paintDock();
+      }));
+    if(kind === 'pool'){
+      // Show the arithmetic, not just the total. A core is in the pool without
+      // being a chip in this box, so a 40-name sheet with 3 cores shows 37
+      // chips above the number 40 — which reads as three names that failed.
+      const np = sel.pool.size, nc = sel.core.size, n = np + nc;
+      $('#poolnote').textContent = n
+        ? (nc ? n + ' player(s) in the pool — ' + np + ' here + ' + nc
+                + ' core(s), which count as in-pool and show as chips below'
+              : n + ' player(s) in the pool')
+        : 'Leave empty to build from the whole slate.';
+    }
+  };
+
+  const close = () => { menu.classList.remove('open'); cur = -1; };
+
+  const show = () => {
+    const q = input.value.trim().toLowerCase();
+    if(!q){ close(); return; }
+    // A match on the start of a NAME outranks one buried mid-word, so "wil"
+    // offers Wilson before Ogwumike. Within a tier, higher projection first.
+    const score = p => {
+      const n = p.name.toLowerCase();
+      if(n.startsWith(q)) return 0;
+      if(n.split(/[\s.'-]+/).some(w => w.startsWith(q))) return 1;
+      return 2;
+    };
+    hits = slate.slice().sort((a,b) => b.proj - a.proj)
+      .filter(p => p.name.toLowerCase().includes(q) && !sel[kind].has(p.name))
+      .map((p,i) => [score(p), i, p])
+      .sort((a,b) => a[0]-b[0] || a[1]-b[1])
+      .slice(0, 8).map(x => x[2]);
+    if(!hits.length){ close(); return; }
+    menu.innerHTML = hits.map((p,i) =>
+      '<div data-i="'+i+'"'+(i===cur?' class="sel"':'')+'>'
+      + '<span>'+esc(p.name)+'</span>'
+      + '<span class="mt">'+esc(p.team)+' '+esc(p.pos)+' · $'+p.salary.toLocaleString()
+      + ' · '+p.proj.toFixed(1)+'</span></div>').join('');
+    menu.classList.add('open');
+    menu.querySelectorAll('div[data-i]').forEach(d =>
+      d.addEventListener('mousedown', e => {
+        e.preventDefault(); add(hits[+d.dataset.i]);
+      }));
+  };
+
+  const add = p => {
+    if(!p) return;
+    sel[kind].add(p.name);
+    if(kind === 'core') sel.pool.delete(p.name);   // a core is already in-pool
+    input.value = ''; close(); draw();
+    if(kind === 'core') pickers.pool.draw();
+    renderSlate(); paintDock();
+    input.focus();
+  };
+
+  // Paste the sheet in one go. The sharp's list arrives as a screenshot and
+  // gets retyped, so anything with a separator is treated as a list; a single
+  // name still goes through the normal autocomplete.
+  const paste = txt => {
+    const parts = txt.split(/[,;\t\n\r]+/).map(s => s.trim()).filter(s => s.length > 1);
+    if(parts.length < 2) return false;
+    const hit = [], miss = [];
+    parts.forEach(q => {
+      const k = norm(q);
+      if(!k) return;
+      const p = slate.find(x => norm(x.name) === k)
+             || slate.find(x => norm(x.name).startsWith(k));
+      if(p){ sel[kind].add(p.name); if(kind === 'core') sel.pool.delete(p.name); hit.push(p.name); }
+      else miss.push(q);
+    });
+    input.value = ''; close(); draw();
+    if(kind === 'core') pickers.pool.draw();
+    renderSlate(); paintDock();
+    showNote('Added ' + hit.length + ' to ' + kind
+      + (miss.length ? ' — no match for: ' + miss.join(', ') : ''));
+    return true;
+  };
+  input.addEventListener('paste', e => {
+    const txt = (e.clipboardData || window.clipboardData).getData('text') || '';
+    if(paste(txt)) e.preventDefault();
+  });
+
+  input.addEventListener('input', () => { cur = -1; show(); });
+  input.addEventListener('focus', show);
+  input.addEventListener('blur', () => setTimeout(close, 120));
+  input.addEventListener('keydown', e => {
+    if(e.key === 'ArrowDown' || e.key === 'ArrowUp'){
+      e.preventDefault();
+      if(!hits.length) return;
+      cur = (cur + (e.key === 'ArrowDown' ? 1 : hits.length - 1)) % hits.length;
+      show();
+    } else if(e.key === 'Enter'){
+      e.preventDefault(); add(hits[cur >= 0 ? cur : 0]);
+    } else if(e.key === 'Escape'){ close(); }
+  });
+  draw();
+  return {draw};
+}
+const pickers = {};
+pickers.pool = picker('pool', 'poolin', 'poolmenu', 'poolchips');
+pickers.core = picker('core', 'corein', 'coremenu', 'corechips');
+const drawPicks = () => { pickers.pool.draw(); pickers.core.draw(); };
+
 // ---- the slate table: every lever is one click on the row ----
 let slateSort='proj', slateDir=-1;
 const MARKS=[['core','★','core'],['pool','◆','pool'],['remove','🚫','rm'],['cap','🔒','cap']];
 function toggleMark(kind, name){
   if(sel[kind].has(name)) sel[kind].delete(name); else sel[kind].add(name);
-  renderSlate(); paintDock();
+  if(kind === 'core') sel.pool.delete(name);   // a core is already in-pool
+  renderSlate(); paintDock(); drawPicks();
 }
 function paintDock(){
   $('#d-core').textContent=sel.core.size; $('#d-pool').textContent=sel.pool.size;
@@ -476,7 +638,7 @@ function paintBoard(){
         [...sel[k]].map(n=>'<span class="chip" data-k="'+k+'" data-n="'+
           n.replace(/"/g,'&quot;')+'">'+n+'</span>').join('')+'</div></div>').join('');
   $('#boardsum').querySelectorAll('.chip').forEach(c=>c.onclick=()=>{
-    sel[c.dataset.k].delete(c.dataset.n); renderSlate(); paintDock();
+    sel[c.dataset.k].delete(c.dataset.n); renderSlate(); paintDock(); drawPicks();
   });
 }
 function renderSlate(){

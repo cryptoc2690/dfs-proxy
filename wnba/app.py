@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -341,13 +342,45 @@ def _apply_removals(players, remove_names):
             for p, vac in removed]
 
 
+_NAME_SKIP = {"g", "f", "c", "gf", "fc", "pg", "sg", "sf", "pf", "pos",
+              "position", "team", "salary", "sal", "name", "player", "core",
+              "opp", "opponent", "proj", "projection", "own", "ownership",
+              "value", "notes", "x"}
+
+
+def _name_cell(cell):
+    """Does this field look like a player's name? -> bool"""
+    cell = (cell or "").strip().strip('"').strip()
+    if len(cell) < 2:
+        return False
+    low = cell.lower()
+    if low in _NAME_SKIP or low.startswith(("name", "player")):
+        return False
+    if not any(ch.isalpha() for ch in cell):
+        return False            # 6900, $5,300, 12.4 — a salary or a projection
+    if len(cell) <= 3 and cell.isupper():
+        return False            # LVA, NYL, SEA — a team code, never a person
+    return True
+
+
 def _parse_names(text):
-    """Turn pasted lines (possibly with extra spreadsheet columns) into a set of
-    normalized player names. Takes the first tab/comma field of each line."""
+    """Turn a pasted sheet into a set of normalized player names.
+
+    Accepts both shapes without being told which:
+
+      one per line          a column dragged out of a spreadsheet, possibly
+                            with POS / SALARY / TEAM columns alongside it
+      comma separated       a list typed or pasted on a single line
+
+    This used to take the first tab/comma field of each line, which is right
+    for the first and silently wrong for the second — a forty-name list pasted
+    on one line came back holding one name and said nothing about it. So split
+    on every separator and decide field by field whether the thing is
+    name-shaped, which handles either layout and a mix of the two.
+    """
     names = set()
-    for line in (text or "").splitlines():
-        cell = line.split("\t")[0].split(",")[0].strip()
-        if len(cell) > 1:
+    for cell in re.split(r"[\t,;\r\n]", text or ""):
+        if _name_cell(cell):
             names.add(normalize_name(cell))
     return names
 
