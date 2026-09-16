@@ -27,12 +27,14 @@ be built with no results history.
 
 `split` runs the A/B: that many entries from our builder, the rest re-ranked out
 of the vendor pool, tagged in the log. Splitting inside ONE contest is the only
-design that removes slate luck from the comparison.
+design that removes slate luck from the comparison. `--split 0` is an all-vendor
+set and omitting the flag is all-ours; both ends are reachable on purpose.
 """
 
 from __future__ import annotations
 
 import argparse
+import bisect
 import json
 import os
 import sys
@@ -47,7 +49,8 @@ import engine as E
 from dk import SALARY_CAP, normalize_name
 from gui import INDEX_HTML
 from sources import (read_dk_entries, read_field, read_linestar,
-                     read_projections, read_sharp)
+                     read_projections, read_sharp, read_standings,
+                     payout_ladder, _roster_key)
 
 LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "logs", "nfl_builds.jsonl")
@@ -55,8 +58,20 @@ PORT = int(os.environ.get("PORT", "8010"))
 
 
 def _read(path):
+    """Read a dropped file. Standings arrive zipped from DK often enough that
+    unzipping by hand was a step people skipped, so a .zip with one CSV in it
+    is read straight through."""
     if not path:
         return ""
+    if str(path).lower().endswith(".zip"):
+        import zipfile
+        with zipfile.ZipFile(path) as z:
+            inner = [n for n in z.namelist()
+                     if n.lower().endswith(".csv") and "__MACOSX" not in n]
+            if not inner:
+                return ""
+            with z.open(inner[0]) as fh:
+                return fh.read().decode("utf-8-sig", errors="replace")
     with open(path, encoding="utf-8-sig", errors="replace") as fh:
         return fh.read()
 
@@ -775,7 +790,14 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
     sims = _i(o.get("sims"), 4000)
     seed = _i(o.get("seed"), 0)
     n = max(1, _i(o.get("n"), 150))
-    split = _i(o.get("split"), 0)
+    # How many of the N come from OUR builder; the rest are re-ranked out of the
+    # vendor pool. None/absent means "no preference" and falls back to all-ours,
+    # which is what 0 used to mean. 0 now means what it reads as: ZERO from our
+    # builder, i.e. an all-vendor set. That set was previously inexpressible —
+    # the closest you could type was 1 — which mattered because comparing the
+    # two arms at full size is the main experiment this tool exists to run.
+    split = o.get("split")
+    split = None if split in (None, "") else _i(split, 0)
     # Never build more lineups than there are entries to carry them. Building
     # 150 against a 40-entry DK file used to write the first 40 and drop the
     # rest, which quietly deleted the whole vendor arm and left the diagnostics
@@ -794,10 +816,11 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
         say("warn", f"The biggest contest in the DK file holds {biggest} entries, "
                     f"so building {biggest} lineups, not {n}. Enter or reserve "
                     f"the rest on DK and download again if you want more.")
-        if split > 0:      # keep the A/B ratio you asked for, at the new size
+        if split:          # keep the A/B ratio you asked for, at the new size
             split = max(1, round(split * biggest / n))
         n = biggest
-        split = min(split, n) if split > 0 else split
+        if split is not None:
+            split = min(split, n)
 
     mat = E.simulate(players, sims=sims, seed=seed)
     bar, sampled = M.field_bar(field, mat, sims, seed=seed) if field else (None, 0)
@@ -982,9 +1005,15 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                         "for its position at ownership that lags it. The list "
                         "is empty, not truncated.")
 
-    n_mine = n if split <= 0 else min(split, n)
+    n_mine = n if split is None else max(0, min(split, n))
     n_vendor = n - n_mine
     chosen = []
+    # Core floors are computed inside the our-arm branch but consumed by the
+    # vendor arm and the top-up below, so they have to exist even when that
+    # branch never runs. n_mine = 0 (an all-vendor set) is reachable now that
+    # --split 0 means what it reads as, and it used to raise here.
+    floors = floors_total = None
+    core_ids = [p.dk_id for p in players if p.core and p.proj > 0]
     shape_targets = E.SPLIT_TARGETS
     if fmt == "classic":
         shape_targets = _stack_targets(o.get("stackTargets"))
@@ -1040,8 +1069,6 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
             cands.sort(key=lambda l: -l.metrics["score"])
         # Every core the sharp set is guaranteed a share of the entries, so a
         # conviction pick cannot be squeezed out by the tool's own preferences.
-        core_ids = [p.dk_id for p in players if p.core and p.proj > 0]
-        floors = floors_total = None
         if core_ids:
             per = max(1, -(-n_mine // (len(core_ids) + 1)))
             floors = {cid: per for cid in core_ids}
@@ -1418,7 +1445,19 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
     }
 
 
-def grade(results_text, slate=None):
+def _res(v):
+    """The result columns, appended to a stats line only when they exist."""
+    if "best_rank" not in v:
+        return ""
+    out = f"  | best #{v['best_rank']:,}  med {v['median_pct']:.0f}%"
+    if "cash_rate" in v:
+        out += f"  cash {v['cashed']}/{v['n']} ({v['cash_rate']:.0f}%)  ${v['paid']:,.0f}"
+    if "copies_median" in v:
+        out += f"  copies {v['copies_median']}/{v['copies_max']}"
+    return out
+
+
+def grade(results_text, slate=None, standings_text="", ladder=None):
     """Score already-logged entries against actual results. -> report dict
 
     This is the only way any of the construction beliefs in this tool ever get
@@ -1431,7 +1470,25 @@ def grade(results_text, slate=None):
     The LineStar export doubles as the results file: its Scored column is actual
     fantasy points, which nothing in the Stokastic exports carries after the
     fact.
+
+    Pass `standings_text` (DK's contest standings export) and the whole thing
+    becomes evidence instead of a points summary. Raw points cannot settle
+    anything: an entry is good or bad only relative to the field that beat it,
+    and the field is in that file and nowhere else. With it, every entry gets
+    its real RANK, its percentile, whether it CASHED, and how many opponents
+    actually held the same roster — which is the only measurement of
+    duplication that is not a model of itself. `ladder`, if supplied, turns
+    rank into dollars; without it everything except the money columns still
+    works.
     """
+    stand, srep, spts = [], {}, []
+    if (standings_text or "").strip():
+        stand, srep = read_standings(standings_text)
+        if srep.get("error"):
+            return {"error": f"Standings file: {srep['error']}"}
+        spts = srep.get("points_sorted") or []
+    by_entry = {e["entry_id"]: e for e in stand if e.get("entry_id")}
+
     res, rep = read_linestar(results_text or "")
     if rep.get("error"):
         return {"error": f"Results file: {rep['error']}"}
@@ -1485,28 +1542,78 @@ def grade(results_text, slate=None):
             mult = 1.5 if (fmt == "showdown" and i == 0) else 1.0
             total += scored[key] * mult
         if ok:
-            graded.append({"score": round(total, 2), "source": r.get("source"),
-                           "shape": (r.get("split") or r.get("shape") or "?").split(" |")[0],
-                           "side": _logged_side(ps),
-                           "entry_id": r.get("entry_id"),
-                           "head": r.get("captain") or r.get("qb"),
-                           "proj": r.get("proj"), "own": r.get("own_sum")})
+            g = {"score": round(total, 2), "source": r.get("source"),
+                 "shape": (r.get("split") or r.get("shape") or "?").split(" |")[0],
+                 "side": _logged_side(ps),
+                 "entry_id": r.get("entry_id"),
+                 "head": r.get("captain") or r.get("qb"),
+                 "proj": r.get("proj"), "own": r.get("own_sum")}
+            # Where it actually finished. Joined on DK's own Entry ID where the
+            # log has one; otherwise placed by score against the field, which
+            # is exact for rank even when the entry cannot be identified.
+            hit = by_entry.get(str(r.get("entry_id") or "").strip())
+            if hit is not None:
+                g["rank"] = hit["rank"]
+            elif spts:
+                g["rank"] = max(1, len(spts) - bisect.bisect_left(spts, total))
+            if g.get("rank") and spts:
+                g["pct"] = round(100.0 * g["rank"] / len(spts), 2)
+                if ladder:
+                    g["paid"] = round(ladder(g["rank"]), 2)
+                    g["cashed"] = g["paid"] > 0
+                key = _roster_key([normalize_name(p["name"]) for p in ps])
+                g["copies"] = (srep.get("copies") or {}).get(key, 0)
+            graded.append(g)
     if not graded:
         return {"error": "Could not score any logged entry — the results file "
                          "does not cover these players."}
     graded.sort(key=lambda g: -g["score"])
     def stat(rowset):
         sc = sorted((g["score"] for g in rowset), reverse=True)
-        return {"n": len(sc), "best": sc[0], "median": sc[len(sc) // 2],
-                "mean": round(sum(sc) / len(sc), 2)}
-    arms, shapes, byside = {}, {}, {}
+        out = {"n": len(sc), "best": sc[0], "median": sc[len(sc) // 2],
+               "mean": round(sum(sc) / len(sc), 2)}
+        # Points describe the entry; rank, cash and dollars describe the
+        # RESULT. Only the second set can settle whether a build rule works,
+        # so they lead wherever the standings were supplied.
+        rk = [g["rank"] for g in rowset if g.get("rank")]
+        if rk:
+            rk.sort()
+            out["best_rank"] = rk[0]
+            out["median_pct"] = round(100.0 * rk[len(rk) // 2] / len(spts), 1)
+        cash = [g for g in rowset if g.get("cashed") is not None]
+        if cash:
+            n_cash = sum(1 for g in cash if g["cashed"])
+            out["cashed"] = n_cash
+            out["cash_rate"] = round(100.0 * n_cash / len(cash), 1)
+            out["paid"] = round(sum(g.get("paid") or 0.0 for g in cash), 2)
+        cp = [g["copies"] for g in rowset if g.get("copies") is not None]
+        if cp:
+            cp.sort()
+            out["copies_median"] = cp[len(cp) // 2]
+            out["copies_max"] = cp[-1]
+        return out
+    arms, shapes, byside, byhead = {}, {}, {}, {}
     for g in graded:
         arms.setdefault(g["source"] or "?", []).append(g)
         shapes.setdefault(g["shape"] or "?", []).append(g)
         byside.setdefault(g["side"] or "even", []).append(g)
+        byhead.setdefault(g["head"] or "?", []).append(g)
+    contest = {}
+    if spts:
+        contest = {"field": len(spts), "winning_score": spts[-1],
+                   "median_score": spts[len(spts) // 2],
+                   "matched": sum(1 for g in graded if g.get("rank"))}
+        if ladder:
+            contest["returned"] = round(sum(g.get("paid") or 0.0 for g in graded), 2)
+            contest["cashed"] = sum(1 for g in graded if g.get("cashed"))
     return {
         "slate": rows[0].get("slate"), "format": fmt,
         "entries": len(graded),
+        "contest": contest or None,
+        # Captain is the highest-variance decision in showdown and the one the
+        # tool has least evidence on, so it gets its own cut once results exist.
+        "by_head": ({k: stat(v) for k, v in sorted(byhead.items())}
+                    if spts else None),
         "unscored": sorted(unknown)[:8],
         "overall": stat(graded),
         "by_arm": {k: stat(v) for k, v in sorted(arms.items())},
@@ -1688,10 +1795,22 @@ def main(argv=None):
     ap.add_argument("--grade", help="LineStar POST-GAME export: score the last "
                                     "logged build against actual results")
     ap.add_argument("--grade-slate", help="which logged slate to grade (YYYY-MM-DD)")
+    ap.add_argument("--standings", help="DK contest standings export (.csv or "
+                                        ".zip). Turns --grade from a points "
+                                        "summary into rank, cash and real "
+                                        "duplication per entry.")
+    ap.add_argument("--prize-pool", type=float, help="contest prize pool, for "
+                                                     "dollars per entry")
+    ap.add_argument("--first-prize", type=float, help="first place payout")
+    ap.add_argument("--paid-from", type=int, help="first rank paying the minimum")
+    ap.add_argument("--paid-to", type=int, help="last paid rank")
     ap.add_argument("--pool", help="sharp's pool, one name per line")
     ap.add_argument("--cores", help="sharp's cores, one name per line")
     ap.add_argument("--n", type=int, default=150)
-    ap.add_argument("--split", type=int, default=0)
+    ap.add_argument("--split", type=int, default=None,
+                    help="entries from OUR builder; the rest come from the "
+                         "re-ranked vendor pool. 0 = all vendor, N = all ours, "
+                         "omitted = all ours.")
     ap.add_argument("--sims", type=int, default=4000)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--format", choices=("showdown", "classic"), default=None,
@@ -1719,32 +1838,64 @@ def main(argv=None):
     a = ap.parse_args(argv)
 
     if a.grade:
-        g = grade(_read(a.grade), a.grade_slate)
+        lad = payout_ladder(a.prize_pool, a.first_prize, a.paid_from, a.paid_to)
+        if a.standings and not lad:
+            print("note: standings given without the four payout anchors "
+                  "(--prize-pool --first-prize --paid-from --paid-to), so rank "
+                  "and duplication are reported but dollars are not.")
+        g = grade(_read(a.grade), a.grade_slate, _read(a.standings), lad)
         if g.get("error"):
             print(f"ERROR: {g['error']}")
             return 2
         print(f"\n== {g['entries']} entries graded — {g['slate']} ({g['format']}) ==")
+        c = g.get("contest")
+        if c:
+            line = (f"  contest   {c['field']:,} entries   winner "
+                    f"{c['winning_score']:.1f}   median {c['median_score']:.1f}"
+                    f"   matched {c['matched']} of {g['entries']}")
+            if "returned" in c:
+                fees = g["entries"] * 0.5
+                line += (f"\n  money     ${c['returned']:,.2f} back on ${fees:,.2f} "
+                         f"of entries ({c['returned']/fees:.2f}x)   "
+                         f"{c['cashed']} cashed")
+            print(line)
         o = g["overall"]
         print(f"  overall   best {o['best']:.1f}  median {o['median']:.1f}  "
-              f"mean {o['mean']:.1f}")
+              f"mean {o['mean']:.1f}" + _res(o))
         print("  by arm:")
         for k, v in g["by_arm"].items():
             print(f"    {k:<8} n={v['n']:<4} best {v['best']:6.1f}  "
-                  f"median {v['median']:6.1f}  mean {v['mean']:6.1f}")
+                  f"median {v['median']:6.1f}  mean {v['mean']:6.1f}" + _res(v))
         print("  by shape:")
         for k, v in sorted(g["by_shape"].items(), key=lambda kv: -kv[1]["best"]):
             print(f"    {k:<12} n={v['n']:<4} best {v['best']:6.1f}  "
-                  f"median {v['median']:6.1f}  mean {v['mean']:6.1f}")
+                  f"median {v['median']:6.1f}  mean {v['mean']:6.1f}" + _res(v))
         if len(g.get("by_side") or {}) > 1:
             fs = g.get("field_sides") or {}
             print("  by side (the field's share of entries in brackets):")
             for k, v in sorted(g["by_side"].items(), key=lambda kv: -kv[1]["best"]):
                 shr = f"[field {fs[k]:.0f}%]" if k in fs else ""
                 print(f"    {k:<8} n={v['n']:<4} best {v['best']:6.1f}  "
-                      f"median {v['median']:6.1f}  mean {v['mean']:6.1f}  {shr}")
+                      f"median {v['median']:6.1f}  mean {v['mean']:6.1f}  {shr}"
+                      + _res(v))
+        if g.get("by_head"):
+            print("  by captain (top 8 by best finish):")
+            top8 = sorted(g["by_head"].items(),
+                          key=lambda kv: kv[1].get("best_rank", 1 << 30))[:8]
+            for k, v in top8:
+                print(f"    {str(k)[:20]:<21} n={v['n']:<4} best "
+                      f"{v['best']:6.1f}" + _res(v))
         print("  best five:")
         for t in g["top"]:
-            print(f"    {t['score']:6.1f}  {str(t['shape']):<12} {t['head']}")
+            extra = ""
+            if t.get("rank"):
+                extra = f"  #{t['rank']:,} ({t.get('pct', 0):.2f}%)"
+                if t.get("copies"):
+                    extra += f"  held by {t['copies']}"
+                if t.get("paid") is not None:
+                    extra += f"  ${t['paid']:,.2f}"
+            print(f"    {t['score']:6.1f}  {str(t['shape']):<12} "
+                  f"{str(t['head'])[:20]:<21}{extra}")
         if g.get("vegas"):
             print(f"  vegas: {g['vegas']}")
         if g.get("unscored"):

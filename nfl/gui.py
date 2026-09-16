@@ -156,13 +156,15 @@ INDEX_HTML = r"""<!doctype html>
         the two without slate luck. Both arms are tagged in the log.</div>
     </div>
     <div>
-      <label>Ownership lean — <span id="lv">+0.35</span>
+      <label>Ownership lean — <span id="lv">+0.00</span>
         <span style="color:var(--muted)">(&minus; fade · + consensus)</span></label>
-      <input id="lean" type="range" min="-100" max="100" value="35" style="width:100%">
-      <div class="hint sd-only">Positive by default. At matched projection, chalk
-        wins in showdown — the small player pool means fading it is just playing
-        worse players. This is the opposite of the right setting on a main
-        slate.</div>
+      <input id="lean" type="range" min="-100" max="100" value="0" style="width:100%">
+      <div class="hint sd-only">Off by default. It used to sit at +0.35, on the
+        vendor's simulation saying chalk wins showdown at matched projection.
+        Four finished contests do not support it in either direction: ownership
+        and the projection residual correlate at -0.08, and +0.35 / 0 / -0.35
+        returned the same money inside seed noise. The lever still works — move
+        it if your read says so — but nothing is steering it by default.</div>
       <div class="hint cl-only">Neutral by default. Ranking on win probability
         already fades chalk hard on a main slate all by itself — these lineups
         land near the field's 12th ownership percentile with this at zero — so
@@ -306,7 +308,7 @@ function setFmt(f, fromDk){
   // 2.0, and sending the showdown value for both meant the page and the
   // command line built different main-slate lineups from the same files.
   if(!leanTouched){
-    $('#lean').value = f === 'showdown' ? 35 : 0;
+    $('#lean').value = 0;        // both formats: see engine.OWN_LEAN
     $('#lean').dispatchEvent(new Event('input'));
   }
   if(!minTouched){

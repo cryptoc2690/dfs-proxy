@@ -478,7 +478,29 @@ MAX_LEFTOVER = 5000
 # is the showdown equivalent of the WNBA minutes gate: a floor on whether a slot
 # has any path to a useful score, not a grade on how good the player is.
 MIN_PROJ = 2.0
-OWN_LEAN = 0.35          # POSITIVE = lean toward the field. See below.
+# Ownership lean: OFF. Positive leans toward the field, negative fades it.
+#
+# This was +0.35 on the strength of the vendor's own simulation saying chalk
+# wins showdown by +106% at matched projection. Against four finished contests
+# that does not hold up, from three directions:
+#
+#   - Player level, 231 player-games projected at 5 or more: the correlation
+#     between ownership and the standardised projection residual is -0.08. By
+#     ownership tercile the mean residual runs -0.06 / +0.18 / -0.25, so if
+#     anything the chalk UNDER-shot its projection.
+#   - Lineup level, at matched projection in the real fields: high-ownership
+#     terciles took the top 1% on two slates and lost it on the other two.
+#   - End to end: +0.35, 0 and -0.35 returned $445, $445 and $435 per 600
+#     entries, and a leave-one-slate-out test put every variant of it inside
+#     the control's own seed spread.
+#
+# The multiplier spans 0.65 to 1.35 and reorders about 18 of the top 100
+# candidates, so it is not inert — it is just steering on a signal that carries
+# no information here. A free parameter with no measurable effect is exactly
+# what gets fitted to noise later, so it goes to zero and stays there until
+# graded results from the collection run say otherwise. The lever is still
+# live in both directions for anyone who wants to test it.
+OWN_LEAN = 0.0
 CAPTAIN_CAP = 0.28       # share of entries any one captain may hold. A rail:
                          # on the slates built so far the top captain sat at
                          # 12-13 of 75, so it has never bound.
@@ -733,7 +755,7 @@ def build_candidates(players, n, *, teams, split_targets=None, rng=None,
     return out
 
 
-def rank(lineups, mat, bar, sims, dupes_idx, own_lean=OWN_LEAN, dupe_scale=1.0,
+def rank(lineups, mat, bar, sims, dupes_idx, own_lean=None, dupe_scale=1.0,
          field_n=0.0):
     """Duplication-adjusted win probability, with a modest ownership lean.
 
@@ -744,6 +766,11 @@ def rank(lineups, mat, bar, sims, dupes_idx, own_lean=OWN_LEAN, dupe_scale=1.0,
     mechanism is pool size: with under 70 draftable players, consensus has
     nowhere to hide and fading it means deliberately playing worse players.
     """
+    # Constants are read HERE, not bound as default arguments. A default of
+    # `own_lean=OWN_LEAN` freezes the value at import, so setting the module
+    # constant at runtime — which is how every experiment against this code is
+    # driven — silently does nothing and the variant reads as a no-op.
+    own_lean = OWN_LEAN if own_lean is None else own_lean
     owns = [lu.own_sum for lu in lineups] or [0]
     lo, hi = min(owns), max(owns)
     span = (hi - lo) or 1.0
@@ -763,8 +790,8 @@ def rank(lineups, mat, bar, sims, dupes_idx, own_lean=OWN_LEAN, dupe_scale=1.0,
     return lineups
 
 
-def select(lineups, n, *, captain_cap=CAPTAIN_CAP,
-           player_cap=PLAYER_CAP, max_overlap=MAX_OVERLAP, side_cap=SIDE_CAP,
+def select(lineups, n, *, captain_cap=None,
+           player_cap=None, max_overlap=None, side_cap=None,
            split_targets=None, core_floors=None, prior=None):
     """Pick the final N under coverage rules rather than diversification ones.
 
@@ -799,6 +826,14 @@ def select(lineups, n, *, captain_cap=CAPTAIN_CAP,
     # twin threshold (five of six): on a 68-player board two 5-1 lineups on
     # the same side share four players almost by definition, and holding the
     # other arm to the within-arm cap pushed it off that shape entirely.
+    # Constants are read HERE, not bound as default arguments. A default of
+    # `max_overlap=MAX_OVERLAP` freezes the value at import, so setting the
+    # module constant at runtime — which is how every experiment against this
+    # code is driven — silently does nothing and the variant reads as a no-op.
+    captain_cap = CAPTAIN_CAP if captain_cap is None else captain_cap
+    player_cap = PLAYER_CAP if player_cap is None else player_cap
+    max_overlap = MAX_OVERLAP if max_overlap is None else max_overlap
+    side_cap = SIDE_CAP if side_cap is None else side_cap
     prior = list(prior or [])
     seen_keys = {lu.key() for lu in prior}
     unique = []
@@ -952,8 +987,8 @@ def select(lineups, n, *, captain_cap=CAPTAIN_CAP,
     return chosen[:n]
 
 
-def vendor_arm(field_entries, n, *, captain_cap=CAPTAIN_CAP,
-               player_cap=PLAYER_CAP, max_overlap=MAX_OVERLAP, side_cap=SIDE_CAP,
+def vendor_arm(field_entries, n, *, captain_cap=None,
+               player_cap=None, max_overlap=None, side_cap=None,
                dupe_scale=1.0, core_floors=None, prior=None):
     """Their pool, re-ranked on Win% / (1 + Dupes) and put through the same caps.
 

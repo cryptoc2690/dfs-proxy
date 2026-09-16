@@ -89,6 +89,12 @@ CORE_BOOST = 3.0          # construction weight on a core, so its floor is reach
 # rather than riding along with the showdown fix.
 FIELD_COVERAGE = 1.0
 
+# Which vendor column the re-ranked arm sorts on; see vendor_arm below. Win%
+# is as coarse here as on a showdown file — 34 distinct values across 9,860
+# rows, against 212 for Top 10% — so most of its ordering was ties broken by
+# whatever the sort happened to do.
+VENDOR_SIGNAL = "top10"
+
 # The score to beat. Ranking on "beat the field's single BEST score" was too
 # coarse a target. Measured on the real main slate with 3,000 fixed candidates:
 # 764-828 of them cleared it in ZERO simulations, the rest took one of only
@@ -525,8 +531,10 @@ def score_lineup(lu, mat, sims):
     return [sum(r[s] for r in rows) for s in range(sims)]
 
 
-def rank(lineups, mat, bar, sims, dupes_idx, own_lean=OWN_LEAN, dupe_scale=1.0,
+def rank(lineups, mat, bar, sims, dupes_idx, own_lean=None, dupe_scale=1.0,
          field_n=0.0):
+    # Read at call time, not bound as a default — see the note in engine.rank.
+    own_lean = OWN_LEAN if own_lean is None else own_lean
     owns = [lu.own_sum for lu in lineups] or [0]
     lo, hi = min(owns), max(owns)
     span = (hi - lo) or 1.0
@@ -542,8 +550,8 @@ def rank(lineups, mat, bar, sims, dupes_idx, own_lean=OWN_LEAN, dupe_scale=1.0,
     return lineups
 
 
-def select(lineups, n, *, player_cap=PLAYER_CAP, qb_cap=QB_CAP, dst_cap=DST_CAP,
-           max_overlap=MAX_OVERLAP, stack_targets=None, core_floors=None,
+def select(lineups, n, *, player_cap=None, qb_cap=None, dst_cap=None,
+           max_overlap=None, stack_targets=None, core_floors=None,
            prior=None):
     """Pick the final N under exposure, overlap and stack-shape quotas.
 
@@ -561,6 +569,11 @@ def select(lineups, n, *, player_cap=PLAYER_CAP, qb_cap=QB_CAP, dst_cap=DST_CAP,
     overlap at the same six-of-nine bar.
     """
     prior = list(prior or [])
+    # Read at call time, not bound as defaults — see the note in engine.rank.
+    player_cap = PLAYER_CAP if player_cap is None else player_cap
+    qb_cap = QB_CAP if qb_cap is None else qb_cap
+    dst_cap = DST_CAP if dst_cap is None else dst_cap
+    max_overlap = MAX_OVERLAP if max_overlap is None else max_overlap
     seen_keys = {lu.key() for lu in prior}
     unique = []
     for lu in lineups:
@@ -660,7 +673,27 @@ def select(lineups, n, *, player_cap=PLAYER_CAP, qb_cap=QB_CAP, dst_cap=DST_CAP,
 
 
 def vendor_arm(field_entries, n, *, dupe_scale=1.0, **kw):
-    """Their pool, re-ranked on Win% / (1 + Dupes) — the control arm."""
+    """Their pool, re-ranked on Top 10% — the control arm.
+
+    Two things here are deliberately NOT what the showdown arm does.
+
+    The SIGNAL is Top 10% rather than Win%, for the reason it is on showdown
+    and more so: on a real main-slate file Win% takes about 34 distinct values
+    across 9,860 rows, so ranking ten thousand lineups by it is really the
+    file's ROI order breaking a handful of enormous ties. Top 10% takes 212
+    values on the same file and is never zero.
+
+    DUPLICATION IS NOT IN THE RANKING AT ALL, where showdown divides by it.
+    That is not an oversight, it is the measurement: on contest 193028212,
+    415,601 entries played 383,126 DISTINCT rosters, 96.4% of them exactly
+    once, and every one of the top 100 finishers was unique. The vendor's
+    9,860 rosters matched 79 of those 415,601 entries — 0.0%. Scaling 10,000
+    modelled entries to the full field gave every row an identical d of about
+    41.6, so the divisor was a constant: it reordered nothing and reported a
+    number that was fiction. A main slate is a 300-player board where nobody
+    collides; there is no duplication to price. The figure is still computed
+    and shown, because it costs nothing and a future slate may disagree.
+    """
     cands = []
     for e in field_entries:
         ps = [p for p in (e.get("flex") or []) if p is not None]
@@ -671,8 +704,9 @@ def vendor_arm(field_entries, n, *, dupe_scale=1.0, **kw):
             continue
         lu = Lineup(ps, source="vendor")
         d = (1.0 + (e.get("dupes") or 0.0)) * dupe_scale   # every copy is an opponent
-        lu.metrics = {"win": e.get("win", 0.0), "dupes": round(d, 2),
-                      "score": e.get("win", 0.0) / (1.0 + d)}
+        signal = e.get(VENDOR_SIGNAL, 0.0) or 0.0
+        lu.metrics = {"win": e.get("win", 0.0), "top10": e.get("top10", 0.0),
+                      "dupes": round(d, 2), "score": signal}
         cands.append(lu)
     cands.sort(key=lambda l: -l.metrics["score"])
     return select(cands, n, **kw)

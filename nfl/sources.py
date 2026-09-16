@@ -456,3 +456,95 @@ def read_sharp(text):
         if _sharp_cell(cell):
             names.add(normalize_name(_name_and_id(cell)[0]))
     return names
+
+
+# --- contest standings ----------------------------------------------------
+_SLOT_SPLIT = re.compile(r"\s*(?:CPT|FLEX|QB|RB|WR|TE|DST)\s+")
+
+
+def read_standings(text):
+    """DK's contest standings export. -> (rows, report)
+
+    Each row: {"entry_id", "rank", "points", "names"} with `names` normalised
+    and the CAPTAIN FIRST on showdown. The report carries the field size, a
+    sorted points list for percentiles, per-player actual points, and a count
+    of how many entries held each roster — the only place real duplication can
+    be observed rather than modelled.
+
+    Three things about this file bite every time:
+
+    - It holds TWO tables side by side. The left is one row per contest entry
+      (Rank, EntryId, EntryName, TimeRemaining, Points, Lineup); the right is a
+      per-player block (Player, Roster Position, %Drafted, FPTS) that merely
+      shares row numbers with it. Rows are entries only when Rank is non-empty.
+    - The player block lists every showdown player TWICE, once as FLEX and once
+      as CPT with the 1.5x already applied. Only the FLEX rows are raw scores;
+      taking the last row seen double-counts the captain multiplier.
+    - The %Drafted column does not reconcile with the lineups (it sums to about
+      299% on a six-player roster), so ownership is counted from the Lineup
+      strings instead.
+    """
+    rows, actual, seen = [], {}, {}
+    rdr = csv.DictReader(io.StringIO((text or "").lstrip("﻿")))
+    if not rdr.fieldnames or "Lineup" not in rdr.fieldnames:
+        return [], {"error": "no Lineup column — is that the standings export?"}
+    for r in rdr:
+        if (r.get("Rank") or "").strip():
+            names = [normalize_name(_name_and_id(x)[0])
+                     for x in _SLOT_SPLIT.split(r.get("Lineup") or "") if x.strip()]
+            if names:
+                try:
+                    rank = int((r.get("Rank") or "").strip())
+                except ValueError:
+                    rank = None
+                if rank is not None:
+                    rows.append({"entry_id": (r.get("EntryId") or "").strip(),
+                                 "rank": rank, "points": _f(r.get("Points")),
+                                 "names": names})
+        who = (r.get("Player") or "").strip()
+        if who and (r.get("Roster Position") or "").strip().upper() in ("FLEX", ""):
+            actual[normalize_name(who)] = _f(r.get("FPTS"))
+    if not rows:
+        return [], {"error": "no entry rows found (every Rank was empty)"}
+    for e in rows:
+        seen[_roster_key(e["names"])] = seen.get(_roster_key(e["names"]), 0) + 1
+    pts = sorted(e["points"] for e in rows)
+    return rows, {"entries": len(rows), "points_sorted": pts, "actual": actual,
+                  "copies": seen, "players": len(actual)}
+
+
+def _roster_key(names):
+    """Captain matters on showdown, so it is kept out of the unordered set."""
+    return (names[0], frozenset(names[1:])) if names else ()
+
+
+def payout_ladder(prize_pool, first_prize, paid_from, paid_to):
+    """-> f(rank) = dollars, or None if the anchors are not all present.
+
+    DK does not publish a machine-readable ladder, but four numbers off the
+    contest page pin it well enough: the pool, first place, and the rank range
+    that pays the minimum. Everything above the flat band is fitted as
+    first_prize * rank ** -b, with b solved so the whole thing sums to the pool.
+    The middle of the curve is the least certain part; anything sensitive to it
+    should say so.
+    """
+    try:
+        prize_pool = float(prize_pool); first_prize = float(first_prize)
+        paid_from = int(paid_from); paid_to = int(paid_to)
+    except (TypeError, ValueError):
+        return None
+    if not (prize_pool > 0 and first_prize > 0 and 1 < paid_from <= paid_to):
+        return None
+    flat = paid_to - paid_from + 1          # the $1 band, one dollar each
+    need = prize_pool - flat
+    lo, hi = 0.5, 3.0
+    for _ in range(60):
+        b = (lo + hi) / 2
+        tot = sum(max(1.0, first_prize * r ** (-b)) for r in range(1, paid_from))
+        if tot > need:
+            lo = b
+        else:
+            hi = b
+    b = (lo + hi) / 2
+    return lambda rank: (max(1.0, first_prize * rank ** (-b))
+                         if 1 <= rank <= paid_to else 0.0)
