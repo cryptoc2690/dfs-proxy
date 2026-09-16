@@ -125,6 +125,13 @@ INDEX_HTML = r"""<!doctype html>
   .riskrow td{color:var(--muted)}
   .note{background:#1e2530;border:1px solid #33506e;color:#a8c4e0;border-radius:10px;
     padding:10px 13px;margin-bottom:12px;font-size:13.5px}
+  /* Anything the build had to give up. Deliberately loud and above the lineups:
+     every failure this tool has shipped was a fallback that worked silently. */
+  .warn{background:#2a2213;border:1px solid #7a5a1e;color:#e8c98a;border-radius:10px;
+    padding:10px 13px;margin-bottom:12px;font-size:13.5px}
+  .warn b{color:#ffd98a}
+  .warn ul{margin:6px 0 0;padding-left:18px}
+  .warn li{margin:3px 0}
   .swapcard{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;background:var(--panel)}
   .swapcard.keep{opacity:.55;font-size:13px;padding:7px 12px}
   .swapcard.err{color:#e08080;font-size:13px}
@@ -266,7 +273,6 @@ INDEX_HTML = r"""<!doctype html>
     </div>
     <div>
       <label>Lineups</label><input id="n" type="number" value="20" min="1" max="150">
-      <label>Min game stack</label><input id="stack" type="number" value="2" min="1" max="4">
       <label>Minimum cores per lineup</label>
       <select id="mincores">
         <option value="0">0 — no requirement</option>
@@ -281,8 +287,6 @@ INDEX_HTML = r"""<!doctype html>
       </select>
     </div>
     <div>
-      <label>Max exposure — <span id="expv">60</span>%</label>
-      <input id="exp" class="slider" type="range" min="10" max="100" value="60">
       <label>Cap the 🔒 players at <span id="capv">30</span>% <span id="capwho" class="muted"></span></label>
       <input id="cappct" class="slider" type="range" min="5" max="60" value="30">
       <div class="hint">Applies to the players you mark 🔒 <b>on the slate row</b> — there is no
@@ -290,28 +294,15 @@ INDEX_HTML = r"""<!doctype html>
         without capping the whole board.</div>
     </div>
     <div>
-      <label>Ownership lean — <span id="levv">+0.35</span> <span class="muted">(− fade · + consensus)</span></label>
-      <input id="lev" class="slider" type="range" min="-100" max="100" value="35">
-      <div class="hint">Leans <b>toward</b> the field by default. Sorted by within-slate
-        ownership, the chalkiest fifth hit the top 1% at 3.0% and cashed 36% against 0.4%
-        and 10% for the least-owned, in 19 of 23 contests — and our own lineups averaged the
-        42nd ownership percentile against the winning tier's 70th. Kept modest because
-        ownership is a proxy for consensus quality, not an edge by itself.</div>
-      <label>Stack seeking — <span id="stkv">50</span>% of lineups</label>
-      <input id="stk" class="slider" type="range" min="0" max="100" value="50">
-      <div class="hint">Builds this share AROUND a correlation stack: 3 from a high-implied
-        team, or 5 from the biggest game (which must clear 178 combined). Low-total stacks
-        are avoided — those finish worse than not stacking at all.</div>
-      <label>Sub-10%-owned players allowed per lineup</label>
-      <select id="sub10">
-        <option value="1" selected>1 — the default the data supports</option>
-        <option value="0">0 — none at all</option>
-        <option value="2">2</option>
-        <option value="off">No limit</option>
-      </select>
-      <div class="hint">58% of top-1% lineups carried none, against 37% of the field and 30%
-        of ours, and each extra one lowered cash and top-1% even at matched projection.
-        Cores are always exempt — your conviction play is never what gets cut.</div>
+      <label>Ownership lean — <span id="levv">0.00</span> <span class="muted">(− fade · + consensus)</span></label>
+      <input id="lev" class="slider" type="range" min="-100" max="100" value="0">
+      <div class="hint"><b>Neutral by default, and leave it there.</b> Held out over 23
+        contests this was the single biggest finding: at +0.35 the set sat at the 75th
+        within-slate ownership percentile while the winning tier sits at the 63rd — leaning
+        in walked past the winners into the crowd. Zero was picked on all 23 held-out folds,
+        on cash and on dollars, and cut identical-twin rosters from 44% to 41%. Fading is
+        worse, not better: −0.15 costs 11 cashes and −0.35 costs 14, and neither buys a
+        first place.</div>
       <label>Two-game slate shape rules</label>
       <select id="slaterules">
         <option value="on" selected>On — no 3-3 split, majority in the higher-owned game</option>
@@ -319,14 +310,11 @@ INDEX_HTML = r"""<!doctype html>
       </select>
       <div class="hint">Only bites on a two-game slate. 4-2 beat the balanced 3-3 on cash in
         7 of 7 slates, and loading the higher-owned game won 7 of 7 (29.8% vs 12.3%).</div>
-      <label>Late swap fires on</label>
-      <select id="newsonly">
-        <option value="on" selected>News only — a scratch, a benching, a projection cut</option>
-        <option value="off">Anything that scores better (re-optimise freely)</option>
-      </select>
-      <div class="hint">Swaps forced by news gained 24.5 points an entry and went 15 for 15.
-        Re-optimising slots nobody had said anything about averaged 3.4 with 15 of 29
-        positive — noise — and one such night cost 125 points across 8 entries.</div>
+      <div class="hint"><b>Late swap fires on news only.</b> Replayed across seven real
+        mid-slate snapshots, reacting to a scratch or a benching was +$24 and never
+        negative; re-optimising freely wrecked two nights (52.9 → 31.5 and 40.0 → 0.0) and
+        its whole gain came from one slate whose "updated" file had not actually changed.
+        The free mode is gone rather than left in as a trap.</div>
     </div>
     <div class="boardsum" id="boardsum"></div>
   </div>
@@ -352,6 +340,7 @@ INDEX_HTML = r"""<!doctype html>
 
   <section class="outcol">
     <div id="err" class="err" style="display:none"></div>
+    <div id="warn" class="warn" style="display:none"></div>
     <div id="note" class="note" style="display:none"></div>
     <div id="status" class="status" style="display:none"></div>
     <div id="tools" style="display:none;margin-bottom:14px">
@@ -397,15 +386,12 @@ const GROUPS = [['core','Cores'],['pool','Pool'],['remove','Removed'],['cap','Ca
 
 // ---- settings ----
 const setSummary = () => {
-  $('#setsum').textContent = 'Settings — ' + $('#n').value + ' lineups · ' +
-    $('#exp').value + '% max exposure · own lean ' + fmtLean($('#lev').value) +
-    ' · stack seeking ' + $('#stk').value + '%';
-  $('#d-set').textContent = $('#n').value + ' lineups · ' + $('#exp').value + '% cap';
+  $('#setsum').textContent = 'Settings — ' + $('#n').value + ' lineups · own lean ' +
+    fmtLean($('#lev').value);
+  $('#d-set').textContent = $('#n').value + ' lineups';
 };
-$('#exp').addEventListener('input', e => { $('#expv').textContent = e.target.value; setSummary(); });
 const fmtLean = v => (v >= 0 ? '+' : '') + (v/100).toFixed(2);
 $('#lev').addEventListener('input', e => { $('#levv').textContent = fmtLean(e.target.value); setSummary(); });
-$('#stk').addEventListener('input', e => { $('#stkv').textContent = e.target.value; setSummary(); });
 $('#cappct').addEventListener('input', e => $('#capv').textContent = e.target.value);
 $('#n').addEventListener('input', setSummary);
 setSummary(); paintDock();
@@ -688,9 +674,7 @@ async function runSwap(){
   try{
     const res=await fetch('/api/lateswap',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({csv:csvText, dk:swapText, contest:conText,
-        options:{maxExposure:(+$('#exp').value)/100,
-                 cores:[...sel.core].join('\n'), pool:[...sel.pool].join('\n'),
-                 newsOnly:$('#newsonly').value,
+        options:{cores:[...sel.core].join('\n'), pool:[...sel.pool].join('\n'),
                  minutes:minText}})});
     const data=await res.json();
     if(data.error) showErr(data.error); else renderSwaps(data);
@@ -703,6 +687,7 @@ function aggrTag(a){
   return '<span class="muted">neutral</span>';
 }
 function renderSwaps(d){
+  showWarn(d.warnings);
   const box=$('#swapresults'); box.style.display='block'; $('#welcome').style.display='none';
   swapData=d;
   // Every proposed change starts accepted; unticking one keeps that entry exactly
@@ -820,11 +805,10 @@ async function run(){
   if(!csvText) return;
   const btn = $('#go'); btn.disabled = true; btn.innerHTML = '<span class="spin"></span>Building…';
   $('#err').style.display='none'; $('#note').style.display='none';
+  showWarn(null);
   const options = {
-    n:+$('#n').value, stack:+$('#stack').value,
-    maxExposure:(+$('#exp').value)/100, ownLean:(+$('#lev').value)/100,
-    maxSub10:$('#sub10').value, slateRules:$('#slaterules').value,
-    stackShare:(+$('#stk').value)/100,
+    n:+$('#n').value, ownLean:(+$('#lev').value)/100,
+    slateRules:$('#slaterules').value,
     cores:[...sel.core].join('\n'), pool:[...sel.pool].join('\n'),
     remove:[...sel.remove].join('\n'), maxOffPool:+$('#offpool').value,
     minCores:+$('#mincores').value,
@@ -840,10 +824,18 @@ async function run(){
   btn.disabled=false; btn.textContent='Build lineups';
 }
 function showErr(m){ $('#err').style.display='block'; $('#err').textContent = m; }
+function showWarn(list){
+  const w = $('#warn');
+  if(!list || !list.length){ w.style.display='none'; w.innerHTML=''; return; }
+  w.style.display='block';
+  w.innerHTML = '<b>Read this before you upload</b><ul>' +
+    list.map(x => '<li>'+esc(x)+'</li>').join('') + '</ul>';
+}
 function showNote(m){ $('#note').style.display='block'; $('#note').textContent = m; }
 
 function render(d){
   $('#welcome').style.display='none';
+  showWarn(d.warnings);
   const cls = 'props';
   const outTxt = d.out && d.out.length ? ' · OUT: '+d.out.join(', ') : '';
   const rmTxt = d.removed && d.removed.length ? ' · removed: '+d.removed.join(', ') : '';

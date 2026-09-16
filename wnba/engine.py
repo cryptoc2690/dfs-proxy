@@ -21,42 +21,48 @@ MIN_SALARY = 3000  # DK WNBA min; used so partial lineups stay completable
 # rule, not a preference — an all-one-game lineup is rejected at upload.
 MAX_PER_GAME = ROSTER_SIZE - 1
 
-# Team-correlation control. Four underowned starters on ONE team look
-# independently great but ride a single game script — when that team lays an egg
-# the whole pool sinks together (the TOR wound). Across the pool, a team may hold
-# up to this multiple of its EVEN share of roster slots (even share = 1/#teams).
-# Data-driven: it loosens automatically as the slate adds teams and only bites on
-# small, lopsided slates where the pile-on actually hurts.
-TEAM_SHARE_MULT = 1.6
+# --- what survived a leave-one-slate-out test on 23 real contests ---------
+#
+# An earlier 24-contest study produced a shelf of construction rules and all of
+# them were built in as hard constraints. Every one had been fitted AND scored on
+# the same slates. Held out slate by slate they did not pay: the sub-10%
+# ownership cap, the stud requirement, the ownership floor, the team-share cap,
+# the salary floor, stack seeding and the exposure/overlap caps each tested as no
+# effect or worse, and together they were costing 23 lineups in the money per 23
+# contests (67 -> 90 cashes at 12 entries, 18 slates better and 4 worse;
+# 110 -> 144 at 20 entries).
+#
+# The damage was a funnel, not any single rule: 120 candidates built -> ~55
+# through the salary floor -> ~43 through the ownership floor -> 12 chosen. Each
+# filter looked harmless alone and the losses compounded. Measured directly
+# against the real field, the stack of rules left 42% of actual top-1% lineups
+# and a third of actual winners UNBUILDABLE — on four-game slates only 13% of the
+# top-1% tier was reachable at all, because an absolute 10% ownership threshold
+# does not travel to a board where ownership spreads across 60+ players.
+#
+# So they are gone. What remains is DK's ruleset, the handicapper's pool and
+# cores, and the two-game shape rules below.
 
-# --- construction rules from the 24-contest / 68,380-lineup review -------
-#
-# Sub-10%-owned players. 58% of top-1% lineups carried ZERO of them against 37%
-# of the field and 30% of ours, and each extra one lowered top-1%, top-10% and
-# cash — still true at MATCHED lineup projection, so it isn't just "those lineups
-# were worse". The gradient by count of sub-10% players:
-#
-#   0 -> top-1% 2.01%, cash 29.2%      2  -> 0.69%, 16.0%
-#   1 -> 1.00%, 22.0%                  3+ -> 0.64%,  9.2%
-#
-# Cores are exempt: a conviction play the sharp set is never the thing we cut.
+# Reporting thresholds only — these no longer constrain anything. They describe a
+# lineup's shape in the build log so the next review can still ask the questions
+# the last one asked.
 SUB10_OWN = 10.0
-MAX_SUB10 = 1
-
-# At least one stud. Lineups with no $10k+ player are 4.7% of the field and reach
-# top-1% at 0.34% against 1.10% for two-stud lineups, and the penalty survives
-# controls for projection and ownership (slate-FE logit coef -1.02, p=0.004).
-# Relaxed automatically when a slate simply has no player this expensive.
 STUD_SALARY = 10_000
 
-# Two-game slates have the most consistent rules in the whole study, so they are
-# hard constraints rather than preferences:
+# Two-game slates are the one place a shape rule survived, and only INSIDE the
+# stripped build: with them on, 90 cashes held out against 86 with them off. They
+# are cheap and specific, so they stay:
 #   * the balanced 3-3 game split is the WORST construction on the board —
 #     cash 17.2% vs 23.0% (4-2) vs 28.9% (5-1), and 4-2 beat 3-3 in 7 of 7 slates
-#   * a 3+ block from one team with NO player from its opponent went 0-for-2,254
-#     on top-1% finishes (about 22 expected at the field rate)
+#   * a 3+ block from one team with NO player from its opponent went 2-for-3,376
+#     on top-1% finishes, against about 34 expected at the field rate
 #   * putting the majority in the game with the higher projected-ownership sum
-#     paid in 7 of 7 slates on cash: 29.8% vs 12.3%
+#     paid in 7 of 7 slates on cash: 30.0% vs 12.3%
+#
+# `rules=None` used to mean "work them out", which made both the UI's off switch
+# and the last rung of the relaxation ladder silent no-ops: each passed None and
+# got the rules handed straight back. RULES_OFF is a sentinel that means off.
+RULES_OFF = {"two_game": False, "major_game": None}
 
 
 class Lineup:
@@ -107,30 +113,17 @@ def _weighted_pick(cands, rng):
     return cands[-1]
 
 
-# Correlation seeding. A 7-slate, ~20,600-lineup review found this is where
-# top-1% finishes come from, and that our builder was leaving it on the table:
-#
-#   3 from one team, team implied total >= 84 -> 2.65% top-1% (vs 1.04% at 2)
-#   3 from one team, team implied total <  84 -> 0.40% top-1% (WORSE than 2)
-#   5 from one game                           -> 7.03% top-1% (vs 0.98% at 4)
-#
-# So it was never "stacking helps" — it's "concentrate on high-total offences".
-# Projection-weighted construction almost never produces these by accident (we
-# measured ~3 of 20 lineups reaching even an unconditioned 3-stack), so a share
-# of lineups is now SEEDED with a stack instead of hoping one shows up.
-# The 22-slate review re-measured these cells on ~4x the sample. The 5-man game
-# stack regressed hard (7.03% -> 2.76%) and only holds its edge in a genuinely
-# big game (>=178 combined implied -> 3.83%, below that 1.81%), so the game stack
-# now has to clear that bar and the mix leans a little more on team stacks.
-STACK_SHARE = 0.5          # fraction of lineups built around a deliberate stack
-STACK_GAME_FRACTION = 0.4  # of those, how many go for a game stack vs a team stack
-STACK_GAME_SIZE = 5        # players from one game
-STACK_TEAM_SIZE = 3        # players from one team (the 2.65% cell)
-STACK_GAME_MIN_TOTAL = 178.0  # combined implied a game must reach to be worth stacking
-
-
+# Stack seeding used to live here: a share of lineups was built AROUND a 3-man
+# high-implied team block or a 5-man game block, on the strength of top-1% rates
+# measured in-sample (3-stack of a >=84-total team 2.65%, 5-man game stack 7.03%).
+# The cells shrank every time the sample grew — the game stack went 7.03% -> 2.76%
+# on 4x the data — and held out across 23 slates, seeding at 50% cost 6 cashes
+# against seeding at 0. It is gone. The field agrees with the deletion for a
+# reason the old note missed: real rosters with 5 from one game have LOWER
+# residual variance (22.9) than spread 2-2-2 rosters (24.5), so a game stack was
+# never buying the upside it was credited with.
 def _slate_rules(pool):
-    """The slate-shape facts the construction rules key off, worked out once.
+    """The slate-shape facts the two-game rules key off, worked out once.
 
     major_game is the game with the higher summed projected ownership — on all
     seven two-game slates in the study that was also the game the field ended up
@@ -140,23 +133,15 @@ def _slate_rules(pool):
         if p.game:
             games[p.game] = games.get(p.game, 0.0) + p.ownership
     two_game = len(games) == 2
-    major = max(games, key=lambda g: games[g]) if two_game else None
     return {
         "two_game": two_game,
-        "major_game": major,
-        "has_stud": any(p.salary >= STUD_SALARY for p in pool),
+        "major_game": max(games, key=lambda g: games[g]) if two_game else None,
     }
 
 
-def _rules_ok(picked, rules, max_sub10):
-    """Final check against the review's construction rules. Runs on a complete
-    roster, so it can see the whole shape."""
-    if rules["has_stud"] and not any(p.salary >= STUD_SALARY for p in picked):
-        return False
-    if max_sub10 is not None:
-        thin = sum(1 for p in picked if p.ownership < SUB10_OWN and not p.core)
-        if thin > max_sub10:
-            return False
+def _rules_ok(picked, rules):
+    """Final check against the two-game shape rules. Runs on a complete roster,
+    so it can see the whole shape."""
     if rules["two_game"]:
         games = {}
         for p in picked:
@@ -177,69 +162,8 @@ def _rules_ok(picked, rules, max_sub10):
     return True
 
 
-def _stack_targets(pool):
-    """Rank teams by implied total and games by combined total, so seeding aims
-    at real offences rather than any old cluster."""
-    team_total, game_total = {}, {}
-    for p in pool:
-        if p.implied > 0:
-            team_total[p.team] = p.implied
-    for p in pool:
-        if p.game and p.team in team_total:
-            game_total.setdefault(p.game, set()).add(p.team)
-    games = {g: sum(team_total.get(t, 0) for t in ts) for g, ts in game_total.items()}
-    teams = sorted(team_total.items(), key=lambda kv: -kv[1])
-    return teams, sorted(games.items(), key=lambda kv: -kv[1])
-
-
-def _seed_stack(pool, plan, rng, used, team_count, game_count, max_per_team, salary_left):
-    """Pick the stack members up front. Position legality is left to the main
-    fill — we only take players that still leave a legal roster reachable."""
-    kind, key, size = plan
-    group = [p for p in pool
-             if (p.team == key if kind == "team" else p.game == key)
-             and p.dk_id not in used and p.proj > 0]
-    if len(group) < size:
-        return []
-    # A game stack splits across two teams, and which side gets the bigger half
-    # decides whether we end up with a good 3-stack or the field's worst one (a
-    # 3-stack of a low-total team). Hold the weaker offence to the small half.
-    caps = {}
-    if kind == "game":
-        sides = {}
-        for p in group:
-            sides[p.team] = max(sides.get(p.team, 0), p.implied)
-        if len(sides) == 2:
-            weak = min(sides, key=sides.get)
-            caps[weak] = max(0, size - max_per_team)
-    picked = []
-    for _ in range(size):
-        elig = [p for p in group
-                if p.dk_id not in used
-                and team_count.get(p.team, 0) < max_per_team
-                and sum(1 for q in picked if q.team == p.team) < caps.get(p.team, size)
-                and game_count.get(p.game, 0) < MAX_PER_GAME
-                and p.salary <= salary_left - MIN_SALARY * (ROSTER_SIZE - len(used) - 1)]
-        # never take so many of one position that the roster can't be completed
-        g = sum(1 for p in picked if p.is_guard)
-        f = len(picked) - g
-        if g >= MIN_GUARDS + 1:
-            elig = [p for p in elig if not p.is_guard]
-        if f >= MIN_FORWARDS + 1:
-            elig = [p for p in elig if p.is_guard]
-        if not elig:
-            break
-        p = _weighted_pick(elig, rng)
-        picked.append(p)
-        used.add(p.dk_id)
-        team_count[p.team] = team_count.get(p.team, 0) + 1
-        game_count[p.game] = game_count.get(p.game, 0) + 1
-        salary_left -= p.salary
-    return picked
-
-
 def _build_one(pool, max_per_team, rng, cores=None, min_cores=0, reserve=MIN_SALARY,
-               max_off_pool=None, plan=None, rules=None, max_sub10=MAX_SUB10):
+               max_off_pool=None, rules=None):
     # Seed the lineup with the required number of cores, then fill the rest with
     # a position-aware greedy that always keeps the G/F minimums reachable.
     # (Extra cores can still land in the fill — min_cores is a floor.)
@@ -262,18 +186,6 @@ def _build_one(pool, max_per_team, rng, cores=None, min_cores=0, reserve=MIN_SAL
     if max_off_pool is not None and sum(1 for p in picked if not p.in_pool) > max_off_pool:
         return None
 
-    # Seed the correlation stack before the generic fill, so the lineup is built
-    # AROUND it rather than hoping one emerges from projection weighting.
-    if plan and len(picked) < ROSTER_SIZE:
-        seeded = _seed_stack(pool, plan, rng, used, team_count, game_count,
-                             max_per_team, SALARY_CAP - salary)
-        picked += seeded
-        salary += sum(p.salary for p in seeded)
-        if salary > SALARY_CAP:
-            return None
-        if max_off_pool is not None and sum(1 for p in picked if not p.in_pool) > max_off_pool:
-            return None
-
     while len(picked) < ROSTER_SIZE:
         remaining = ROSTER_SIZE - len(picked)
         g = sum(1 for p in picked if p.is_guard)
@@ -284,8 +196,6 @@ def _build_one(pool, max_per_team, rng, cores=None, min_cores=0, reserve=MIN_SAL
         budget = SALARY_CAP - salary - reserve * (remaining - 1)
         off_pool_used = (sum(1 for p in picked if not p.in_pool)
                          if max_off_pool is not None else 0)
-        thin_used = (sum(1 for p in picked if p.ownership < SUB10_OWN and not p.core)
-                     if max_sub10 is not None else 0)
         elig = []
         for p in pool:
             if p.dk_id in used or p.salary > budget:
@@ -295,9 +205,6 @@ def _build_one(pool, max_per_team, rng, cores=None, min_cores=0, reserve=MIN_SAL
             if game_count.get(p.game, 0) >= MAX_PER_GAME:
                 continue
             if max_off_pool is not None and not p.in_pool and off_pool_used >= max_off_pool:
-                continue
-            if (max_sub10 is not None and thin_used >= max_sub10
-                    and p.ownership < SUB10_OWN and not p.core):
                 continue
             if (must_guard and not p.is_guard) or (must_forward and p.is_guard):
                 continue
@@ -320,52 +227,35 @@ def _build_one(pool, max_per_team, rng, cores=None, min_cores=0, reserve=MIN_SAL
         return None
     if len({p.game for p in picked}) < 2:   # DK contest rule, never relaxed
         return None
-    if rules and not _rules_ok(picked, rules, max_sub10):
+    if rules and not _rules_ok(picked, rules):
         return None
     return picked
 
 
-def _has_stack(players, stack):
-    counts = {}
-    for p in players:
-        counts[p.game] = counts.get(p.game, 0) + 1
-    return any(c >= stack for c in counts.values())
+def build_candidates(pool, count, *, max_per_team, seed=0, cores=None,
+                     min_cores=0, reserve=MIN_SALARY, max_off_pool=None,
+                     rules=None):
+    """Build up to `count` distinct legal rosters.
 
+    `rules` is the two-game shape dict, or RULES_OFF to switch it off. Passing
+    None means "work them out from the pool" — which is why callers that mean OFF
+    must pass RULES_OFF and never None. That confusion is what made the UI switch
+    and the last rung of the relaxation ladder silent no-ops.
 
-def build_candidates(pool, count, *, stack, max_per_team, seed=0,
-                     cores=None, min_cores=0, reserve=MIN_SALARY, max_off_pool=None,
-                     stack_share=STACK_SHARE, rules=None, max_sub10=MAX_SUB10):
+    The old `stack` argument (minimum players from one game) is gone: with six
+    roster slots and at most five games on any WNBA slate, some game always holds
+    two, so it could never bind.
+    """
     rng = random.Random(seed)
     if rules is None:
         rules = _slate_rules(pool)
-    teams, games = _stack_targets(pool)
-    # Only high-total offences are worth concentrating on — the review found a
-    # 3-stack of a LOW-total team finishes worse than not stacking at all.
-    med = sorted(v for _, v in teams)[len(teams) // 2] if teams else 0
-    hi_teams = [t for t, v in teams if v >= med]
     out, seen = [], set()
     tries = 0
     while len(out) < count and tries < count * 15:
         tries += 1
-        plan = None
-        if stack_share and rng.random() < stack_share:
-            top_game = games[0] if games else None
-            # On a two-game slate the majority has to sit in the higher-owned
-            # game anyway, so point the stack there rather than fighting the rule.
-            if rules["two_game"] and rules["major_game"]:
-                top_game = next((g for g in games if g[0] == rules["major_game"]),
-                                top_game)
-            if (top_game and top_game[1] >= STACK_GAME_MIN_TOTAL
-                    and rng.random() < STACK_GAME_FRACTION):
-                plan = ("game", top_game[0], STACK_GAME_SIZE)
-            elif hi_teams:
-                plan = ("team", hi_teams[rng.randrange(min(2, len(hi_teams)))],
-                        STACK_TEAM_SIZE)
         lu = _build_one(pool, max_per_team, rng, cores, min_cores, reserve,
-                        max_off_pool, plan, rules, max_sub10)
+                        max_off_pool, rules)
         if not lu:
-            continue
-        if stack > 1 and not _has_stack(lu, stack):
             continue
         key = frozenset(p.dk_id for p in lu)
         if key in seen:
@@ -376,60 +266,50 @@ def build_candidates(pool, count, *, stack, max_per_team, seed=0,
 
 
 # ---------------- simulation ----------------
-def _gamma(k, rng):  # Marsaglia-Tsang
-    if k < 1:
-        return _gamma(k + 1, rng) * (rng.random() or 1e-9) ** (1.0 / k)
-    d = k - 1.0 / 3.0
-    c = 1.0 / math.sqrt(9 * d)
-    while True:
-        x = rng.gauss(0, 1)
-        v = 1 + c * x
-        if v <= 0:
-            continue
-        v = v ** 3
-        u = rng.random()
-        if u < 1 - 0.0331 * x ** 4 or math.log(u) < 0.5 * x * x + d * (1 - v + math.log(v)):
-            return d * v
-
-
-def _pert(lo, mode, hi, rng):
-    if hi - lo < 1e-6:
-        return mode
-    mode = min(max(mode, lo + 1e-6), hi - 1e-6)
-    a = 1 + 4 * (mode - lo) / (hi - lo)
-    b = 1 + 4 * (hi - mode) / (hi - lo)
-    x = _gamma(a, rng)
-    y = _gamma(b, rng)
-    return lo + (x / (x + y)) * (hi - lo)
-
-
-# How much of the ranking is upside vs production. We used to rank on the 85th
-# percentile alone. The review found the projection-ceiling column is close to a
-# rescaled projection (r 0.93 with it) that ranks actual scores slightly WORSE
-# than the projection does, and that a lineup's summed ceiling is the weakest of
-# the six pre-lock signals tested. So upside keeps half the weight — this is
-# still a GPP tool and the payout curve is top-heavy — and production takes the
-# other half instead of riding along for free.
+# The PERT / gamma draw that used to live here is gone with the game multiplier:
+# it sampled between LineStar's floor and ceiling, a band about a third as wide
+# as the real residual spread. See simulate_and_score.
+# How much of the ranking is upside vs production. Half simulated mean, half
+# simulated 85th percentile. Under the OLD simulator this weight was inert —
+# 0 and 1 produced byte-identical lineup sets on all 23 slates, because a PERT
+# draw scaled by a shared per-game multiplier makes the 85th percentile very
+# nearly a monotone transform of the mean. With independent, correctly-sized
+# noise the percentile carries real information about a roster's shape, and the
+# configuration that held out best (stripped build, honest simulator, 90 cashes
+# against 67, 19 slates better and 4 worse) ran this at 0.5. It stays at 0.5.
 CEILING_WEIGHT = 0.5
 
-# Lineups in the bottom ownership quintile of their own slate are the one group
-# that is reliably bad: top-1% 0.39% and cash 9.8%, against 0.82% / 21.9% at the
-# middle quintile, and "beats the bottom quintile" held in 19-22 of 23 contests
-# at every tier — the most consistent step on the whole ownership curve. We drop
-# that slice outright rather than trusting a soft tilt to avoid it.
-OWN_FLOOR_PCTILE = 0.20
+# Residual spread per player, measured on 23 slates of real results: actual minus
+# blended projection has an SD of 9.0-11.0 points for rostered rotation players,
+# which is 2.8-3.8x the band LineStar's floor/ceiling implies. The old PERT draw
+# between floor and ceiling was modelling about a third of the real spread — at
+# lineup level the sim produced SD 14.4 against a real 20.5, too narrow on 21 of
+# 23 slates — so a "ceiling" was never a ceiling.
+SIM_SD_FLOOR = 6.0
+SIM_SD_SHARE = 0.40
 
 
 def simulate_and_score(cands, pool, *, sims, own_lean=0.0, seed=0):
+    """Score every candidate on an independent-noise Monte Carlo.
+
+    There is deliberately NO game or team correlation factor. The old simulator
+    multiplied every player in a game by a shared draw (sigma 0.10), which forces
+    a same-game correlation of roughly +0.35. Measured on the real results the
+    correlation of residuals is: teammates -0.010, opponents -0.006, players in
+    different games +0.019 — nothing, on 2,179 / 2,500 / 9,436 pairs. Realised
+    game totals over projected totals have SD 0.085, exactly what independent
+    players produce, so there is no game-level factor left to model.
+
+    That wrong sign had a cost: the sim handed extra variance to game stacks, so
+    the 85th percentile it ranked on was a stack-shaped artefact. In the real
+    field, rosters with 5 players from one game have LOWER residual SD (22.9)
+    than spread 2-2-2 rosters (24.5) — the opposite of what was being rewarded.
+    """
     rng = random.Random(seed + 7)
-    games = sorted({p.game for p in pool})
-    gidx = {g: i for i, g in enumerate(games)}
-    game_mult = [[min(max(1 + 0.10 * rng.gauss(0, 1), 0.6), 1.5) for _ in range(sims)]
-                 for _ in games]
     id_row, mat = {}, []
     for row, p in enumerate(pool):
-        gm = game_mult[gidx[p.game]]
-        mat.append([_pert(p.floor, p.proj, p.ceil, rng) * gm[s] for s in range(sims)])
+        sd = max(SIM_SD_FLOOR, SIM_SD_SHARE * p.proj)
+        mat.append([max(0.0, p.proj + sd * rng.gauss(0, 1)) for _ in range(sims)])
         id_row[p.dk_id] = row
     for c in cands:
         rows = [id_row[i] for i in c.ids() if i in id_row]
@@ -440,24 +320,17 @@ def simulate_and_score(cands, pool, *, sims, own_lean=0.0, seed=0):
             "ceiling": totals[int(sims * 0.85)],
             "p95": totals[int(sims * 0.95)],
         }
-    # Ownership lean on RAW lineup ownership. POSITIVE now means lean toward the
-    # consensus, which is the direction three successive reviews have pointed.
+    # Ownership lean on RAW lineup ownership. POSITIVE leans toward the field's
+    # consensus, negative fades it. It now defaults to ZERO, and that was the
+    # single biggest finding of the 23-slate held-out test: at +0.35 the tool sat
+    # at the 75th within-slate ownership percentile while the top-1% tier sits at
+    # the 63rd. Setting it to 0 was picked on all 23 held-out folds on both
+    # objectives (cash 73 against 67; +$580 on the seed-median dollar view) and
+    # it cut identical-twin rosters from 44% to 41%.
     #
-    # The slider used to only fade. It first divided ownership by ceiling to flag
-    # "overpriced chalk", a metric that separated the exact opposite of what it
-    # was built to separate (own/ceiling correlated +0.23 with realised value).
-    # That went, and the tilt was set neutral. The 24-contest study then showed
-    # neutral is still on the wrong side of the line: sorted by within-slate
-    # ownership, the chalkiest quintile hit top-1% at 3.04% and cashed 36.3%
-    # against 0.39% and 9.8% for the least-owned, holding in 19 of 23 contests,
-    # while OUR lineups averaged the 42nd ownership percentile against the
-    # top-1% tier's 70th.
-    #
-    # The lean is deliberately modest, because the same study found ownership
-    # adds nothing ONCE consensus projection is controlled for — it is a proxy
-    # for consensus quality, not an independent edge. The blended projection is
-    # what does the real work; this only stops us drifting to the wrong side of
-    # the field, and OWN_FLOOR_PCTILE does the part that is actually reliable.
+    # Fading is worse than leaning, not better: -0.15 costs 11 cashes and -0.35
+    # costs 14, and neither buys first places. The slider survives only because
+    # its SIGN was worth measuring; neutral is the answer.
     owns = [c.total_own for c in cands] or [0]
     lo, hi = min(owns), max(owns)
     span = (hi - lo) or 1.0
@@ -470,73 +343,58 @@ def simulate_and_score(cands, pool, *, sims, own_lean=0.0, seed=0):
     cands.sort(key=lambda c: -c.metrics["score"])
 
 
-def select_final(cands, n, max_exposure, max_overlap=4, player_caps=None,
-                 max_team_slots=None, core_floors=None, backfill=None):
-    """Pick the final N, best-first, under a per-player exposure cap, a
-    pairwise-overlap cap, and a pool-level team-slot cap so the set is genuinely
-    differentiated AND not quietly piled onto one team (WNBA's whole game once
-    everyone shares the same projections). Backfills if the constraints starve
-    the set, so we always return N. player_caps overrides the global cap for
-    specific dk_ids (rein in one heavy play without touching the rest — matters
-    on short slates where a global cap would hobble the studs). core_floors
-    guarantees each core dk_id a minimum number of lineups — a play the sharp
-    believes in can't get squeezed out (and their conviction outranks the team
-    cap, so a core on a capped team still gets its floor)."""
-    cap = max(1, round(max_exposure * n))
+def select_final(cands, n, player_caps=None, core_floors=None, backfill=None):
+    """Pick the best N distinct rosters, score-first.
+
+    What used to be here: a global per-player exposure cap, a pairwise-overlap
+    cap and a pool-level team-slot cap, each with its own relaxation pass and
+    then a "fill to N" pass underneath them all. Instrumented across 69 builds
+    at 12 entries, the exposure pass rejected 1,911 candidates and the fill-to-N
+    pass then added 150 lineups that broke the very cap it had just enforced —
+    about 2 in every 12 — so realised peak exposure averaged 76% against a 60%
+    setting, and nothing anywhere said so. The team cap fired 187 times and was
+    relaxed away in 28 of 69 builds. The overlap cap rejected 1.4 candidates per
+    build and 2.5% of the final pairs shared five players regardless.
+
+    Held out over 23 slates none of the three changed outcomes, so they are gone
+    rather than fixed. The diversity survives without them: mean pairwise overlap
+    is 2.62 of 6 against 2.65 before, because a projection-weighted random
+    builder already spreads. What is left is a genuine distinct-roster guarantee,
+    the per-player caps the USER sets by hand (their instruction, not a data
+    preference), and the core floors.
+    """
     player_caps = player_caps or {}
-    max_team_slots = max_team_slots or {}
-    counts, team_slots, final, final_sets = {}, {}, [], []
+    counts, final, seen = {}, [], set()
 
     def add(c):
         final.append(c)
-        final_sets.append(set(c.ids()))
+        seen.add(frozenset(c.ids()))
         for p in c.players:
             counts[p.dk_id] = counts.get(p.dk_id, 0) + 1
-            team_slots[p.team] = team_slots.get(p.team, 0) + 1
 
-    def exposure_ok(c):
-        return not any(counts.get(i, 0) >= player_caps.get(i, cap) for i in c.ids())
+    def capped(c):
+        return any(counts.get(i, 0) >= player_caps[i]
+                   for i in c.ids() if i in player_caps)
 
-    def team_ok(c):
-        if not max_team_slots:
-            return True
-        need = {}
-        for p in c.players:
-            need[p.team] = need.get(p.team, 0) + 1
-        return all(team_slots.get(t, 0) + k <= max_team_slots.get(t, ROSTER_SIZE * len(cands))
-                   for t, k in need.items())
-
-    for c in cands:  # exposure + overlap + team cap
+    for c in cands:  # score-sorted; honour the user's own caps, dedupe rosters
         if len(final) >= n:
             break
-        if not exposure_ok(c) or not team_ok(c):
-            continue
-        if any(len(set(c.ids()) & s) > max_overlap for s in final_sets):
+        if frozenset(c.ids()) in seen or capped(c):
             continue
         add(c)
-    for c in cands:  # relax overlap, keep exposure + team cap
-        if len(final) >= n:
-            break
-        if c not in final and exposure_ok(c) and team_ok(c):
-            add(c)
-    for c in cands:  # relax team cap, keep exposure
-        if len(final) >= n:
-            break
-        if c not in final and exposure_ok(c):
-            add(c)
-    for c in cands:  # last resort: fill to N
-        if len(final) >= n:
-            break
-        if c not in final:
-            add(c)
+    if len(final) < n:  # the user's caps cannot be met — take the best distinct
+        for c in cands:
+            if len(final) >= n:
+                break
+            if frozenset(c.ids()) not in seen:
+                add(c)
     final = final[:n]
     if core_floors:
         # Guarantee each core its minimum presence. This draws from `backfill` —
-        # every candidate we built, not the filtered shortlist — because the
-        # filters upstream are data preferences and a core is the user's own
-        # conviction. A low-owned core would otherwise be cut by the ownership
-        # floor before it ever reached the floor logic, which is precisely the
-        # bug that once buried a cored player at 1-of-N.
+        # every candidate we built, not the filtered shortlist — because a core is
+        # the user's own conviction and must not be squeezed out by a preference
+        # upstream. That is precisely the bug that once buried a cored player at
+        # 1-of-N. Instrumented at 51 of 51 builds honoured, 0.16 swaps per build.
         final = _enforce_core_floors(final, backfill or cands, core_floors)
     final.sort(key=lambda c: -c.metrics.get("score", 0))
     return final
@@ -642,30 +500,38 @@ def _attach_pool_alternatives(lineups, pool, max_per_team, n_sims, own_lean, see
 
 
 # ---------------- public API ----------------
-def build_gpp(players, *, n=20, pool_size=None, min_stack=2, max_per_team=3,
-              max_exposure=0.6, own_lean=0.0, n_sims=5000, seed=0,
-              cores=None, min_cores=0, max_overlap=4, max_off_pool=None,
-              stars_and_scrubs=None, max_leftover=700, player_caps=None,
-              stack_share=STACK_SHARE, max_sub10=MAX_SUB10, slate_rules=True):
-    # Reliability gate (not a grade). Back-testing 5 slates showed minutes and
-    # stat-stuffer had ZERO correlation with bust rate — grading/rationing them
-    # bought nothing. All they cleanly flag is genuine non-rotation risk, so we
-    # GATE those out (p.risk == projected minutes under the floor) rather than
-    # ration them. Cores are exempt — the sharp can still force a deep-bench dart.
-    # Falls back to the ungated pool if the gate would make the slate unfieldable.
+def build_gpp(players, *, n=20, pool_size=None, max_per_team=3, own_lean=0.0,
+              n_sims=5000, seed=0, cores=None, min_cores=0, max_off_pool=None,
+              stars_and_scrubs=None, player_caps=None, slate_rules=True,
+              report=None):
+    """Build and rank n lineups.
+
+    `report`, if given, is filled in with what actually happened — how many
+    candidates were asked for and built, which constraints had to be relaxed, and
+    how many lineups came back. Nothing in here may narrow the build silently:
+    a thin slate used to return 3 lineups for a requested 12 with no error and no
+    note anywhere in the UI.
+    """
+    rep = report if report is not None else {}
+    rep.setdefault("relaxed", [])
+
+    # Minutes gate (not a grade). Back-testing showed minutes and stat-stuffer
+    # have ZERO correlation with bust rate, so this only ever flagged genuine
+    # non-rotation risk. It is now OFF by default (GATE_MINUTES = 0 in app.py):
+    # held out, gating cost cashes on 0 slates and gained them on 10, and on one
+    # slate it removed a player who was in that night's winning lineup because
+    # the daily file said she would play zero minutes. The mechanism stays so the
+    # threshold can be raised deliberately; nothing is gated at 0.
     full = [p for p in players if p.proj > 0]
     gated = [p for p in full if not (p.risk and not p.core)]
-    playable = gated if _can_field(gated) else full
-    if len(playable) < ROSTER_SIZE:
+    pool = gated if _can_field(gated) else full
+    if len(pool) < ROSTER_SIZE:
+        rep["returned"] = 0
         return []
-    pool = _viable_pool(playable, n)
-    if max_off_pool is not None:
-        # The pool constraint is only meaningful if every pool member is
-        # available to build with, so never let the ceiling filter trim one.
-        seen = {id(p) for p in pool}
-        pool += [p for p in playable if p.in_pool and id(p) not in seen]
     cores = [c for c in (cores or []) if c.proj > 0]
     pool_size = pool_size or max(120, n * 8)
+    rep["requested"] = pool_size
+
     # Salary-aware construction: stars-and-scrubs is only right when a CHEAP
     # player actually projects. If cheap value exists, reserve less per slot so
     # the build can pay up + use it; if not, reserve more so it spreads into
@@ -676,65 +542,40 @@ def build_gpp(players, *, n=20, pool_size=None, min_stack=2, max_per_team=3,
         cheap_best = max((p.proj for p in pool if p.salary <= 5500), default=0.0)
         stars_and_scrubs = cheap_best >= 16
     reserve = 4200 if stars_and_scrubs else 6000
-    rules = _slate_rules(pool) if slate_rules else None
+
     kw = dict(max_per_team=max_per_team, seed=seed, cores=cores,
-              min_cores=min_cores, reserve=reserve, max_off_pool=max_off_pool,
-              stack_share=stack_share, rules=rules, max_sub10=max_sub10)
-    cands = build_candidates(pool, pool_size, stack=min_stack, **kw)
-    if not cands:  # relax the stack requirement rather than return nothing
-        cands = build_candidates(pool, pool_size, stack=1, **kw)
-    if len(cands) < n:
-        # The construction rules are strong enough to starve a thin slate. Peel
-        # them back in order of how well the data supports them — the sub-10%
-        # cap is the softest, the two-game shape rules the firmest — instead of
-        # returning fewer lineups than asked for.
-        for relaxed in (dict(kw, max_sub10=None),
-                        dict(kw, max_sub10=None, rules=None)):
-            more = build_candidates(pool, pool_size, stack=1, **relaxed)
-            if len(more) > len(cands):
-                cands = more
-            if len(cands) >= n:
-                break
+              min_cores=min_cores, reserve=reserve, max_off_pool=max_off_pool)
+    rules = _slate_rules(pool) if slate_rules else RULES_OFF
+    cands = build_candidates(pool, pool_size, rules=rules, **kw)
+    if len(cands) < n and rules["two_game"]:
+        # A two-game board can be thin enough that the shape rules starve it.
+        # Drop them rather than return fewer lineups than asked for — and SAY so,
+        # which the old ladder could not do because its "off" step passed None
+        # and got the rules straight back.
+        more = build_candidates(pool, pool_size, rules=RULES_OFF, **kw)
+        if len(more) > len(cands):
+            cands = more
+            rep["relaxed"].append("two-game shape rules dropped — too few legal "
+                                  "lineups on this board with them on")
     if not cands and max_off_pool is not None:
         # Pool too thin to field legal lineups at this cap — loosen it one at a
         # time (0 -> 1 -> ... -> unconstrained) rather than return nothing.
         for relaxed in range(max_off_pool + 1, ROSTER_SIZE + 1):
-            kw2 = dict(kw, max_off_pool=(None if relaxed >= ROSTER_SIZE else relaxed),
-                       max_sub10=None, rules=None)
-            cands = build_candidates(pool, pool_size, stack=1, **kw2)
+            kw2 = dict(kw, max_off_pool=(None if relaxed >= ROSTER_SIZE else relaxed))
+            cands = build_candidates(pool, pool_size, rules=RULES_OFF, **kw2)
             if cands:
+                rep["relaxed"].append(
+                    f"pool limit raised from {max_off_pool} to "
+                    f"{'unlimited' if relaxed >= ROSTER_SIZE else relaxed} off-pool "
+                    f"players — the pool alone could not field a legal lineup")
                 break
+    rep["built"] = len(cands)
     if not cands:
+        rep["returned"] = 0
         return []
-    # Salary floor: leaving money on the table usually means points left on it
-    # too. Keep only lineups that spend within max_leftover of the cap — but only
-    # if enough survive to still build a differentiated set (else the slate can't
-    # support it and we take what we've got).
-    if max_leftover is not None:
-        floor = SALARY_CAP - max_leftover
-        spent = [c for c in cands if c.salary >= floor]
-        if len(spent) >= n:
-            cands = spent
+
     simulate_and_score(cands, pool, sims=n_sims, own_lean=own_lean, seed=seed)
-    # Drop the bottom ownership slice of our OWN candidate pool — the one part of
-    # the ownership curve that is reliable slate after slate. Only when enough
-    # lineups survive to still build a differentiated set.
-    scored_all = list(cands)
-    if OWN_FLOOR_PCTILE and len(cands) > n:
-        by_own = sorted(cands, key=lambda c: c.total_own)
-        cut = by_own[int(len(by_own) * OWN_FLOOR_PCTILE)].total_own
-        kept = [c for c in cands if c.total_own >= cut]
-        if len(kept) >= n:
-            cands = kept
-    # Team-correlation cap: a team may hold up to TEAM_SHARE_MULT x its even share
-    # of roster slots across the whole pool (even share = 1/#teams). Scales with
-    # the slate — loose on big boards, firm on small lopsided ones.
-    teams = {p.team for p in pool if p.team}
-    max_team_slots = None
-    if len(teams) >= 2:
-        even = n * ROSTER_SIZE / len(teams)
-        cap_slots = int(math.ceil(even * TEAM_SHARE_MULT))
-        max_team_slots = {t: cap_slots for t in teams}
+
     # Core-exposure floor: every core the sharp set is guaranteed at least this
     # many lineups so a conviction play can't get squeezed to 1 of N. Data-driven
     # from slate shape — more cores spread the floor thinner, more lineups raise
@@ -744,34 +585,22 @@ def build_gpp(players, *, n=20, pool_size=None, min_stack=2, max_per_team=3,
         floor_ct = int(math.ceil(n / (len(cores) + 1)))
         if floor_ct >= 1:
             core_floors = {c.dk_id: floor_ct for c in cores}
-    final = select_final(cands, n, max_exposure, max_overlap, player_caps,
-                         max_team_slots=max_team_slots, core_floors=core_floors,
-                         backfill=scored_all)
+    final = select_final(cands, n, player_caps, core_floors=core_floors,
+                         backfill=cands)
+    rep["returned"] = len(final)
     if max_off_pool:  # 0 or None -> every lineup is already all-in-pool
         _attach_pool_alternatives(final, pool, max_per_team, n_sims, own_lean, seed)
     return final
 
 
-def _viable_pool(pool, n):
-    """Dynamic 'no minutes-punts' filter, fully slate-driven.
-
-    Winning WNBA lineups need every slot to have a real path to a useful score,
-    so we keep players by UPSIDE (ceiling), not median — a cheap starter with a
-    24-ceiling stays; a low-minutes body with a 9-ceiling is cut. The cutoff is
-    dynamic: we keep the top slice of the pool by ceiling, and the slice gets
-    DEEPER on bigger slates (more games -> more players -> the bar naturally
-    rises because the slice is a fraction of a larger pool). On a thin slate the
-    slice is small, so a marginal value play survives only if the slate is
-    genuinely that shallow. Finally we guarantee a legal, affordable lineup
-    still fits — expanding the pool just enough if the top slice can't.
-    """
-    by_ceil = sorted(pool, key=lambda p: -p.ceil)
-    depth = min(len(by_ceil), max(18, round(len(by_ceil) * 0.6)))
-    kept = by_ceil[:depth]
-    while not _can_field(kept) and depth < len(by_ceil):
-        depth += 1
-        kept = by_ceil[:depth]
-    return kept
+# _viable_pool used to sit here: it kept the top 60% of the board by ceiling
+# (minimum 18 players) on the theory that every slot needs a real path to a
+# useful score. On a two-game slate that removed the entire sub-$6,600 tier. On
+# 8-10 it cut the pool to 18 players, 99.75% of construction attempts then failed
+# and the tool returned 3 lineups for a requested 12 — and three of the six
+# players in that night's WINNING lineup had been deleted before construction
+# began. Held out it changed nothing on its own and was the root of the one
+# starvation bug in the data, so the board is no longer pre-filtered at all.
 
 
 def _can_field(pool):

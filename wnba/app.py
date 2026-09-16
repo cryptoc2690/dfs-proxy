@@ -16,7 +16,8 @@ import re
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from dk import ROSTER_SIZE, SALARY_CAP, Player, normalize_name
+from dk import (MIN_FORWARDS, MIN_GUARDS, ROSTER_SIZE, SALARY_CAP, Player,
+                normalize_name)
 from engine import CEILING_WEIGHT, STUD_SALARY, SUB10_OWN
 from engine import build_gpp as optimize_gpp
 
@@ -161,14 +162,26 @@ def parse_linestar_scored(text):
 
 
 # ---------------- daily projections (minutes + stat-stuffer floor) ----------------
-# Reliability GATE (not a grade). Back-testing 5 slates of results killed the
-# graded version: minutes and stat-stuffer had ~zero correlation with bust rate
-# (busts ran 50-62% at every minute level), so rationing "risk bodies" bought
-# nothing. The one thing minutes cleanly flag is genuine non-rotation — a body
-# projected under this floor is a lottery ticket, not a play — so we GATE those
-# out of the auto-build (cores exempt) and stop grading everyone else. Minutes +
-# stuffer stay on screen as info; they just no longer push players around.
-GATE_MINUTES = 14.0
+# Minutes are now INFORMATION ONLY. Back-testing first killed the graded version
+# (minutes and stat-stuffer had ~zero correlation with bust rate), leaving a gate
+# that removed anyone projected under 14 minutes. Held out across 23 slates that
+# gate is the cleanest negative in the whole grid: turning it OFF helped on 10
+# slates and hurt on 0, and gained 6 lineups in the money. The daily file's
+# minutes run optimistic and it gates real players — on 8-10 it removed Carrington,
+# who was in that night's winning lineup, because the file said zero minutes. One
+# day's file (8-23) was for a different slate entirely and the gate silently ran
+# on half the board with nobody the wiser.
+#
+# Set this above 0 to gate again; at 0 nothing is gated and minutes only display.
+# The daily file's projection VOTE is unaffected and stays — that half is neutral.
+GATE_MINUTES = 0.0
+
+# Minutes that confirm a real rotation role, used only to decide whether a
+# player's ceiling was a low-minute artifact (see CEIL_CAP_MULT_ROTATION). This
+# is deliberately separate from GATE_MINUTES: "is the ceiling believable" and
+# "should we build with them at all" are different questions, and tying them to
+# one number is what let the gate quietly loosen ceilings when it was turned off.
+ROTATION_MINUTES = 14.0
 
 
 def parse_daily_projections(text):
@@ -217,10 +230,13 @@ def apply_daily_projections(players, text):
         p.minutes = d["minutes"]
         p.stuffer = d["stuffer"]
         p.daily_dk = d["compdk"]
-        p.risk = p.minutes < GATE_MINUTES  # gate flag: genuine non-rotation only
+        p.risk = GATE_MINUTES > 0 and p.minutes < GATE_MINUTES
         # Real rotation minutes -> the ceiling wasn't a low-minute artifact, so
         # give back what the parse-time cap took (up to the looser multiple).
-        if not p.risk and getattr(p, "raw_ceil", 0):
+        # Keyed on the minutes themselves, not on the gate flag: the gate is off
+        # by default now and this is a separate question from whether to build
+        # with the player at all.
+        if p.minutes >= ROTATION_MINUTES and getattr(p, "raw_ceil", 0):
             p.ceil = round(min(p.raw_ceil, p.proj * CEIL_CAP_MULT_ROTATION), 1)
         p.notes.append(f"gated: {p.minutes:.0f} proj min (non-rotation)" if p.risk
                        else f"{p.minutes:.0f} min, stuffer {p.stuffer:.0f}")
@@ -301,7 +317,15 @@ def blend_projections(players):
 
 
 # ---------------- slate helpers ----------------
-def _slate_date(players):
+def _slate_date():
+    """Today's date in US Eastern — the date the BUILD happened.
+
+    It used to take a `players` argument and ignore it, which read as "the slate's
+    date" everywhere it was used. It is not: a 10pm ET tip rolls past midnight, so
+    a build and a late swap on the same slate can land on different dates. Nothing
+    that has to identify a slate may key off this — see _news_baseline, which
+    matches on the game set instead.
+    """
     from datetime import datetime, timedelta
     et = datetime.utcnow() - timedelta(hours=4)  # WNBA plays in summer -> EDT
     return et.date().isoformat()
@@ -385,6 +409,16 @@ def _parse_names(text):
     return names
 
 
+def _raw_names(text):
+    """{normalized: as the user typed it} — so an unmatched name can be echoed
+    back in their spelling rather than in the normalizer's lowercase."""
+    out = {}
+    for cell in re.split(r"[\t,;\r\n]", text or ""):
+        if _name_cell(cell):
+            out.setdefault(normalize_name(cell), (cell or "").strip().strip('"').strip())
+    return out
+
+
 # ---------------- export / serialization ----------------
 def _upload_str(p):
     """DK-import string. We only ever have LineStar's own IDs (which are NOT DK
@@ -438,9 +472,9 @@ def _coach(playable, lineups, options, slate_type, had_minutes, removed_info, po
         for p in lu.players:
             expo[p.name] = expo.get(p.name, 0) + 1
 
-    rel = ("on — sub-14-min non-rotation bodies gated out of the build"
-           if had_minutes else "OFF — add the daily-projections CSV to turn it on")
-    notes.append(("info", f"Baseline: {slate_type} slate, {n} lineups, minutes gate {rel}."))
+    rel = ("read (display only — nothing is gated)" if had_minutes
+           else "not loaded — add the daily-projections CSV to see them")
+    notes.append(("info", f"Baseline: {slate_type} slate, {n} lineups, minutes {rel}."))
 
     # Where the set landed on the two things the 24-contest review said were
     # costing us most: ownership position and sub-10%-owned bodies.
@@ -599,6 +633,45 @@ def _coach(playable, lineups, options, slate_type, had_minutes, removed_info, po
 PORT = int(os.environ.get("PORT", "8000"))
 
 
+def _build_warnings(report, unmatched_pool, requested, lineups=()):
+    """Everything the build quietly gave up, turned into plain sentences.
+
+    The tool is allowed to relax a constraint rather than hand back nothing. It is
+    not allowed to do it silently: every failure this project has shipped was a
+    fallback that worked and said nothing, and the UI reporting a full count for a
+    short set is how a 12-entry contest gets 3 lineups uploaded to it.
+    """
+    out = []
+    for note in report.get("relaxed", []):
+        out.append(note)
+    got = report.get("returned")
+    if got is not None and got < requested:
+        out.append(f"Only {got} of the {requested} lineups you asked for could be "
+                   f"built — this board cannot field more distinct legal rosters. "
+                   f"Check the pool and the OUT list before you upload.")
+    if unmatched_pool:
+        out.append("Not on this slate, so ignored: " + ", ".join(unmatched_pool))
+    # Exposure is now REPORTED rather than capped. The cap it replaced was fake —
+    # it rejected candidates and then a fill-to-N pass put about 2 in every 12
+    # back in over the top of it, so realised exposure ran at 76% against a 60%
+    # setting and nothing said so. A number you can see beats a limit that lies.
+    # On a two-game board a genuinely dominant player will land near 100%, which
+    # is usually right and occasionally not — so it gets said out loud.
+    if lineups:
+        counts = {}
+        for lu in lineups:
+            for pl in lu.players:
+                counts[pl.name] = counts.get(pl.name, 0) + 1
+        n = len(lineups)
+        heavy = sorted((c, nm) for nm, c in counts.items() if c >= 0.7 * n)
+        if heavy:
+            worst = ", ".join(f"{nm} {c} of {n}" for c, nm in sorted(heavy, reverse=True)[:3])
+            out.append(f"Heavy exposure: {worst}. That is the build following the "
+                       f"projections, not a bug — but if you want it reined in, mark "
+                       f"the player 🔒 on the slate row and set the cap.")
+    return out
+
+
 def run_optimize(csv_text: str, options: dict) -> dict:
     """Project from LineStar + build lineups, returning plain dicts for the GUI."""
     text = (csv_text or "").strip()
@@ -632,6 +705,29 @@ def run_optimize(csv_text: str, options: dict) -> dict:
     # pool itself is a build constraint enforced in the engine (max_off_pool).
     core_names = _parse_names(options.get("cores"))
     pool_names = _parse_names(options.get("pool"))
+    # A name that matches nobody used to vanish without a word, and the build
+    # carried on around the hole. Confirmed both ways: one misspelled core left
+    # the single core that DID match sitting on a 10-of-20 floor (the floor is
+    # ceil(n / (cores + 1)), so losing two cores triples the third one's share),
+    # and a misspelled pool matched nothing, fell through the engine's "pool too
+    # thin" relaxation and shipped lineups with two off-pool players each under a
+    # maxOffPool of 0. Neither said anything. Now they are reported, and a core
+    # that does not match stops the build — that one is your conviction play and
+    # a silent substitution is the opposite of what the tool is for.
+    known = {normalize_name(p.name) for p in players}
+    typed = dict(_raw_names(options.get("pool")))
+    typed.update(_raw_names(options.get("cores")))
+    show = lambda n: typed.get(n, n)
+    unmatched_cores = sorted(show(n) for n in core_names if n not in known)
+    unmatched_pool = sorted(show(n) for n in pool_names if n not in known)
+    if unmatched_cores:
+        return {"error": "These cores don't match any player on the slate: "
+                         + ", ".join(unmatched_cores)
+                         + ". Fix the spelling (or drop them) and build again — "
+                           "carrying on would quietly rebalance the cores that did "
+                           "match.",
+                "unmatchedCores": unmatched_cores,
+                "unmatchedPool": unmatched_pool, "source": source_label}
     for p in players:
         nm = normalize_name(p.name)
         p.core = nm in core_names
@@ -679,51 +775,37 @@ def run_optimize(csv_text: str, options: dict) -> dict:
     # are the same determination (not two independent computations on different
     # player sets).
     slate_type = _slate_type(players)
+    build_report = {}
     lineups = optimize_gpp(
         players,
         n=_int(options.get("n"), 20),
         pool_size=max(120, _int(options.get("n"), 20) * 8),
-        min_stack=_int(options.get("stack"), 2),
-        # Per-lineup team cap of 3 (was 4): no single team can be more than half a
-        # roster. A 4-from-one-team lineup is a pure correlation bet on one game
-        # script (the TOR blow-up), not a game stack — kill it by default; raise
-        # maxPerTeam only for a deliberate shootout stack.
+        # Per-lineup team cap of 3: no single team can be more than half a roster.
+        # Raising it to 4 survived the held-out test on CASH (72 against 67) but
+        # it is also what stopped the tool building the 8-25 winner, and first
+        # place is the objective here, so it stays at 3 as a setting you can move
+        # rather than a default that quietly trades jackpots for min-cashes.
         max_per_team=_int(options.get("maxPerTeam"), 3),
-        max_exposure=_float(options.get("maxExposure"), 0.6),
         # Ownership lean. POSITIVE leans toward the field's consensus, negative
-        # fades it. Three reviews running have said fading is -EV here, and the
-        # 24-contest study measured our lineups at the 42nd within-slate
-        # ownership percentile against the top-1% tier's 70th — we were on the
-        # wrong side of the field, not merely neutral. Kept modest on purpose:
-        # ownership is a proxy for consensus quality, not an edge of its own.
-        own_lean=_float(options.get("ownLean"), 0.35),
+        # fades it. Now defaults to ZERO — see simulate_and_score for the numbers.
+        # The short version: at +0.35 we sat at the 75th within-slate ownership
+        # percentile and the top-1% tier sits at the 63rd, so leaning in was
+        # walking past the winners into the crowd. Neutral was picked on all 23
+        # held-out folds, on both cash and dollars. Fading is worse still.
+        own_lean=_float(options.get("ownLean"), 0.0),
         n_sims=_int(options.get("sims"), 5000),
         cores=cores,
         # Anchor rule: every lineup built around at least this many cores (which
-        # ones vary across the set). Default 1 when cores are set — the sharp's
-        # cores keep landing in winners, so guarantee the build is around them.
+        # ones vary across the set). Default 1 when cores are set — held out, the
+        # set built with this on cashed 3 more lineups per 23 slates than the same
+        # tool with it off, in the same direction at 12 and at 20 entries.
         min_cores=(_int(options.get("minCores"), 1) if cores else 0),
-        max_overlap=_int(options.get("maxOverlap"), 4),
         max_off_pool=max_off_pool,
         stars_and_scrubs=(slate_type == "stars-and-scrubs"),
-        # Salary floor, deliberately loose. The earlier read (<=$300 left ->
-        # 1.87% top-1%, $1,500+ -> 0.00%) did not survive a control for
-        # projection: the leftover coefficient goes from +0.029 pct_rank per
-        # $1k to -0.001 once lineup projection is held fixed. Leaving money on
-        # the table is a SYMPTOM of a weak lineup, not a cause, so this stays
-        # only as a junk filter and no longer spends candidate diversity.
-        max_leftover=_int(options.get("maxLeftover"), 700),
-        # Seed a share of lineups with a correlation stack — high-implied-total
-        # team 3-stacks and 4-5 man stacks of the biggest game. Projection
-        # weighting alone produced these ~3 times in 20.
-        stack_share=_float(options.get("stackShare"), 0.5),
         player_caps=player_caps,
-        # Cap on sub-10%-owned players per lineup, and the two-game shape rules.
-        # Both are review-driven hard constraints; both are switchable because
-        # the tool advises, it doesn't overrule.
-        max_sub10=(None if str(options.get("maxSub10")) == "off"
-                   else _int(options.get("maxSub10"), 1)),
+        # The two-game shape rules, and a switch that now actually switches.
         slate_rules=str(options.get("slateRules", "on")) != "off",
+        report=build_report,
     )
 
     result = {
@@ -731,10 +813,15 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         "slateType": slate_type,
         "poolActive": bool(pool_names),
         "removed": removed,
+        # Everything the build had to give up, said out loud. A thin board used
+        # to return 3 lineups for a requested 12 with no error and no note.
+        "warnings": _build_warnings(build_report, unmatched_pool,
+                                    _int(options.get("n"), 20), lineups),
+        "unmatchedPool": unmatched_pool,
         "coach": _coach(playable, lineups, options, slate_type, had_minutes,
                         removed_info, pool_names),
         "slate": {
-            "date": _slate_date(players),
+            "date": _slate_date(),
             "games": sorted({p.game for p in players if p.game}),
         },
         "out": [p.name for p in players if p.status == "OUT"][:40],
@@ -846,19 +933,30 @@ def _log_build(result, players, lineups, options):
                 "ceilingWeight": CEILING_WEIGHT,
             },
             "options": {k: options.get(k) for k in (
-                "n", "ownLean", "stackShare", "maxPerTeam", "maxLeftover",
-                "maxExposure", "minCores", "maxOverlap", "stack",
-                "maxSub10", "slateRules") if k in options},
+                "n", "ownLean", "maxPerTeam", "minCores", "maxOffPool",
+                "slateRules", "capPct") if k in options},
+            "gateMinutes": GATE_MINUTES,
             "cores": [p.name for p in players if p.core],
             "pool": [p.name for p in players if p.in_pool],
             "removed": result.get("removed", []),
+            # What the build had to give up, kept with the build rather than only
+            # shown on screen — the next review reads this file, not the browser.
+            "warnings": result.get("warnings", []),
             "lineups": [_lineup_log(lu, med, game_totals) for lu in lineups],
         }
         os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
         with open(LOG_PATH, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(record) + "\n")
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001
+        # Still never break a build over logging — but do not disappear either.
+        # This was a bare `except Exception: pass`, so a schema, disk or
+        # permission problem wrote no line and said nothing, and late swap then
+        # silently read an OLDER build as its news baseline. Same class as the two
+        # silent failures this project has already shipped.
+        result.setdefault("warnings", []).append(
+            f"Build log not written ({exc.__class__.__name__}: {exc}). Late swap's "
+            f"news detection reads that log, so it may fall back to an older build "
+            f"of this slate.")
 
 
 # ---------------- DK entries file (DKEntries*.csv) ----------------
@@ -1001,6 +1099,37 @@ def _util_holds_latest(roster, slots, pool, locked_names=()):
     return roster
 
 
+def _roster_problem(filled):
+    """Why DK would reject this row, or "" if it wouldn't.
+
+    The writer used to do no legality check of its own at all: handed a 4-guard,
+    $62,700 roster it slotted a guard into a forward cell and wrote the row with
+    an empty warning. Today's engine cannot produce such a roster, so this is a
+    belt for a path that has no braces — and the late-swap and hand-edit paths
+    reach this same writer.
+    """
+    if any(p is None for p in filled):
+        return "an empty slot"
+    ids = [p.get("dkId") for p in filled]
+    if len(set(ids)) != len(ids):
+        return "the same player twice"
+    guards = sum(1 for p in filled if p.get("guard"))
+    if guards < MIN_GUARDS:
+        return f"{guards} guards, DK needs at least {MIN_GUARDS}"
+    if len(filled) - guards < MIN_FORWARDS:
+        return f"{len(filled) - guards} forwards, DK needs at least {MIN_FORWARDS}"
+    salary = sum(int(p.get("salary") or 0) for p in filled)
+    if salary > SALARY_CAP:
+        return f"${salary:,} of salary, over the ${SALARY_CAP:,} cap"
+    # Only checkable when every game is known. DK blanks the matchup once a game
+    # tips, so mid-slate a legal roster can look single-game here; don't cry wolf
+    # at the exact moment late swap is writing the file.
+    games = [p.get("game") for p in filled]
+    if all(games) and len(set(games)) < 2:
+        return "only one game — DK requires two"
+    return ""
+
+
 def build_dk_upload(dk, lineups_names):
     """Fill our generated lineups into the DK entries file's slot order and return
     re-uploadable CSV text. Uses the file's REAL DK IDs, so it imports directly
@@ -1010,7 +1139,7 @@ def build_dk_upload(dk, lineups_names):
     if not entries:
         return None, "No contest entries found in that DK file."
     lines = ["Entry ID,Contest Name,Contest ID,Entry Fee," + ",".join(slots)]
-    missing = set()
+    missing, illegal = set(), []
     n = min(len(entries), len(lineups_names))
     for e, names in zip(entries[:n], lineups_names[:n]):
         recs = []
@@ -1037,14 +1166,31 @@ def build_dk_upload(dk, lineups_names):
         wrapped = [_P(p) for p in filled if p]
         if len(wrapped) == len(filled):
             filled = [w.rec for w in _util_holds_latest(wrapped, slots, pool)]
+        bad = _roster_problem(filled)
+        if bad:
+            illegal.append(f"entry {e['entryId']}: {bad}")
         cells = [f'"{p["name"]} ({p["dkId"]})"' if p and p.get("dkId")
                  else f'"{p["name"]}"' if p else "" for p in filled]
         cname = e["contest"].replace('"', '""')
         lines.append(f'{e["entryId"]},"{cname}",{e["contestId"]},{e["fee"]},'
                      + ",".join(cells))
-    notes = []
+    # A cell without a DK ID is a row DraftKings rejects. This used to be written
+    # anyway and reported as a success — a green tick followed by the reason the
+    # file would not import. Reproduced three ways: a truncated export, the wrong
+    # slate's export, and a lineup holding a name that is not in the pool. Refuse
+    # instead: a missing file is a problem you can fix in a minute, a file that
+    # looks filled and silently fails at DK costs the whole night.
     if missing:
-        notes.append(f"no DK ID for: {', '.join(sorted(missing))}")
+        return None, ("Not written — no DK ID on this slate for: "
+                      + ", ".join(sorted(missing))
+                      + ". That is usually the wrong slate's entries file, or a "
+                        "truncated download. Re-export from DraftKings and try "
+                        "again.")
+    if illegal:
+        return None, ("Not written — these rosters are not legal for DK: "
+                      + "; ".join(illegal[:5])
+                      + ("" if len(illegal) <= 5 else f" (+{len(illegal) - 5} more)"))
+    notes = []
     if len(lineups_names) > len(entries):
         notes.append(f"{len(lineups_names)} lineups, {len(entries)} entries — filled {n}.")
     elif len(entries) > len(lineups_names):
@@ -1456,13 +1602,25 @@ SWAP_NEWS_PROJ_DROP = 0.25   # share of projection lost that counts as news
 SWAP_NEWS_MIN_DROP = 4.0     # ...and at least this many points, so noise is out
 
 
-def _news_baseline(slate_date):
-    """{norm name: proj} from the most recent logged build for this slate.
+def _news_baseline(games):
+    """{norm name: proj} from the most recent logged build of THIS slate.
 
-    Uses the build log rather than asking for the pre-lock file again: the log is
-    already written on every build and is the only record of what we believed at
-    lock time."""
-    out = {}
+    Matched on the slate's GAME SET, not on a date. It used to be matched on
+    _slate_date(), which returns today's ET date — so a build made in the
+    afternoon and a swap run after a 10pm tip rolled past midnight were looking at
+    two different days and found nothing. Confirmed by replaying 8-29 against the
+    repo's own build log for 8-29: hadBaseline came back False, which means the
+    "projection cut" half of news detection could never fire on a real night. A
+    game set identifies a slate exactly and does not drift over midnight.
+
+    Takes the LAST matching record rather than merging them all. Successive builds
+    on one slate are the audit trail of mid-day core and pool edits; the baseline
+    wants what we believed at lock, not an average of every draft.
+    """
+    want = sorted(games or [])
+    if not want:
+        return {}
+    best = None
     try:
         with open(LOG_PATH, encoding="utf-8") as fh:
             for line in fh:
@@ -1470,15 +1628,16 @@ def _news_baseline(slate_date):
                     rec = json.loads(line)
                 except ValueError:
                     continue
-                if slate_date and rec.get("slate") != slate_date:
-                    continue
-                for lu in rec.get("lineups", []):
-                    for p in lu.get("players", []):
-                        nm = normalize_name(p.get("name", ""))
-                        if nm:
-                            out[nm] = p.get("proj", 0.0)
+                if sorted(rec.get("games") or []) == want:
+                    best = rec          # append-only log: last match is the latest
     except OSError:
         return {}
+    out = {}
+    for lu in (best or {}).get("lineups", []):
+        for p in lu.get("players", []):
+            nm = normalize_name(p.get("name", ""))
+            if nm:
+                out[nm] = p.get("proj", 0.0)
     return out
 
 
@@ -1539,7 +1698,6 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
     by_norm = {normalize_name(p.name): p for p in players}
     n_sims = _int(options.get("sims"), 3000)
     n_lu = len(entries)
-    cap_ct = max(1, round(_float(options.get("maxExposure"), 0.6) * n_lu))
 
     # Optional contest standings: replaces the projection-based pace proxy with a
     # real leaderboard position, and gives actual contest ownership for the
@@ -1567,8 +1725,20 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
         p.core = normalize_name(p.name) in core_names
     # What has actually changed since the build. Everything downstream keys off
     # this: no news about a lineup means the lineup is left alone.
-    news_only = str(options.get("newsOnly", "on")) != "off"
-    baseline = _news_baseline(_slate_date(players))
+    # News-only is the ONLY mode now. Replayed on all seven mid-slate snapshots in
+    # the results, free re-optimisation scored +$86 — all of it one slate where
+    # the "mid-slate" LineStar pull carried unchanged projections and no live
+    # scores, so 16 of 16 swaps were pure churn that happened to land. Drop that
+    # slate and it is -$22 with two slates actively wrecked (52.9 -> 31.5 and
+    # 40.0 -> 0.0). News-only was +$24 across the same seven, helped 2, hurt 0,
+    # and both gains were a player who had been ruled out.
+    #
+    # SWAP_MIN_GAIN cannot rescue free mode: simulated gains of 6-13 points mapped
+    # to realised changes from -30 to +35, i.e. the threshold does not separate
+    # signal from noise at all. News swaps carried simulated gains of 24-45 and
+    # went 8 for 8.
+    news_only = True
+    baseline = _news_baseline(sorted({p.game for p in players if p.game}))
     news = _news_names(players, baseline)
     # Players in the next game to tip: filling a slot from there costs optionality.
     starts = sorted({p["start"] for p in dk["pool"].values()
@@ -1681,16 +1851,11 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
         cur_score = current.metrics["swapScore"] if current else None
         here = {normalize_name(p.name) for p in lineup}
 
-        def exposure_ok(lu):
-            # Only players this swap would ADD are checked — someone already in
-            # the lineup isn't made more concentrated by staying.
-            for p in lu.players:
-                n = normalize_name(p.name)
-                if n in here:
-                    continue
-                if counts.get(n, 0) + 1 > cap_ct:
-                    return False
-            return True
+        # A mid-slate exposure cap used to sit here. It is gone with the build's:
+        # held out over 23 slates the cap changed no outcome, and the one moment
+        # it could bind is the worst possible one — when a player is ruled out in
+        # six lineups, the replacement you want is the best one, six times, not
+        # the fifth-best because the first hit a quota.
 
         cur_proj = sum(p.proj for p in lineup)
         pick = None
@@ -1703,15 +1868,13 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
         # that moves alongside it is discretionary re-optimisation, which
         # measured at noise. One spare slot is allowed because a straight
         # one-for-one swap often can't be afforded under the cap.
-        move_cap = (len(row["news"]) + 1) if news_only else ROSTER_SIZE
+        move_cap = len(row["news"]) + 1
         for lu in ([] if held else lus):
             if lu.metrics.get("isCurrent"):
                 continue
             if lu.salary > SALARY_CAP:
                 continue
             if len(here - {normalize_name(p.name) for p in lu.players}) > move_cap:
-                continue
-            if not exposure_ok(lu):
                 continue
             if SALARY_CAP - lu.salary > SWAP_MAX_LEFTOVER and current and \
                     lu.metrics["swapScore"] - cur_score < SWAP_MIN_GAIN * 2:
@@ -1812,6 +1975,13 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
         "newsOnly": news_only,
         "newsCount": len(news),
         "hadBaseline": bool(baseline),
+        # Without a baseline only "ruled out" news is detectable — a projection
+        # CUT cannot be seen, because there is nothing to compare against. Say so
+        # instead of quietly running at half strength.
+        "warnings": ([] if baseline else [
+            "No pre-lock build found for this slate, so late swap can only react "
+            "to players ruled OUT — it cannot see a projection cut. Build this "
+            "slate first (even once) and the full news check comes back."]),
         "slots": slots,
         "csvHeader": csv_header,
         "dkCsv": ("\n".join(lines) + "\n") if len(lines) > 1 else None,
