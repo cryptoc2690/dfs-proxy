@@ -399,6 +399,15 @@ DUPE_EXP = 0.25
 # money it returned $561 per 600 entries against $168 for Win%.
 VENDOR_SIGNAL = "top10"
 
+# Share of the set allowed to hold ANY kicker or defence (None = no limit).
+# Under test: on DET @ BUF the build put Tyler Bass in 60% of entries and Jake
+# Bates in 45% while the field held Bass at 26%, on a slate whose top 1% carried
+# a K or DST just 7% of the time. Whether K/DST is the right punt is decided by
+# game script and is not knowable pre-lock -- across four showdowns the top-1%
+# tier avoided them twice (6%, 7%) and loaded them twice (83%, 78%) -- so this
+# is a hedge against the concentration, not a claim about the players.
+KDST_CAP = None
+
 
 def expected_copies(dupes, scale):
     """Opponents expected to hold a roster the vendor lists at this Dupes count."""
@@ -874,8 +883,11 @@ def select(lineups, n, *, captain_cap=None,
     chosen, sets = [], []
     cross = max_overlap + 1
     cpt_ct, ply_used, split_ct, side_used, split_side_ct = {}, {}, {}, {}, {}
+    kdst_used = [0]
     prior_sets = [set(lu.overlap_ids()) for lu in prior]
     for lu in prior:
+        if any(p.pos in ("K", "DST") for p in lu.players):
+            kdst_used[0] += 1
         cpt_ct[lu.cpt.dk_id] = cpt_ct.get(lu.cpt.dk_id, 0) + 1
         s = lu.major_side()
         if s:
@@ -886,6 +898,8 @@ def select(lineups, n, *, captain_cap=None,
     def take(lu):
         chosen.append(lu)
         sets.append(set(lu.overlap_ids()))
+        if any(p.pos in ("K", "DST") for p in lu.players):
+            kdst_used[0] += 1
         cpt_ct[lu.cpt.dk_id] = cpt_ct.get(lu.cpt.dk_id, 0) + 1
         split_ct[lu.split_label()] = split_ct.get(lu.split_label(), 0) + 1
         s = lu.major_side()
@@ -906,6 +920,9 @@ def select(lineups, n, *, captain_cap=None,
                 return False
         if any(ply_used.get(i, 0) >= ply_ct for i in lu.ids()):
             return False
+        if KDST_CAP is not None and any(p.pos in ("K", "DST") for p in lu.players):
+            if kdst_used[0] >= max(1, round(KDST_CAP * total)):
+                return False
         s = set(lu.overlap_ids())
         if any(len(s & t) > cross for t in prior_sets):
             return False
