@@ -399,15 +399,6 @@ DUPE_EXP = 0.25
 # money it returned $561 per 600 entries against $168 for Win%.
 VENDOR_SIGNAL = "top10"
 
-# Share of the set allowed to hold ANY kicker or defence (None = no limit).
-# Under test: on DET @ BUF the build put Tyler Bass in 60% of entries and Jake
-# Bates in 45% while the field held Bass at 26%, on a slate whose top 1% carried
-# a K or DST just 7% of the time. Whether K/DST is the right punt is decided by
-# game script and is not knowable pre-lock -- across four showdowns the top-1%
-# tier avoided them twice (6%, 7%) and loaded them twice (83%, 78%) -- so this
-# is a hedge against the concentration, not a claim about the players.
-KDST_CAP = None
-
 
 def expected_copies(dupes, scale):
     """Opponents expected to hold a roster the vendor lists at this Dupes count."""
@@ -850,6 +841,26 @@ def select(lineups, n, *, captain_cap=None,
     # 15,882 to rank 959 — but rank 959 of 237,053 pays nothing, so a better top
     # end bought no money. Forcing punt coverage is not the edge it looks like.
     #
+    # Concentration was then tried from the other end, over four showdowns
+    # (DAL @ NYG, DEN @ KC, DET @ BUF, SF @ LAR), four seeds, realised money,
+    # per-slate seed SD $44. Baseline $313 on $300 of fees, cash 174.0:
+    #
+    #   cap any one PLAYER at 60%        -$39   cash -26.5   (helped 1 of 4)
+    #   cap any one PLAYER at 45%        -$23   cash -25.8   (helped 1 of 4)
+    #   cap the whole K/DST block at 40%  -$7   cash  +2.2   (helped 2 of 4)
+    #   cap the whole K/DST block at 25% -$14   cash  +1.0   (helped 2 of 4)
+    #
+    # The player cap is the clear result and it points the opposite way to the
+    # intuition: the build put Tyler Bass in 60% of DET @ BUF against a field at
+    # 26%, that looked indefensible, and forcing it down costs $39 and twenty-six
+    # cashes. Heavy exposure here is the builder following its projections, and
+    # the alternatives it is pushed onto are worse. The K/DST cap nets to noise
+    # while swinging hard by slate (+$14 on DET @ BUF, -$23 on DEN @ KC) because
+    # whether a kicker or defence is the right punt is decided by game script:
+    # across the same four contests the top-1% tier avoided K/DST twice (6%, 7%)
+    # and loaded it twice (83%, 78%). There is no pre-lock read of that, so there
+    # is nothing to cap toward.
+    #
     # `prior` is what an earlier arm already took. Its rosters are excluded,
     # its exposure counts are inherited so the caps hold across ALL entries
     # rather than per arm, and its rosters are checked for overlap — at the
@@ -883,11 +894,8 @@ def select(lineups, n, *, captain_cap=None,
     chosen, sets = [], []
     cross = max_overlap + 1
     cpt_ct, ply_used, split_ct, side_used, split_side_ct = {}, {}, {}, {}, {}
-    kdst_used = [0]
     prior_sets = [set(lu.overlap_ids()) for lu in prior]
     for lu in prior:
-        if any(p.pos in ("K", "DST") for p in lu.players):
-            kdst_used[0] += 1
         cpt_ct[lu.cpt.dk_id] = cpt_ct.get(lu.cpt.dk_id, 0) + 1
         s = lu.major_side()
         if s:
@@ -898,8 +906,6 @@ def select(lineups, n, *, captain_cap=None,
     def take(lu):
         chosen.append(lu)
         sets.append(set(lu.overlap_ids()))
-        if any(p.pos in ("K", "DST") for p in lu.players):
-            kdst_used[0] += 1
         cpt_ct[lu.cpt.dk_id] = cpt_ct.get(lu.cpt.dk_id, 0) + 1
         split_ct[lu.split_label()] = split_ct.get(lu.split_label(), 0) + 1
         s = lu.major_side()
@@ -920,9 +926,6 @@ def select(lineups, n, *, captain_cap=None,
                 return False
         if any(ply_used.get(i, 0) >= ply_ct for i in lu.ids()):
             return False
-        if KDST_CAP is not None and any(p.pos in ("K", "DST") for p in lu.players):
-            if kdst_used[0] >= max(1, round(KDST_CAP * total)):
-                return False
         s = set(lu.overlap_ids())
         if any(len(s & t) > cross for t in prior_sets):
             return False
