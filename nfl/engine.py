@@ -399,6 +399,44 @@ DUPE_EXP = 0.25
 # money it returned $561 per 600 entries against $168 for Win%.
 VENDOR_SIGNAL = "top10"
 
+# ---- the slate read -----------------------------------------------------
+# Read the game BEFORE anything is built, and let that decide how the cheap slot
+# is handled, instead of applying one rule to every showdown and averaging the
+# result to zero. That averaging is what five earlier attempts did, and it is why
+# they each came back as noise: the same setting is worth +$14 on DET @ BUF and
+# -$23 on DEN @ KC, so summing them measures nothing.
+#
+# The read is the top quarterback's projection, which is the cleanest pre-lock
+# statement of whether the ball is going to be thrown around. A defence scores
+# when the other side stalls, so a game built around a quarterback is the game
+# where a defence is worst — and on a showdown the defence is competing for the
+# same cheap slot as the receivers who benefit from that same passing volume.
+#
+# Measured on the four logged showdowns, 8 defences: the correlation between the
+# top QB's projection and whether a defence beat its own projection is -0.39. Six
+# of the eight missed their projection; the only two that beat it (Chiefs +5.2,
+# 49ers +3.3) were both in the two lowest-quarterback games. And the K/DST cap
+# that was tested globally and netted to nothing splits cleanly on this read:
+# it gained $14 and $11 on the two throwing games and lost $23 and $7 on the two
+# grind games.
+#
+# THIS THRESHOLD IS NOT VALIDATED. It was chosen from four slates and it cannot
+# honestly be tested on those same four slates — a conditional fitted to 2-of-4
+# will always look good re-scored on the same four. It is a read, written down
+# where it can be inspected and changed, on a tool that previously had no read at
+# all. It earns its place or loses it on the slates that come next.
+QB_THROWING = 19.0      # top QB projection at or above which the game reads pass-first
+THROW_KDST_CAP = 0.40   # in that game, share of the set allowed to hold a K or DST
+
+
+def slate_read(players):
+    """-> {"top_qb": float, "throwing": bool, "kdst_cap": float | None}"""
+    qbs = [p.proj for p in players if p.pos == "QB" and p.proj > 0]
+    top = max(qbs) if qbs else 0.0
+    throwing = top >= QB_THROWING
+    return {"top_qb": top, "throwing": throwing,
+            "kdst_cap": THROW_KDST_CAP if throwing else None}
+
 
 def expected_copies(dupes, scale):
     """Opponents expected to hold a roster the vendor lists at this Dupes count."""
@@ -792,7 +830,7 @@ def rank(lineups, mat, bar, sims, dupes_idx, own_lean=None, dupe_scale=1.0,
 
 def select(lineups, n, *, captain_cap=None,
            player_cap=None, max_overlap=None, side_cap=None,
-           split_targets=None, core_floors=None, prior=None):
+           split_targets=None, core_floors=None, prior=None, kdst_cap=None):
     """Pick the final N under coverage rules rather than diversification ones.
 
     150 showdown entries are worth roughly two independent bets — mean pairwise
@@ -918,8 +956,11 @@ def select(lineups, n, *, captain_cap=None,
     chosen, sets = [], []
     cross = max_overlap + 1
     cpt_ct, ply_used, split_ct, side_used, split_side_ct = {}, {}, {}, {}, {}
+    kd_used = [0]
     prior_sets = [set(lu.overlap_ids()) for lu in prior]
     for lu in prior:
+        if any(p.pos in ("K", "DST") for p in lu.players):
+            kd_used[0] += 1
         cpt_ct[lu.cpt.dk_id] = cpt_ct.get(lu.cpt.dk_id, 0) + 1
         s = lu.major_side()
         if s:
@@ -930,6 +971,8 @@ def select(lineups, n, *, captain_cap=None,
     def take(lu):
         chosen.append(lu)
         sets.append(set(lu.overlap_ids()))
+        if any(p.pos in ("K", "DST") for p in lu.players):
+            kd_used[0] += 1
         cpt_ct[lu.cpt.dk_id] = cpt_ct.get(lu.cpt.dk_id, 0) + 1
         split_ct[lu.split_label()] = split_ct.get(lu.split_label(), 0) + 1
         s = lu.major_side()
@@ -950,6 +993,11 @@ def select(lineups, n, *, captain_cap=None,
                 return False
         if any(ply_used.get(i, 0) >= ply_ct for i in lu.ids()):
             return False
+        # The slate read, and the only place it acts. On a game the read calls
+        # pass-first, the kicker-and-defence block cannot own the cheap slot.
+        if kdst_cap is not None and any(p.pos in ("K", "DST") for p in lu.players):
+            if kd_used[0] >= max(1, round(kdst_cap * total)):
+                return False
         s = set(lu.overlap_ids())
         if any(len(s & t) > cross for t in prior_sets):
             return False
@@ -1054,7 +1102,7 @@ def select(lineups, n, *, captain_cap=None,
 
 def vendor_arm(field_entries, n, *, captain_cap=None,
                player_cap=None, max_overlap=None, side_cap=None,
-               dupe_scale=1.0, core_floors=None, prior=None):
+               dupe_scale=1.0, core_floors=None, prior=None, kdst_cap=None):
     """Their pool, re-ranked on Win% / (1 + Dupes) and put through the same caps.
 
     This is the control arm for the A/B comparison, and on its own it is a
@@ -1086,4 +1134,4 @@ def vendor_arm(field_entries, n, *, captain_cap=None,
     # 32-32 without being told to.
     return select(cands, n, captain_cap=captain_cap, player_cap=player_cap,
                   max_overlap=max_overlap, side_cap=side_cap,
-                  core_floors=core_floors, prior=prior)
+                  core_floors=core_floors, prior=prior, kdst_cap=kdst_cap)

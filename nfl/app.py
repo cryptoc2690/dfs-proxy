@@ -1005,6 +1005,22 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                         "for its position at ownership that lags it. The list "
                         "is empty, not truncated.")
 
+    read = {"kdst_cap": None, "top_qb": 0.0, "throwing": False}
+    if fmt == "showdown":
+        read = E.slate_read(players)
+        say("info" if not read["throwing"] else "good",
+            f"Slate read: top quarterback projects {read['top_qb']:.1f}, so this "
+            + ("reads as a PASS-FIRST game. A defence scores when a drive stalls, "
+               "and it is competing for the same cheap seat as the receivers that "
+               f"volume feeds, so kickers and defences are held to "
+               f"{read['kdst_cap']:.0%} of the set."
+               if read["throwing"] else
+               "reads as a GRIND. Kickers and defences are live here and are left "
+               "alone — on the two lowest-quarterback games in the logged data "
+               "they were the only defences that beat their projection.")
+            + " This read is set from four showdowns and is not proven; it is "
+              "written down so it can be argued with (QB_THROWING in engine.py).")
+
     n_mine = n if split is None else max(0, min(split, n))
     n_vendor = n - n_mine
     chosen = []
@@ -1080,7 +1096,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                         f"least {per} of {n_mine} lineups.")
         if fmt == "showdown":
             chosen += E.select(cands, n_mine, split_targets=shape_targets,
-                               core_floors=floors, **caps)
+                               core_floors=floors, kdst_cap=read["kdst_cap"], **caps)
         else:
             chosen += C.select(cands, n_mine, stack_targets=shape_targets,
                                core_floors=floors, **caps)
@@ -1136,7 +1152,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                     say("warn", "None of their lineups fit your pool, so the "
                                 "vendor half is built from ours instead.")
             if vfield and fmt == "showdown":
-                chosen += E.vendor_arm(vfield, n_vendor, dupe_scale=dupe_scale,
+                chosen += E.vendor_arm(vfield, n_vendor, kdst_cap=read["kdst_cap"],
+                                       dupe_scale=dupe_scale,
                                        core_floors=floors_total, prior=chosen,
                                        **caps)
             elif vfield:
