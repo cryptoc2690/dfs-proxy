@@ -820,6 +820,27 @@ def select(lineups, n, *, captain_cap=None,
     just split the tied places between them — so against a first-place objective
     it is an entry spent on an outcome you already own.
     """
+    # Punt-slot diversity was tried here and DIED. On DET @ BUF the best lineup
+    # holding Joshua Palmer ranked EIGHTH of 4,000 and was rejected for sharing
+    # five of six with the lineup at rank five, whose only difference was the
+    # Bills defence in the cheapest slot; Palmer then finished in 0 of 150
+    # entries while 14% of the field held him and the winner was built on him.
+    # The reasoning looked airtight, so it got measured: rebuilt on DAL @ NYG,
+    # DEN @ KC and DET @ BUF, five seeds each, scored on realised money against
+    # the real field on each contest's own ladder.
+    #
+    #   baseline                      $218   cash 114.8
+    #   punt swaps exempt from overlap  +$12   cash -1.6   (2 of 3 slates)
+    #   cap any one punt at 20%         +$12   cash -1.2   (2 of 3)
+    #   cap any one punt at 12%         +$14   cash -0.6   (2 of 3)
+    #   cap any one punt at 8%          -$23   cash -2.0   (1 of 3)
+    #
+    # Per-slate seed SD is $63, so +$14 across three slates is a fifth of one
+    # slate's noise, and cash falls at every setting. The mechanism does work in
+    # the narrow sense — at a 12% cap the best DET @ BUF lineup went from rank
+    # 15,882 to rank 959 — but rank 959 of 237,053 pays nothing, so a better top
+    # end bought no money. Forcing punt coverage is not the edge it looks like.
+    #
     # `prior` is what an earlier arm already took. Its rosters are excluded,
     # its exposure counts are inherited so the caps hold across ALL entries
     # rather than per arm, and its rosters are checked for overlap — at the
