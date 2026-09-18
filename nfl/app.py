@@ -1005,21 +1005,29 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                         "for its position at ownership that lags it. The list "
                         "is empty, not truncated.")
 
-    read = {"kdst_cap": None, "top_qb": 0.0, "throwing": False}
+    read = {"kdst_cap": None, "both_qb": 0.0, "throwing": 0.0}
     if fmt == "showdown":
         read = E.slate_read(players)
-        say("info" if not read["throwing"] else "good",
-            f"Slate read: top quarterback projects {read['top_qb']:.1f}, so this "
-            + ("reads as a PASS-FIRST game. A defence scores when a drive stalls, "
-               "and it is competing for the same cheap seat as the receivers that "
-               f"volume feeds, so kickers and defences are held to "
-               f"{read['kdst_cap']:.0%} of the set."
-               if read["throwing"] else
-               "reads as a GRIND. Kickers and defences are live here and are left "
-               "alone — on the two lowest-quarterback games in the logged data "
-               "they were the only defences that beat their projection.")
-            + " This read is set from four showdowns and is not proven; it is "
-              "written down so it can be argued with (QB_THROWING in engine.py).")
+        if read["kdst_cap"] is None:
+            say("info", f"Slate read: the two quarterbacks project "
+                        f"{read['both_qb']:.1f} between them, below the "
+                        f"{E.QB_PASS_LO:.0f} where this starts to bite, so the game "
+                        f"reads as a GRIND and kickers and defences are left "
+                        f"entirely alone. On the two lowest-passing games in the "
+                        f"logged data the winning tier held one in 83% and 78% of "
+                        f"its lineups.")
+        else:
+            say("good", f"Slate read: the two quarterbacks project "
+                        f"{read['both_qb']:.1f} between them, {read['throwing']:.0%} "
+                        f"of the way to a full pass-first read, so kickers and "
+                        f"defences are held to {read['kdst_cap']:.0%} of the set. A "
+                        f"defence scores when a drive stalls and is taking the same "
+                        f"cheap seat as the receivers that volume feeds. On the two "
+                        f"passing games in the logged data the winning tier held one "
+                        f"in 6% and 7% of its lineups against a field at ~58%.")
+        say("info", "That read is set from four showdowns and is NOT proven. "
+                    "QB_PASS_LO, QB_PASS_HI and KDST_CAP_TIGHT in engine.py are "
+                    "where to argue with it.")
 
     n_mine = n if split is None else max(0, min(split, n))
     n_vendor = n - n_mine

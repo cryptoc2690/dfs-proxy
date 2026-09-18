@@ -425,17 +425,46 @@ VENDOR_SIGNAL = "top10"
 # will always look good re-scored on the same four. It is a read, written down
 # where it can be inspected and changed, on a tool that previously had no read at
 # all. It earns its place or loses it on the slates that come next.
-QB_THROWING = 19.0      # top QB projection at or above which the game reads pass-first
-THROW_KDST_CAP = 0.40   # in that game, share of the set allowed to hold a K or DST
+# Both quarterbacks, not just the better one: a defence faces the OPPOSING
+# offence, so the game's total passing expectation reads it better than one side.
+# Measured across the four logged showdowns and their eight defences, the
+# correlation with whether a defence beat its own projection is -0.45 on the pair
+# against -0.39 on the top man alone. It also separates with room rather than on a
+# knife edge: the two slates a cap helped sit at 38.6 and 42.6, the two it hurt at
+# 35.2 and 36.2. So the response ramps between these two points instead of
+# flipping, and a slate landing in the gap gets a partial answer rather than a
+# coin toss.
+QB_PASS_LO = 37.0       # both QBs summed, at or below which nothing is capped
+QB_PASS_HI = 40.0       # and at or above which the tightest cap applies
+
+# Where the cap lands. NOT a number picked for feel: the FIELD carries a kicker or
+# defence in 57-63% of lineups on every one of these slates and never adjusts,
+# while the top 1% swings from 6% and 7% on the two passing games to 83% and 78%
+# on the two grinds. On a passing game the winners were near zero, so the cap
+# tightens toward the winners rather than toward the crowd. A cap at 0.25 beat one
+# at 0.40 on both passing slates, on money ($102 v $101, $29 v $27) and on cash
+# (59 v 52, 28 v 24); 0.60 is set at the field's own rate, i.e. loose enough to
+# bind on almost nothing, so the ramp starts from "no real constraint".
+KDST_CAP_TIGHT = 0.25
+KDST_CAP_LOOSE = 0.60
 
 
 def slate_read(players):
-    """-> {"top_qb": float, "throwing": bool, "kdst_cap": float | None}"""
-    qbs = [p.proj for p in players if p.pos == "QB" and p.proj > 0]
-    top = max(qbs) if qbs else 0.0
-    throwing = top >= QB_THROWING
-    return {"top_qb": top, "throwing": throwing,
-            "kdst_cap": THROW_KDST_CAP if throwing else None}
+    """-> {"both_qb": float, "throwing": float 0-1, "kdst_cap": float | None}
+
+    Read the game before anything is built. THE NUMBERS ABOVE ARE NOT VALIDATED:
+    they come from four showdowns and cannot honestly be scored on those same
+    four. This is a read, written where it can be argued with, on a builder that
+    had none. It earns its place on the slates that come next.
+    """
+    qbs = sorted((p.proj for p in players if p.pos == "QB" and p.proj > 0),
+                 reverse=True)
+    both = sum(qbs[:2])
+    if both <= QB_PASS_LO:
+        return {"both_qb": both, "throwing": 0.0, "kdst_cap": None}
+    t = min(1.0, (both - QB_PASS_LO) / max(QB_PASS_HI - QB_PASS_LO, 1e-9))
+    return {"both_qb": both, "throwing": t,
+            "kdst_cap": KDST_CAP_LOOSE + t * (KDST_CAP_TIGHT - KDST_CAP_LOOSE)}
 
 
 def expected_copies(dupes, scale):
