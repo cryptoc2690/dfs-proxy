@@ -1080,7 +1080,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                         f"least {per} of {n_mine} lineups.")
         if fmt == "showdown":
             chosen += E.select(cands, n_mine, split_targets=shape_targets,
-                               core_floors=floors, sims=sims, **caps)
+                               core_floors=floors, **caps)
         else:
             chosen += C.select(cands, n_mine, stack_targets=shape_targets,
                                core_floors=floors, **caps)
@@ -1136,7 +1136,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                     say("warn", "None of their lineups fit your pool, so the "
                                 "vendor half is built from ours instead.")
             if vfield and fmt == "showdown":
-                chosen += E.vendor_arm(vfield, n_vendor, sims=sims, dupe_scale=dupe_scale,
+                chosen += E.vendor_arm(vfield, n_vendor, dupe_scale=dupe_scale,
                                        core_floors=floors_total, prior=chosen,
                                        **caps)
             elif vfield:

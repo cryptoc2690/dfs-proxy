@@ -399,48 +399,6 @@ DUPE_EXP = 0.25
 # money it returned $561 per 600 entries against $168 for Win%.
 VENDOR_SIGNAL = "top10"
 
-# How many standard errors apart two lineups must be before the tool is allowed
-# to claim it can tell them apart. 0 keeps the old behaviour.
-#
-# The score is a win rate read off `sims` draws, so it carries a standard error
-# of sqrt(p(1-p)/sims) — about 0.0022 at a 2% win rate on 4,000 sims. Selection
-# then sorted on that number and took strictly-best-first, which turns a gap far
-# inside the error bar into a categorical decision. On DET @ BUF the lineup at
-# rank 5 and the lineup at rank 8 were identical but for one slot, Bills defence
-# against Joshua Palmer, and were 0.0003 apart — a seventh of one standard error.
-# The defence went into 33 of 150 entries and Palmer into 0.
-#
-# Asked directly, the same simulator says Palmer outscores that defence 27% of
-# the time (Knox 33%, Coleman 35%, and Frank Gore Jr., who got 35 of 150, 21%).
-# Those are not a hierarchy, they are a cluster, and the cheap slot on a showdown
-# is where the cluster lives. Ranking cannot see the difference; it should not be
-# allowed to act as though it can.
-#
-# Within a band this wide, order is decided by summed projected ownership,
-# lowest first. That is not an ownership tilt — the lean stays at zero and the
-# ranking is untouched. It only says that when our own measure cannot separate
-# two lineups, the tiebreak goes to the one fewer opponents hold.
-TIE_SE = 0.0
-
-
-def tie_break(lineups, sims):
-    """Re-order inside statistical ties so coverage breaks them, not the decimal."""
-    if not TIE_SE or not lineups or sims <= 0:
-        return lineups
-    out, i = [], 0
-    while i < len(lineups):
-        top = lineups[i].metrics.get("score", 0.0)
-        se = math.sqrt(max(top, 1e-9) * max(1.0 - top, 1e-9) / sims)
-        edge = top - TIE_SE * se
-        j = i
-        while j < len(lineups) and lineups[j].metrics.get("score", 0.0) >= edge:
-            j += 1
-        band = lineups[i:j]
-        band.sort(key=lambda lu: sum(p.ownership for p in lu.players))
-        out.extend(band)
-        i = j
-    return out
-
 
 def expected_copies(dupes, scale):
     """Opponents expected to hold a roster the vendor lists at this Dupes count."""
@@ -834,7 +792,7 @@ def rank(lineups, mat, bar, sims, dupes_idx, own_lean=None, dupe_scale=1.0,
 
 def select(lineups, n, *, captain_cap=None,
            player_cap=None, max_overlap=None, side_cap=None,
-           split_targets=None, core_floors=None, prior=None, sims=0):
+           split_targets=None, core_floors=None, prior=None):
     """Pick the final N under coverage rules rather than diversification ones.
 
     150 showdown entries are worth roughly two independent bets — mean pairwise
@@ -883,6 +841,30 @@ def select(lineups, n, *, captain_cap=None,
     # 15,882 to rank 959 — but rank 959 of 237,053 pays nothing, so a better top
     # end bought no money. Forcing punt coverage is not the edge it looks like.
     #
+    # The cheap slot is a CLUSTER, not a hierarchy, and the tool's score cannot
+    # resolve it. That part is solid and worth keeping: on DET @ BUF the lineups
+    # ranked fifth and eighth differed in one slot (Bills defence against Joshua
+    # Palmer) and their scores were 0.0003 apart against a standard error of
+    # 0.0022 — a seventh of one error bar — yet the defence took 33 of 150 and
+    # Palmer none. Asked directly, the same simulator has Palmer beating that
+    # defence 27% of the time, Knox 33%, Coleman 35%, and Gore, who took 35 of
+    # the 150, 21%.
+    #
+    # Acting on it still failed. select() was made to band candidates within
+    # TIE_SE standard errors and order inside a band by lowest summed ownership.
+    # Over the same four showdowns, four seeds, realised money: -$30 at half an
+    # error (helped 0 of 4), -$66 at one (0 of 4), -$52 at two, -$159 at three,
+    # with cash falling monotonically -10, -17, -33, -59. It did what it was
+    # built to do — Palmer went from 2 of 150 to 20, Knox 4 to 13, Coleman 0 to
+    # 15, and DET @ BUF improved from $13 to $23 with its best lineup moving from
+    # rank 15,882 to 1,703 — and it lost money on the three slates it was not
+    # derived from.
+    #
+    # The likely reason is worth writing down: "break ties toward lower
+    # ownership" is a FADE wearing the word coverage, applied exactly where the
+    # tool knows least. Fading is already measured as negative here. If the band
+    # idea is revisited, the tiebreak has to be something other than ownership.
+    #
     # Concentration was then tried from the other end, over four showdowns
     # (DAL @ NYG, DEN @ KC, DET @ BUF, SF @ LAR), four seeds, realised money,
     # per-slate seed SD $44. Baseline $313 on $300 of fees, cash 174.0:
@@ -926,7 +908,7 @@ def select(lineups, n, *, captain_cap=None,
             continue
         seen_keys.add(k)
         unique.append(lu)
-    lineups = tie_break(unique, sims)
+    lineups = unique
     total = n + len(prior)
     cap_ct = max(1, round(captain_cap * total))
     ply_ct = max(1, round(player_cap * total))
@@ -1072,7 +1054,7 @@ def select(lineups, n, *, captain_cap=None,
 
 def vendor_arm(field_entries, n, *, captain_cap=None,
                player_cap=None, max_overlap=None, side_cap=None,
-               dupe_scale=1.0, core_floors=None, prior=None, sims=0):
+               dupe_scale=1.0, core_floors=None, prior=None):
     """Their pool, re-ranked on Win% / (1 + Dupes) and put through the same caps.
 
     This is the control arm for the A/B comparison, and on its own it is a
@@ -1104,4 +1086,4 @@ def vendor_arm(field_entries, n, *, captain_cap=None,
     # 32-32 without being told to.
     return select(cands, n, captain_cap=captain_cap, player_cap=player_cap,
                   max_overlap=max_overlap, side_cap=side_cap,
-                  core_floors=core_floors, prior=prior, sims=sims)
+                  core_floors=core_floors, prior=prior)
