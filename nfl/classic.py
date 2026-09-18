@@ -93,6 +93,34 @@ DST_CAP = 0.30
 # tilted rather than enforced for that reason: the weight moves, nothing is
 # banned, and a defence facing a strong offence can still be built.
 DST_MATCHUP = 0.0
+
+# Construction weights every seat by projection CUBED, which is right for a
+# position whose projection means something. For a defence in week one it may not:
+# on the logged main slate the Titans carried the highest DST projection on the
+# board at 8.1, took 21 of 150 lineups before any tilt and 31 after one, and
+# scored 0.0. Ranked by the offence they faced instead, the top three defences
+# went 13.0, 18.0 and 13.0 — a mean of 14.7 against 10.3 for the top three by
+# projection. The cube is what stops the matchup competing: 8.1 cubed buries
+# every multiplier you can reasonably put on top of it.
+#
+# Tested against the real 416,171-entry field, three seeds, 150 lineups. Tilt is
+# DST_MATCHUP, exp is this:
+#
+#   tilt/exp    best rank   top 1%   top 10%   median pct   defences used
+#   0.0 / 3.0       2,122      1.0      12.0        56.7%   Titans 20, Jets 15
+#   0.0 / 1.5       1,080      1.0      11.0        52.7%   Titans 20, Jets 12
+#   0.6 / 3.0         968      1.0      13.7        56.3%   Titans 26, Jets 18
+#   0.6 / 1.5       3,133      0.7      13.3        54.7%   Titans 23, Jets 16
+#   1.0 / 1.5       2,120      1.0      13.0        54.2%   Titans 22, Jets 18
+#
+# Nothing here is worth shipping. Flattening alone moves the median percentile
+# four points the right way but leaves top-1% flat, and — the point of the whole
+# exercise — it does NOT reduce the Titans: 20 lineups at the cube and 20 at 1.5,
+# because compressing the weights keeps the ordering that put them on top. The
+# tilt raises top-10% and lowers top-1%, which is the trade a GPP does not want,
+# and it made exposure-weighted DST points WORSE on the same slate, 6.44 to 6.30,
+# by moving Titans 21 -> 31 into a 0.0. Both knobs stay at their no-op values.
+DST_EXP = 3.0
 MAX_OVERLAP = 6           # of 9
 MIN_PROJ = 3.0            # a roster spot needs some path to a useful score
 MAX_LEFTOVER = 2000
@@ -462,7 +490,8 @@ def build_candidates(players, n, *, rng=None, stack_targets=None,
                 # A core gets extra weight here so its floor is reachable at
                 # all: with none, a core QB projected 13.6 reached 32 of 4,000
                 # candidates and his "guaranteed" floor was a fiction.
-                wt = max(p.proj, 0.1) ** 3 * (CORE_BOOST if p.core else 1.0)
+                e = DST_EXP if p.is_dst else 3.0
+                wt = max(p.proj, 0.1) ** e * (CORE_BOOST if p.core else 1.0)
                 if p.is_dst and matchup:
                     wt *= matchup.get(p.dk_id, 1.0)
                 w.append(wt)
