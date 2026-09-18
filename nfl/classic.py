@@ -631,8 +631,8 @@ def rank(lineups, mat, bar, sims, dupes_idx, own_lean=None, dupe_scale=1.0,
     return lineups
 
 
-def select(lineups, n, *, player_cap=None, qb_cap=None, dst_cap=None,
-           max_overlap=None, stack_targets=None, core_floors=None,
+def select(lineups, n, *, player_cap=None, player_caps=None, qb_cap=None,
+           dst_cap=None, max_overlap=None, stack_targets=None, core_floors=None,
            prior=None):
     """Pick the final N under exposure, overlap and stack-shape quotas.
 
@@ -666,6 +666,10 @@ def select(lineups, n, *, player_cap=None, qb_cap=None, dst_cap=None,
     lineups = unique
     total = n + len(prior)
     ply = max(1, round(player_cap * total))
+    # Per-player caps in lineup counts. Named player beats the board-wide number
+    # in both directions — see the note in engine.select.
+    player_caps = {i: max(0, int(round(v * total)))
+                   for i, v in (player_caps or {}).items()}
     qbc = max(1, round(qb_cap * total))
     dstc = max(1, round(dst_cap * total))
     quota = ({d: int(round(v * n)) for d, v in stack_targets.items()}
@@ -695,6 +699,15 @@ def select(lineups, n, *, player_cap=None, qb_cap=None, dst_cap=None,
 
     def ok(lu, overlap):
         for p in lu.players:
+            # A number you typed for this player replaces every board-wide cap
+            # that would otherwise bind him, including the positional ones. You
+            # asked for him at 10%; a 30% defence cap should not quietly make
+            # that 30%, and a 35% quarterback cap should not make it 35%.
+            lim = player_caps.get(p.dk_id)
+            if lim is not None:
+                if used.get(p.dk_id, 0) >= lim:
+                    return False
+                continue
             if p.is_qb and qb_ct.get(p.dk_id, 0) >= qbc:
                 return False
             if p.is_dst and dst_ct.get(p.dk_id, 0) >= dstc:
@@ -737,19 +750,32 @@ def select(lineups, n, *, player_cap=None, qb_cap=None, dst_cap=None,
     for cid, floor in (core_floors or {}).items():
         if used.get(cid, 0) < floor:
             sweep(ROSTER_SIZE, need=cid, floor=floor)
-    if len(chosen) < n:                      # hold the QB cap longest
+    # Hold the QB cap longest, and a cap you TYPED longer still — it gives one
+    # lineup at a time. This fill used to ignore those caps completely, so a thin
+    # board could quietly hand back the exposure you had just capped away.
+    def fill(slack, honour_qb):
         for lu in lineups:
             if len(chosen) >= n:
-                break
+                return
+            if id(lu) in taken:
+                continue
             q = lu.qb()
-            if id(lu) in taken or (q and qb_ct.get(q.dk_id, 0) >= qbc):
+            if honour_qb and q and qb_ct.get(q.dk_id, 0) >= qbc:
+                continue
+            if slack is not None and any(
+                    used.get(p.dk_id, 0) >= player_caps[p.dk_id] + slack
+                    for p in lu.players if p.dk_id in player_caps):
                 continue
             take(lu)
-    for lu in lineups:
-        if len(chosen) >= n:
-            break
-        if id(lu) not in taken:
-            take(lu)
+
+    if len(chosen) < n:
+        fill(0, True)
+    if player_caps:
+        for slack in range(1, n + 1):
+            if len(chosen) >= n:
+                break
+            fill(slack, True)
+    fill(None, False)
     return chosen[:n]
 
 

@@ -367,7 +367,8 @@ def simulate_and_score(cands, pool, *, sims, own_lean=0.0, seed=0):
     cands.sort(key=lambda c: -c.metrics["score"])
 
 
-def select_final(cands, n, player_caps=None, core_floors=None, backfill=None):
+def select_final(cands, n, player_caps=None, core_floors=None, backfill=None,
+                 report=None):
     """Pick the best N distinct rosters, score-first.
 
     What used to be here: a global per-player exposure cap, a pairwise-overlap
@@ -406,13 +407,41 @@ def select_final(cands, n, player_caps=None, core_floors=None, backfill=None):
         if frozenset(c.ids()) in seen or capped(c):
             continue
         add(c)
-    if len(final) < n:  # the user's caps cannot be met — take the best distinct
-        for c in cands:
-            if len(final) >= n:
-                break
-            if frozenset(c.ids()) not in seen:
+    if len(final) < n:
+        # The caps cannot all be met off this board. This pass used to abandon
+        # them outright and fill to N from anywhere, silently — the same bug the
+        # note above describes, still live for the one kind of cap that is not a
+        # data preference but a thing you typed. So relax by one lineup at a
+        # time, stop the moment N is reached, and say what it cost.
+        slack = 1
+        while len(final) < n and slack <= n:
+            for c in cands:
+                if len(final) >= n:
+                    break
+                if frozenset(c.ids()) in seen:
+                    continue
+                if any(counts.get(i, 0) >= player_caps[i] + slack
+                       for i in c.ids() if i in player_caps):
+                    continue
                 add(c)
+            slack += 1
+        if len(final) < n:                     # still short: distinct rosters win
+            for c in cands:
+                if len(final) >= n:
+                    break
+                if frozenset(c.ids()) not in seen:
+                    add(c)
     final = final[:n]
+    if report is not None and player_caps:
+        over = {i: counts.get(i, 0) for i in player_caps
+                if counts.get(i, 0) > player_caps[i]}
+        if over:
+            name = {p.dk_id: p.name for c in final for p in c.players}
+            report.setdefault("relaxed", []).append(
+                "the board could not fill the set under your caps, so these ran "
+                "over: " + ", ".join(
+                    f"{name.get(i, i)} {v} of {n} against {player_caps[i]}"
+                    for i, v in sorted(over.items(), key=lambda kv: -kv[1])))
     if core_floors:
         # Guarantee each core its minimum presence. This draws from `backfill` —
         # every candidate we built, not the filtered shortlist — because a core is
@@ -623,7 +652,7 @@ def build_gpp(players, *, n=20, pool_size=None, max_per_team=3, own_lean=0.0,
         if floor_ct >= 1:
             core_floors = {c.dk_id: floor_ct for c in cores}
     final = select_final(cands, n, player_caps, core_floors=core_floors,
-                         backfill=cands)
+                         backfill=cands, report=rep)
     rep["returned"] = len(final)
     if max_off_pool:  # 0 or None -> every lineup is already all-in-pool
         _attach_pool_alternatives(final, pool, max_per_team, n_sims, own_lean, seed)

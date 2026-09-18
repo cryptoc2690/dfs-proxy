@@ -387,6 +387,45 @@ def _name_cell(cell):
     return True
 
 
+# One player and one percentage per line: "A'ja Wilson 40". The number may carry
+# a % and may be separated by a comma, a colon, an equals or just spaces.
+_CAP_LINE = re.compile(r"^(.*?)[\s,:=]+(\d{1,3}(?:\.\d+)?)\s*%?$")
+
+
+def _parse_player_caps(text, players, default_pct):
+    """-> ({dk_id: share 0-1}, [lines that matched no one], [lines misread])
+
+    A line carrying its own number uses it; a bare name falls back to
+    `default_pct`, which is what the 🔒 marks on the slate rows send. An
+    unmatched name is REPORTED, never dropped — silently ignoring a cap you
+    typed is the one failure this control exists to prevent.
+    """
+    by_name = {normalize_name(p.name): p for p in players}
+    caps, missing, bad = {}, [], []
+    for raw in re.split(r"[\r\n;]+", text or ""):
+        line = raw.strip()
+        if not line:
+            continue
+        m = _CAP_LINE.match(line)
+        if m:
+            name, pct = m.group(1).strip(), float(m.group(2))
+        else:
+            name, pct = line, default_pct
+        key = normalize_name(name)
+        if not key:
+            bad.append(line)
+            continue
+        p = by_name.get(key)
+        if p is None:                       # tolerate a partial or misspelt name
+            hits = [v for k, v in by_name.items() if k.startswith(key)]
+            p = hits[0] if len(hits) == 1 else None
+        if p is None:
+            missing.append(line)
+            continue
+        caps[p.dk_id] = min(1.0, max(0.0, pct / 100.0))
+    return caps, missing, bad
+
+
 def _parse_names(text):
     """Turn a pasted sheet into a set of normalized player names.
 
@@ -763,19 +802,31 @@ def run_optimize(csv_text: str, options: dict) -> dict:
     max_off_pool = _int(options.get("maxOffPool"), 0) if pool_names else None
     # Per-player exposure caps — rein in a specific heavy play without lowering
     # the global cap (which on a short slate would needlessly hobble the studs).
+    # Each line carries its OWN percentage, because one number for everybody is
+    # not how the decision is made: you might want a punt at 10% and a stud at
+    # 40% in the same build. A line with no number falls back to the slider,
+    # which is what the 🔒 marks on the slate rows still send.
     n_lu = _int(options.get("n"), 20)
-    cap_names = _parse_names(options.get("capPlayers"))
-    player_caps = {}
-    if cap_names:
-        cap_ct = max(1, round(_float(options.get("capPct"), 30) / 100.0 * n_lu))
-        for p in players:
-            if normalize_name(p.name) in cap_names:
-                player_caps[p.dk_id] = cap_ct
+    player_caps, cap_missing, cap_bad = _parse_player_caps(
+        options.get("capPlayers"), players, _float(options.get("capPct"), 30))
+    # Shares -> lineup counts, which is what the engine's select_final compares.
+    # Floor of zero, not one: "cap him at 0" has to mean zero, not one lineup.
+    player_caps = {i: max(0, int(round(v * n_lu))) for i, v in player_caps.items()}
     # Decide the slate read ONCE, so the engine's salary reserve and the UI badge
     # are the same determination (not two independent computations on different
     # player sets).
     slate_type = _slate_type(players)
     build_report = {}
+    # A cap you typed that matched nobody is a warning, not a shrug. Seeded here
+    # so it rides the same channel as everything else the build gave up.
+    if cap_missing:
+        build_report.setdefault("relaxed", []).append(
+            "no player on this slate matches these caps, so they are NOT in "
+            "force: " + "; ".join(cap_missing))
+    if cap_bad:
+        build_report.setdefault("relaxed", []).append(
+            "these cap lines could not be read and were ignored: "
+            + "; ".join(cap_bad))
     lineups = optimize_gpp(
         players,
         n=_int(options.get("n"), 20),
@@ -939,7 +990,8 @@ def _log_build(result, players, lineups, options):
             },
             "options": {k: options.get(k) for k in (
                 "n", "ownLean", "maxPerTeam", "minCores", "maxOffPool",
-                "slateRules", "capPct") if k in options},
+                "slateRules", "capPct", "capPlayers", "maxLeftover")
+                if k in options},
             "gateMinutes": GATE_MINUTES,
             "cores": [p.name for p in players if p.core],
             "pool": [p.name for p in players if p.in_pool],

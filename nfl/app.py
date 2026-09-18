@@ -37,6 +37,7 @@ import argparse
 import bisect
 import json
 import os
+import re
 import sys
 import webbrowser
 from datetime import datetime
@@ -94,6 +95,42 @@ def _share(v, d):
     """A cap or share. "28" means 28%, not 2,800% — the CLI used to take it."""
     x = _f(v, d)
     return x / 100.0 if x > 1.0 else x
+
+
+# One player and one percentage per line: "Frank Gore Jr. 10". The number may
+# carry a % and may be separated by a comma, a colon, an equals or just spaces,
+# because a list like this gets typed by hand against a clock.
+_CAP_LINE = re.compile(r"^(.*?)[\s,:=]+(\d{1,3}(?:\.\d+)?)\s*%?$")
+
+
+def _player_caps(text, players):
+    """-> ({dk_id: share 0-1}, [lines that matched no one], [lines misread])
+
+    A cap is your instruction about one player, so an unmatched name is
+    reported rather than dropped: silently ignoring "Gore 10" and then building
+    60 Gore lineups is the failure this control exists to prevent.
+    """
+    by_name = {normalize_name(p.name): p for p in players}
+    caps, missing, bad = {}, [], []
+    for raw in re.split(r"[\r\n;]+", text or ""):
+        line = raw.strip()
+        if not line:
+            continue
+        m = _CAP_LINE.match(line)
+        if not m:
+            bad.append(line)
+            continue
+        name, pct = m.group(1).strip(), float(m.group(2))
+        key = normalize_name(name)
+        p = by_name.get(key)
+        if p is None:                       # tolerate a partial or misspelt name
+            hits = [v for k, v in by_name.items() if k.startswith(key)] if key else []
+            p = hits[0] if len(hits) == 1 else None
+        if p is None:
+            missing.append(line)
+            continue
+        caps[p.dk_id] = min(1.0, max(0.0, pct / 100.0))
+    return caps, missing, bad
 
 
 def _pool_gaps(players, min_proj):
@@ -1046,6 +1083,20 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
             say("warn", "The stack-shape boxes did not add up to anything usable, "
                         "so the default 45/55 is in force.")
     caps = dict(player_cap=_share(o.get("playerCap"), M.PLAYER_CAP))
+    pcaps, cap_missing, cap_bad = _player_caps(o.get("capPlayers"), players)
+    if pcaps:
+        caps["player_caps"] = pcaps
+        shown = ", ".join(
+            f"{p.name} {round(pcaps[p.dk_id] * 100)}% "
+            f"({max(0, int(round(pcaps[p.dk_id] * n)))} of {n})"
+            for p in players if p.dk_id in pcaps)
+        say("info", f"Per-player caps in force — {shown}.")
+    if cap_missing:
+        say("warn", "No player on this slate matches these caps, so they are "
+                    "NOT in force: " + "; ".join(cap_missing))
+    if cap_bad:
+        say("warn", "These cap lines need a name and a percentage, e.g. "
+                    "\"Frank Gore Jr. 10\" — ignored: " + "; ".join(cap_bad))
     if fmt == "showdown":
         caps.update(captain_cap=_share(o.get("captainCap"), E.CAPTAIN_CAP),
                     side_cap=_share(o.get("sideCap"), E.SIDE_CAP))
@@ -1186,6 +1237,24 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                            **shape_kw, **caps)
         say("info", f"Topped up {need} entries from our own builder to cover "
                     f"all {n}.")
+
+    # The caps are enforced per arm, so the number that matters — what lands in
+    # the uploaded file across both arms and the top-up — is checked HERE, once,
+    # against what you typed. A cap that could not be met is reported to the
+    # lineup rather than left for you to find in the exposure table.
+    if pcaps and chosen:
+        real = {}
+        for lu in chosen:
+            for p in lu.players:
+                real[p.dk_id] = real.get(p.dk_id, 0) + 1
+        over = [(p, real.get(p.dk_id, 0), int(round(pcaps[p.dk_id] * len(chosen))))
+                for p in players if p.dk_id in pcaps
+                and real.get(p.dk_id, 0) > int(round(pcaps[p.dk_id] * len(chosen)))]
+        if over:
+            say("warn", "The board could not fill the set under your caps, so "
+                        "these ran over: " + ", ".join(
+                            f"{p.name} {got} of {len(chosen)} against {want}"
+                            for p, got, want in sorted(over, key=lambda x: -x[1])))
 
     if not chosen:
         return {"error": "No lineups produced.", "notes": notes}

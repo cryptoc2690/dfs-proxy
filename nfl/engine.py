@@ -872,7 +872,7 @@ def rank(lineups, mat, bar, sims, dupes_idx, own_lean=None, dupe_scale=1.0,
 
 
 def select(lineups, n, *, captain_cap=None,
-           player_cap=None, max_overlap=None, side_cap=None,
+           player_cap=None, player_caps=None, max_overlap=None, side_cap=None,
            split_targets=None, core_floors=None, prior=None, kdst_cap=None):
     """Pick the final N under coverage rules rather than diversification ones.
 
@@ -993,6 +993,14 @@ def select(lineups, n, *, captain_cap=None,
     total = n + len(prior)
     cap_ct = max(1, round(captain_cap * total))
     ply_ct = max(1, round(player_cap * total))
+    # Per-player caps, in lineup counts. These are your instruction about ONE
+    # player, so they override the global cap in both directions: a tighter one
+    # holds him down without hobbling the studs, a looser one lets him run past
+    # the board-wide number. The captain slot counts, because ids() carries the
+    # flex id for all six seats — capping a player at 10% means 10% of entries
+    # hold him at all, which is what you asked for when you named a percentage.
+    player_caps = {i: max(0, int(round(v * total)))
+                   for i, v in (player_caps or {}).items()}
     quota = {}
     if split_targets:
         quota = {k: int(round(v * n)) for k, v in split_targets.items()}
@@ -1034,7 +1042,7 @@ def select(lineups, n, *, captain_cap=None,
             taken_sides = sum(side_used.values()) + 1
             if side_used.get(side, 0) >= max(SIDE_SLACK, side_cap * taken_sides):
                 return False
-        if any(ply_used.get(i, 0) >= ply_ct for i in lu.ids()):
+        if any(ply_used.get(i, 0) >= player_caps.get(i, ply_ct) for i in lu.ids()):
             return False
         # The slate read, and the only place it acts. On a game the read calls
         # pass-first, the kicker-and-defence block cannot own the cheap slot.
@@ -1122,29 +1130,41 @@ def select(lineups, n, *, captain_cap=None,
         if ply_used.get(cid, 0) < floor:
             pass_over(ROSTER_SIZE, need=cid, floor=floor, honour_side=False)
 
-    # Still short. Relax the player cap but HOLD the captain cap: the captain is
-    # the highest-dispersion decision in the format, so it is the last thing to
-    # give up. Only if that also starves do we fill unconditionally.
-    if len(chosen) < n:
+    # Still short. Relax the board-wide player cap but HOLD the captain cap: the
+    # captain is the highest-dispersion decision in the format, so it is the last
+    # thing to give up. A cap you TYPED is held harder still — it gives one
+    # lineup at a time, and only once the captain cap has already gone. This pass
+    # used to ignore those caps outright, which is the failure the WNBA engine's
+    # own note describes: a fill that quietly breaks the rule above it.
+    def fill(slack, honour_cpt):
         for lu in lineups:
             if len(chosen) >= n:
-                break
-            if id(lu) in taken or cpt_ct.get(lu.cpt.dk_id, 0) >= cap_ct:
+                return
+            if id(lu) in taken:
+                continue
+            if honour_cpt and cpt_ct.get(lu.cpt.dk_id, 0) >= cap_ct:
+                continue
+            if slack is not None and any(
+                    ply_used.get(i, 0) >= player_caps[i] + slack
+                    for i in lu.ids() if i in player_caps):
                 continue
             take(lu)
             taken.add(id(lu))
-    for lu in lineups:
-        if len(chosen) >= n:
-            break
-        if id(lu) not in taken:
-            take(lu)
-            taken.add(id(lu))
+
+    if len(chosen) < n:
+        fill(0, True)
+    if player_caps:
+        for slack in range(1, n + 1):
+            if len(chosen) >= n:
+                break
+            fill(slack, True)
+    fill(None, False)
 
     return chosen[:n]
 
 
 def vendor_arm(field_entries, n, *, captain_cap=None,
-               player_cap=None, max_overlap=None, side_cap=None,
+               player_cap=None, player_caps=None, max_overlap=None, side_cap=None,
                dupe_scale=1.0, core_floors=None, prior=None, kdst_cap=None):
     """Their pool, re-ranked on Win% / (1 + Dupes) and put through the same caps.
 
@@ -1176,5 +1196,6 @@ def vendor_arm(field_entries, n, *, captain_cap=None,
     # which ranks on beating the field rather than resembling it — came out
     # 32-32 without being told to.
     return select(cands, n, captain_cap=captain_cap, player_cap=player_cap,
+                  player_caps=player_caps,
                   max_overlap=max_overlap, side_cap=side_cap,
                   core_floors=core_floors, prior=prior, kdst_cap=kdst_cap)

@@ -287,11 +287,17 @@ INDEX_HTML = r"""<!doctype html>
       </select>
     </div>
     <div>
-      <label>Cap the 🔒 players at <span id="capv">30</span>% <span id="capwho" class="muted"></span></label>
+      <label>Cap individual players <span id="capwho" class="muted">— none set</span></label>
+      <textarea id="capnames" rows="4" spellcheck="false"
+                placeholder="A'ja Wilson 40&#10;Jackie Young 10"></textarea>
+      <div class="hint">One player and one percentage per line — <b>each player gets his
+        own number</b>, so a punt at 10% and a stud at 40% can sit in the same build.
+        Reins in one heavy play without capping the whole board. A name you type that
+        matches nobody is reported, never silently dropped.</div>
+      <label>Default for 🔒 marks — <span id="capv">30</span>%</label>
       <input id="cappct" class="slider" type="range" min="5" max="60" value="30">
-      <div class="hint">Applies to the players you mark 🔒 <b>on the slate row</b> — there is no
-        list to type here. Everyone else stays at your max exposure. Reins in one heavy play
-        without capping the whole board.</div>
+      <div class="hint">Only used for players you mark 🔒 <b>on the slate row</b> and for
+        any line above with no percentage on it.</div>
     </div>
     <div>
       <label>Ownership lean — <span id="levv">0.00</span> <span class="muted">(− fade · + consensus)</span></label>
@@ -393,6 +399,7 @@ const setSummary = () => {
 const fmtLean = v => (v >= 0 ? '+' : '') + (v/100).toFixed(2);
 $('#lev').addEventListener('input', e => { $('#levv').textContent = fmtLean(e.target.value); setSummary(); });
 $('#cappct').addEventListener('input', e => $('#capv').textContent = e.target.value);
+$('#capnames').addEventListener('input', paintDock);
 $('#n').addEventListener('input', setSummary);
 setSummary(); paintDock();
 
@@ -606,11 +613,26 @@ function toggleMark(kind, name){
   if(kind === 'core') sel.pool.delete(name);   // a core is already in-pool
   renderSlate(); paintDock(); drawPicks();
 }
+// The two ways to cap, merged into the one thing the server reads: lines you
+// typed (each with its own percentage) plus any 🔒 mark you did not type, which
+// goes over as a bare name and picks up the slider default. A player in both
+// places is sent once — the number you typed wins over the slider.
+function capLines(){
+  return $('#capnames').value.split(/[\n;]+/).map(s=>s.trim()).filter(Boolean);
+}
+function capText(){
+  const typed = capLines();
+  const seen = new Set(typed.map(l => norm(l.replace(/[\s,:=]+\d{1,3}(\.\d+)?\s*%?$/,''))));
+  return typed.concat([...sel.cap].filter(n => !seen.has(norm(n)))).join('\n');
+}
 function paintDock(){
   $('#d-core').textContent=sel.core.size; $('#d-pool').textContent=sel.pool.size;
   $('#d-rm').textContent=sel.remove.size; $('#d-cap').textContent=sel.cap.size;
-  $('#capwho').textContent = sel.cap.size
-    ? '— ' + sel.cap.size + ' locked' : '— none locked yet';
+  const typed = capLines();
+  const bad = typed.filter(l => !/^.*?[\s,:=]+\d{1,3}(\.\d+)?\s*%?$/.test(l)).length;
+  const n = capText().split('\n').filter(Boolean).length;
+  $('#capwho').textContent = !n ? '— none set'
+    : '— ' + n + ' capped' + (bad ? ', ' + bad + ' using the slider default' : '');
   paintBoard();
 }
 // The picks live on the slate rows, which means a player you marked can scroll
@@ -812,7 +834,7 @@ async function run(){
     cores:[...sel.core].join('\n'), pool:[...sel.pool].join('\n'),
     remove:[...sel.remove].join('\n'), maxOffPool:+$('#offpool').value,
     minCores:+$('#mincores').value,
-    capPlayers:[...sel.cap].join('\n'), capPct:+$('#cappct').value, minutes:minText,
+    capPlayers:capText(), capPct:+$('#cappct').value, minutes:minText,
   };
   try{
     const res = await fetch('/api/optimize', {method:'POST',headers:{'Content-Type':'application/json'},

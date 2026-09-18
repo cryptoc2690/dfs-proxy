@@ -23,10 +23,11 @@ INDEX_HTML = r"""<!doctype html>
     background:linear-gradient(135deg,#8b5a2b,#c8843f);border:1px solid #e6d5b8}
   header .sub{color:var(--muted);font-size:13px;margin-left:auto}
   label{display:block;font-size:12.5px;color:var(--muted);margin:12px 0 5px}
-  input[type=number],input[type=text],select{width:100%;
+  input[type=number],input[type=text],select,textarea{width:100%;
     background:var(--panel2);border:1px solid var(--line);color:var(--text);
     border-radius:8px;padding:8px 10px;font-size:14px;font-family:inherit}
-  input:focus,select:focus{outline:none;border-color:var(--accent)}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
+  textarea{resize:vertical;line-height:1.5;box-sizing:border-box}
 
   #filerail{display:flex;flex-wrap:wrap;border-bottom:1px solid var(--line);
     background:var(--panel)}
@@ -254,6 +255,16 @@ INDEX_HTML = r"""<!doctype html>
       <div class="picknote">Type a few letters, click or press Enter — or paste a
         comma-separated list. Cores count as in-pool automatically. Click a chip
         to remove it.</div>
+    </div>
+    <div>
+      <label>Cap individual players <span id="capwho" class="muted">— none set</span></label>
+      <textarea id="capplayers" rows="4" spellcheck="false"
+                placeholder="Frank Gore Jr. 10&#10;Josh Allen 40"></textarea>
+      <div class="picknote">One player and one percentage per line. Your number
+        is the final word on that player — it overrides the board-wide exposure
+        cap, and on a main slate the quarterback and defence caps too. Leave a
+        player out and nothing changes for him. The build says which caps it
+        applied and warns about any name it could not find.</div>
     </div>
   </div>
 </details>
@@ -551,6 +562,18 @@ $('#qbcap').addEventListener('input', e => { $('#qv').textContent = e.target.val
 $('#dstcap').addEventListener('input', e => { $('#dv').textContent = e.target.value; });
 $('#bb').addEventListener('input', e => { $('#bv').textContent = e.target.value; });
 $('#fillpct').addEventListener('input', e => { $('#fv').textContent = e.target.value; });
+
+// Per-player caps: echo back what the server will read, and flag a line that is
+// missing its percentage before the build spends two minutes ignoring it.
+$('#capplayers').addEventListener('input', e => {
+  const lines = e.target.value.split(/[\n;]+/).map(s => s.trim()).filter(Boolean);
+  const good = [], bad = [];
+  lines.forEach(l => (/^.*?[\s,:=]+\d{1,3}(\.\d+)?\s*%?$/.test(l) ? good : bad).push(l));
+  $('#capwho').textContent = !lines.length ? '— none set'
+    : '— ' + good.length + ' capped'
+      + (bad.length ? ', ' + bad.length + ' line(s) need a percentage' : '');
+  $('#capwho').style.color = bad.length ? 'var(--warn, #e0a030)' : '';
+});
 setFmt('showdown', false);
 
 const num = (sel, d) => { const v = parseFloat($(sel).value); return isNaN(v) ? d : v; };
@@ -580,7 +603,8 @@ $('#go').addEventListener('click', async () => {
           minProj: num('#minproj', fmt === 'showdown' ? 2 : 3),
           fieldCap: num('#cap',0), fillPct: num('#fillpct',100),
           maxOffPool: $('#offpool').value,
-          pool: [...sel.pool].join('\n'), cores: [...sel.core].join('\n')
+          pool: [...sel.pool].join('\n'), cores: [...sel.core].join('\n'),
+          capPlayers: $('#capplayers').value
         }
       })
     });
