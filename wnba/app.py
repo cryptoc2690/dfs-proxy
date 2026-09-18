@@ -805,6 +805,11 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         player_caps=player_caps,
         # The two-game shape rules, and a switch that now actually switches.
         slate_rules=str(options.get("slateRules", "on")) != "off",
+        # Salary floor, restored. 71,936 real rosters say leaving up to $700
+        # costs nothing and $800+ falls off a cliff: top-1% 1.2-1.4% inside $700
+        # against 0.41% at $800-$1,000 and 0.00% past $2,000. One of 48 winners
+        # left more than $1,000.
+        max_leftover=_int(options.get("maxLeftover"), 800),
         report=build_report,
     )
 

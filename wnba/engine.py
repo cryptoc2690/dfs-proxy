@@ -16,6 +16,30 @@ from dk import MIN_FORWARDS, MIN_GUARDS, ROSTER_SIZE, SALARY_CAP, Player
 
 MIN_SALARY = 3000  # DK WNBA min; used so partial lineups stay completable
 
+# Salary a lineup may leave unspent. Restored after being deleted in the strip,
+# on far better evidence than removed it: 71,936 real rosters across 24 contests,
+# with exact salaries from the pre-lock files.
+#
+#   leftover        share of field   top-1% rate   cash    $/entry
+#   $0                        32%         1.42%   22.8%       3.87
+#   $100-$300                 44%         1.23%   23.5%       4.53
+#   $400-$700                 17%         1.39%   22.2%       5.65
+#   $800-$1,000                4%         0.41%   19.2%       2.21
+#   $1,600-$2,000            0.7%         0.19%   18.8%       3.80
+#   over $2,000              0.7%         0.00%   15.1%       1.30
+#
+# Leaving up to $700 costs nothing — the $400-$700 band has the best dollars per
+# entry on the board. The cliff is at $800, and past $2,000 the top-1% rate is
+# literally zero across 71,936 rosters. Of 48 winners, one left more than $1,000
+# and none left more than $2,000; their mean leftover was $306.
+#
+# The earlier hold-out run that justified deleting this measured it at 700 as a
+# candidate-diversity cost and could not see the cliff, because at 12 entries on
+# 23 slates almost nothing lands past $800 anyway. The field data can see it.
+# Set high enough to bind only past the cliff, so it is a junk filter and not a
+# diversity tax.
+MAX_LEFTOVER = 800
+
 # DraftKings Classic requires players from at least two different games, so a
 # roster can never be more than ROSTER_SIZE-1 from one game. This is a contest
 # rule, not a preference — an all-one-game lineup is rejected at upload.
@@ -503,7 +527,7 @@ def _attach_pool_alternatives(lineups, pool, max_per_team, n_sims, own_lean, see
 def build_gpp(players, *, n=20, pool_size=None, max_per_team=3, own_lean=0.0,
               n_sims=5000, seed=0, cores=None, min_cores=0, max_off_pool=None,
               stars_and_scrubs=None, player_caps=None, slate_rules=True,
-              report=None):
+              max_leftover=MAX_LEFTOVER, report=None):
     """Build and rank n lineups.
 
     `report`, if given, is filled in with what actually happened — how many
@@ -573,6 +597,19 @@ def build_gpp(players, *, n=20, pool_size=None, max_per_team=3, own_lean=0.0,
     if not cands:
         rep["returned"] = 0
         return []
+
+    # Salary floor. Only bites past the cliff the field data shows at $800, and
+    # only when enough lineups survive to still fill the set — a thin board that
+    # cannot spend is a fact about the slate, not a lineup to throw away.
+    if max_leftover is not None:
+        floor = SALARY_CAP - max_leftover
+        spent = [c for c in cands if c.salary >= floor]
+        if len(spent) >= n:
+            cands = spent
+        elif spent:
+            rep["relaxed"].append(
+                f"salary floor relaxed — only {len(spent)} of {len(cands)} "
+                f"candidates spent within ${max_leftover} of the cap")
 
     simulate_and_score(cands, pool, sims=n_sims, own_lean=own_lean, seed=seed)
 
