@@ -191,102 +191,6 @@ GAP_MIN_POS = 5            # below this, rank against the whole board instead
 GAP_SHOW = 12              # listed in full up to here, then a count
 
 
-# How flat a team's pass-catching is, and what that means for the cheap end of
-# its depth chart. The builder reads a projection and a salary and knows nothing
-# about the offence that produced them: Joshua Palmer's 3.35 on a Buffalo corps
-# running 15/13/11 then a cliff, and a WR4's 3.35 behind a 20-point alpha, are
-# the same number to it and are obviously not the same bet.
-#
-# This REPORTS the shape. It does not change a projection, a rank or a lineup.
-# Four attempts at encoding a structural read as a build rule — punt-swap
-# overlap, punt caps, player caps, a K/DST cap — each died against realised
-# money (see the note above select() in engine.py). The measured version of the
-# effect is real but small and thin: across 32 team-slates, a team in the
-# flattest third had its depth receivers beat its own top two, relative to
-# projection, in 12 of 17 cases against 5 of 15 for the rest, worth about 0.4x
-# of projection. That is a sign test at p≈0.04 on 32 observations, which is the
-# same strength of evidence that has already failed three times here. So it is
-# shown, not applied — the read stays with the user, who has been right about it
-# twice running, and the tool's job is to put the shape in front of them.
-ALPHA_FLAT = 0.31       # top catcher's share of the corps, below which it reads committee
-ALPHA_LED = 0.36        # and above which one man owns the passing game
-
-
-def _team_shapes(players, min_proj):
-    """-> {team: {"ladder": [Player], "alpha": float, "label": str}}"""
-    out = {}
-    for team in sorted({p.team for p in players if p.team}):
-        cat = sorted((p for p in players
-                      if p.team == team and p.pos in ("WR", "TE")
-                      and p.proj >= min_proj and p.salary > 0),
-                     key=lambda p: -p.proj)
-        tot = sum(p.proj for p in cat)
-        if len(cat) < 3 or tot <= 0:
-            continue
-        a = cat[0].proj / tot
-        out[team] = {
-            "ladder": cat,
-            "alpha": a,
-            "label": ("committee" if a < ALPHA_FLAT
-                      else "alpha-led" if a >= ALPHA_LED else "balanced"),
-        }
-    return out
-
-
-def _shape_note(players, min_proj, say):
-    """Showdown only: the two offences' shapes, then the forced cheap tier."""
-    shapes = _team_shapes(players, min_proj)
-    if len(shapes) != 2:
-        return
-    flat = min(shapes.values(), key=lambda v: v["alpha"])
-    for team, v in sorted(shapes.items(), key=lambda kv: kv[1]["alpha"]):
-        lad = " / ".join(f"{p.proj:.0f}" for p in v["ladder"][:6])
-        who = ", ".join(p.name.strip() for p in v["ladder"][:3])
-        tail = "the flatter of the two" if v is flat else "the more concentrated"
-        say("info", f"{team} pass catchers — {lad}  ({v['label']}, top man holds "
-                    f"{v['alpha']:.0%} of the corps, {tail}). Front three: {who}. "
-                    + ("No one owns this passing game, so the touchdown has to "
-                       "land somewhere and the cheap names behind the front three "
-                       "have a real path to it."
-                       if v["label"] == "committee" else
-                       "One man owns this passing game. The names below the front "
-                       "three are getting what is left over."
-                       if v["label"] == "alpha-led" else
-                       "Neither committee nor top-heavy — read it on its merits."))
-
-    # The cheap tier, which showdown forces you into and the main slate does not.
-    cheap = sorted((p for p in players
-                    if p.proj >= min_proj and 0 < p.salary <= 4600),
-                   key=lambda p: p.salary)
-    if not cheap:
-        return
-    bits = []
-    for p in cheap[:14]:
-        if p.pos == "RB":
-            lead = max((q.proj for q in players
-                        if q.team == p.team and q.pos == "RB" and q is not p),
-                       default=0.0)
-            note = (f"behind a {lead:.0f}-point back" if lead >= 12
-                    else "no clear lead back ahead of him" if lead else "")
-        elif p.pos in ("WR", "TE"):
-            sh = shapes.get(p.team)
-            note = f"{sh['label']} corps" if sh else ""
-        elif p.pos in ("K", "DST"):
-            note = "no touchdown path"
-        else:
-            note = ""
-        bits.append(f"{p.name.strip()} {p.pos} ${p.salary:,} "
-                    f"({p.proj:.1f}" + (f", {note}" if note else "") + ")")
-    say("info", "Cheap tier you have to fill from — " + "; ".join(bits)
-                + ". Listed by price, not by points per dollar, because that "
-                  "ordering puts a third-string back at $400 above a starting "
-                  "receiver at $3,200 and the builder follows it. Measured over "
-                  "four showdowns, kickers and defences went 0 for 15 on "
-                  "doubling their projection while cheap skill players did it "
-                  "23% of the time — but which way that breaks is decided by "
-                  "game script, so it is your call, not a rule.")
-
-
 def _pool_gaps_note(players, mat, sims, min_proj):
     """Strong, low-owned plays the sharp's sheet does not list. -> [(Player, ceiling)]
 
@@ -1100,9 +1004,6 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
             say("info", "No pool gaps: nothing off your sheet has real upside "
                         "for its position at ownership that lags it. The list "
                         "is empty, not truncated.")
-
-    if fmt == "showdown":
-        _shape_note(players, _f(o.get("minProj"), M.MIN_PROJ), say)
 
     n_mine = n if split is None else max(0, min(split, n))
     n_vendor = n - n_mine
