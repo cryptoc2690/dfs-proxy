@@ -859,7 +859,8 @@ def rank(lineups, mat, bar, sims, dupes_idx, own_lean=None, dupe_scale=1.0,
 
 def select(lineups, n, *, captain_cap=None,
            player_cap=None, max_overlap=None, side_cap=None,
-           split_targets=None, core_floors=None, prior=None, kdst_cap=None):
+           split_targets=None, core_floors=None, prior=None, kdst_cap=None,
+           player_caps=None):
     """Pick the final N under coverage rules rather than diversification ones.
 
     150 showdown entries are worth roughly two independent bets — mean pairwise
@@ -1022,6 +1023,11 @@ def select(lineups, n, *, captain_cap=None,
                 return False
         if any(ply_used.get(i, 0) >= ply_ct for i in lu.ids()):
             return False
+        # Per-player ceilings the caller worked out (a paired read caps the one
+        # defence, not the block). Checked against the same counters.
+        if player_caps and any(ply_used.get(i, 0) >= player_caps[i]
+                               for i in lu.ids() if i in player_caps):
+            return False
         # The slate read, and the only place it acts. On a game the read calls
         # pass-first, the kicker-and-defence block cannot own the cheap slot.
         if kdst_cap is not None and any(p.pos in ("K", "DST") for p in lu.players):
@@ -1131,7 +1137,8 @@ def select(lineups, n, *, captain_cap=None,
 
 def vendor_arm(field_entries, n, *, captain_cap=None,
                player_cap=None, max_overlap=None, side_cap=None,
-               dupe_scale=1.0, core_floors=None, prior=None, kdst_cap=None):
+               dupe_scale=1.0, core_floors=None, prior=None, kdst_cap=None,
+               player_caps=None):
     """Their pool, re-ranked on Win% / (1 + Dupes) and put through the same caps.
 
     This is the control arm for the A/B comparison, and on its own it is a
@@ -1163,4 +1170,5 @@ def vendor_arm(field_entries, n, *, captain_cap=None,
     # 32-32 without being told to.
     return select(cands, n, captain_cap=captain_cap, player_cap=player_cap,
                   max_overlap=max_overlap, side_cap=side_cap,
-                  core_floors=core_floors, prior=prior, kdst_cap=kdst_cap)
+                  core_floors=core_floors, prior=prior, kdst_cap=kdst_cap,
+                  player_caps=player_caps)
