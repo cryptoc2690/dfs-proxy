@@ -70,6 +70,29 @@ QB_CAP = 0.35             # QB exposure IS stack exposure. A rail: the top QB
                           # sits at 17-21 of 75 on real builds, under the cap.
 PLAYER_CAP = 0.55
 DST_CAP = 0.30
+
+# How hard to tilt the defence toward the offence it is FACING. 0 = off.
+#
+# A defence's points come from the opponent failing: DraftKings' points-allowed
+# tiers are most of the floor, and sacks and turnovers come from a team that is
+# behind and pressing. So the question is not how good the defence is, it is how
+# likely the other side is to collapse — and on a main slate, unlike a showdown,
+# you get to choose the matchup out of a dozen games instead of two.
+#
+# Measured on the logged main slate, 24 defences scored against their real
+# results: the opposing offence's summed projection correlates -0.27 with what a
+# defence actually scored, which is a STRONGER read than the defence's own
+# projection (+0.23) or its salary (+0.21). Split into thirds by the offence
+# faced, the weakest third averaged 7.9 points at 1.08x projection and the
+# strongest third 5.2 at 0.97x. The top of the board is where it bites: the three
+# defences facing the weakest offences went 13.0, 18.0 and 13.0, and the slate's
+# best defence, the Steelers at 18.0, faced the second-weakest offence on the
+# board at 5% ownership.
+#
+# One slate, 24 defences. Not proven — a week effect could produce this. It is
+# tilted rather than enforced for that reason: the weight moves, nothing is
+# banned, and a defence facing a strong offence can still be built.
+DST_MATCHUP = 0.0
 MAX_OVERLAP = 6           # of 9
 MIN_PROJ = 3.0            # a roster spot needs some path to a useful score
 MAX_LEFTOVER = 2000
@@ -260,6 +283,31 @@ def pool_exempt(p):
     return p.is_dst
 
 
+def dst_matchup(players):
+    """-> {dst dk_id: weight multiplier}, from the offence each defence faces.
+
+    Empty when DST_MATCHUP is 0. The multiplier runs linearly from 1+DST_MATCHUP
+    for the defence facing the weakest projected offence on the slate to
+    1-DST_MATCHUP for the one facing the strongest, so it re-orders preference
+    without excluding anything.
+    """
+    if not DST_MATCHUP:
+        return {}
+    off = {}
+    for p in players:
+        if not p.is_dst and p.proj > 0 and p.team:
+            off[p.team] = off.get(p.team, 0.0) + p.proj
+    faced = {d.dk_id: off.get(d.opponent, 0.0)
+             for d in players if d.is_dst and d.proj > 0 and d.opponent in off}
+    if len(faced) < 3:
+        return {}
+    lo, hi = min(faced.values()), max(faced.values())
+    span = (hi - lo) or 1.0
+    # 1 at the weakest offence faced, 0 at the strongest
+    return {k: 1.0 + DST_MATCHUP * (1.0 - 2.0 * (v - lo) / span)
+            for k, v in faced.items()}
+
+
 def build_candidates(players, n, *, rng=None, stack_targets=None,
                      bring_back_share=BRING_BACK_SHARE, max_off_pool=None,
                      min_proj=MIN_PROJ, max_leftover=MAX_LEFTOVER):
@@ -271,6 +319,7 @@ def build_candidates(players, n, *, rng=None, stack_targets=None,
     He is the transmission mechanism that turns a receiver's ceiling into a
     lineup-wide one, which is why the stack is built through him.
     """
+    matchup = dst_matchup(players)
     rng = rng or random.Random(0)
     stack_targets = stack_targets or STACK_TARGETS
     pool = [p for p in players if p.proj >= min_proj and p.salary > 0
@@ -413,7 +462,10 @@ def build_candidates(players, n, *, rng=None, stack_targets=None,
                 # A core gets extra weight here so its floor is reachable at
                 # all: with none, a core QB projected 13.6 reached 32 of 4,000
                 # candidates and his "guaranteed" floor was a fiction.
-                w.append(max(p.proj, 0.1) ** 3 * (CORE_BOOST if p.core else 1.0))
+                wt = max(p.proj, 0.1) ** 3 * (CORE_BOOST if p.core else 1.0)
+                if p.is_dst and matchup:
+                    wt *= matchup.get(p.dk_id, 1.0)
+                w.append(wt)
             if not elig:
                 ok = False
                 break
