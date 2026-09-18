@@ -434,6 +434,20 @@ VENDOR_SIGNAL = "top10"
 # 35.2 and 36.2. So the response ramps between these two points instead of
 # flipping, and a slate landing in the gap gets a partial answer rather than a
 # coin toss.
+# Why this is the GAME's passing expectation and not the defence's own matchup.
+# A defence scores off the points-allowed tiers and off sacks and turnovers, so
+# it needs the other side to collapse — which argues for holding down the one
+# defence facing the stronger offence rather than the block. Measured, that is
+# the weaker read: the opposing offence's projected total correlates -0.22 with a
+# defence beating its projection, against -0.45 for both quarterbacks summed.
+#
+# The reason is in the two defences that did beat their projection. The Chiefs
+# faced the lowest-projected offence on the board and hit, exactly as the matchup
+# story predicts. The 49ers faced the third HIGHEST and hit anyway, because the
+# Rams busted — their top two receivers ran 0.52x. Which offence collapses is
+# idiosyncratic and not knowable at lock. What is knowable is which games are
+# unlikely to contain a collapse at all, and two good quarterbacks is that. So the
+# read stays at the game level.
 QB_PASS_LO = 37.0       # both QBs summed, at or below which nothing is capped
 QB_PASS_HI = 40.0       # and at or above which the tightest cap applies
 
@@ -859,8 +873,7 @@ def rank(lineups, mat, bar, sims, dupes_idx, own_lean=None, dupe_scale=1.0,
 
 def select(lineups, n, *, captain_cap=None,
            player_cap=None, max_overlap=None, side_cap=None,
-           split_targets=None, core_floors=None, prior=None, kdst_cap=None,
-           player_caps=None):
+           split_targets=None, core_floors=None, prior=None, kdst_cap=None):
     """Pick the final N under coverage rules rather than diversification ones.
 
     150 showdown entries are worth roughly two independent bets — mean pairwise
@@ -1023,11 +1036,6 @@ def select(lineups, n, *, captain_cap=None,
                 return False
         if any(ply_used.get(i, 0) >= ply_ct for i in lu.ids()):
             return False
-        # Per-player ceilings the caller worked out (a paired read caps the one
-        # defence, not the block). Checked against the same counters.
-        if player_caps and any(ply_used.get(i, 0) >= player_caps[i]
-                               for i in lu.ids() if i in player_caps):
-            return False
         # The slate read, and the only place it acts. On a game the read calls
         # pass-first, the kicker-and-defence block cannot own the cheap slot.
         if kdst_cap is not None and any(p.pos in ("K", "DST") for p in lu.players):
@@ -1137,8 +1145,7 @@ def select(lineups, n, *, captain_cap=None,
 
 def vendor_arm(field_entries, n, *, captain_cap=None,
                player_cap=None, max_overlap=None, side_cap=None,
-               dupe_scale=1.0, core_floors=None, prior=None, kdst_cap=None,
-               player_caps=None):
+               dupe_scale=1.0, core_floors=None, prior=None, kdst_cap=None):
     """Their pool, re-ranked on Win% / (1 + Dupes) and put through the same caps.
 
     This is the control arm for the A/B comparison, and on its own it is a
@@ -1170,5 +1177,4 @@ def vendor_arm(field_entries, n, *, captain_cap=None,
     # 32-32 without being told to.
     return select(cands, n, captain_cap=captain_cap, player_cap=player_cap,
                   max_overlap=max_overlap, side_cap=side_cap,
-                  core_floors=core_floors, prior=prior, kdst_cap=kdst_cap,
-                  player_caps=player_caps)
+                  core_floors=core_floors, prior=prior, kdst_cap=kdst_cap)
