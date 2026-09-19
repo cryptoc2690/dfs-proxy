@@ -738,9 +738,21 @@ function renderSwaps(d){
         : '');
     const view = s.before ? '<button class="swaptoggle" data-i="'+i+'">view lineup</button>' : '';
     const why = s.hold ? ' <span class="muted">— '+s.hold+'</span>' : '';
+    // On a lineup we are NOT changing, the stance is not the reason and must not
+    // read like one. "protecting" sitting in green next to "keep as-is" was taken
+    // as the tool's verdict on a lineup it had simply failed to notice news
+    // about; the stance only ever tilts the ranking BETWEEN alternatives, so on a
+    // keep it is noise. Show the actual reason instead, and show it first.
+    const keepPace = s.settled
+      ? ' · <span class="muted">all players locked — nothing left to change</span>'
+      : s.rank
+      ? ' · rank <b>#'+s.rank.toLocaleString()+'</b>, banked '+s.banked+' → '+s.projFinal+' projected'
+      : (s.banked>0
+        ? ' · banked <b>'+s.banked+'</b> vs '+s.expected+' expected ('+(s.pace>=0?'+':'')+s.pace+')'
+        : '');
     if(s.keep) return '<div class="swapcard keep" id="sc'+i+'">'+
       '<div class="swaphdr"><span class="hdrtext">#'+s.entryId+' · keep as-is '+
-      '<span class="muted">('+s.open+' open, proj '+s.proj+')</span>'+why+pace+'</span>'+view+'</div>'+
+      '<span class="muted">('+s.open+' open, proj '+s.proj+')</span>'+why+keepPace+'</span>'+view+'</div>'+
       '<div class="cmpwrap" id="cw'+i+'" style="display:none"></div></div>';
     return '<div class="swapcard" id="sc'+i+'">'+
       '<div class="swaphdr">'+

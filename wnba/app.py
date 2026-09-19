@@ -955,6 +955,12 @@ def _lineup_log(lu, med_implied, game_totals):
         "players": [{
             "name": p.name, "team": p.team, "pos": p.pos, "salary": p.salary,
             "proj": round(p.proj, 1), "ceil": round(p.ceil, 1),
+            # The RAW LineStar number and the starter flag, alongside the blended
+            # projection. Late swap compares raw to raw: the blend mixes in a
+            # season average, and a season average is precisely the thing that
+            # does not know a player was benched an hour ago, so comparing
+            # blended numbers hides the news the comparison exists to find.
+            "lsProj": round(p.ls_proj, 1), "starter": p.starter,
             "own": round(p.ownership, 1), "min": round(p.minutes, 1),
             "implied": round(p.implied, 1), "core": p.core, "pool": p.in_pool,
         } for p in lu.dk_slots()],
@@ -1362,6 +1368,30 @@ def _aggression(deficit_weighted):
     return max(0.15, min(0.85, 0.5 - deficit_weighted / 60.0))
 
 
+# DK writes a roster as "G Name G Name F Name F Name F Name UTIL Name", with
+# LOCKED standing in for a player whose game has not started. UTIL comes first in
+# the alternation so it is not matched as a bare U-less token.
+_STANDINGS_SLOT = re.compile(r"\s*(?:UTIL|G|F)\s+")
+
+
+def _standings_names(cell):
+    """-> one entry per roster slot, in DK's slot order: the normalized name if
+    DK has revealed it, else None.
+
+    Position is kept rather than the bare list of names, because it is what makes
+    the comparison against an entries export usable slot by slot. And a revealed
+    name is not merely newer information, it is FINAL: DK only reveals a player
+    once their game has tipped, and a tipped slot can no longer be edited. So
+    where the contest file has a name, that name is what is entered, full stop.
+    """
+    out = []
+    for part in _STANDINGS_SLOT.split(cell or ""):
+        part = part.strip()
+        if part:
+            out.append(None if part == "LOCKED" else normalize_name(part))
+    return out
+
+
 def parse_contest_standings(text):
     """Parse a DK contest-standings export.
 
@@ -1385,6 +1415,12 @@ def parse_contest_standings(text):
                 "entryId": r[1].strip(),
                 "points": _f(r[4]),
                 "hidden": r[5].count("LOCKED"),
+                # The names DK has actually revealed on this roster. For our own
+                # entries this is the live truth about what is entered — it is
+                # what DK holds right now, including a hand edit made after the
+                # entries file was exported. Kept so late swap can notice that
+                # the entries file it was given is out of date.
+                "revealed": _standings_names(r[5]),
             })
         # The player block lists each player once PER ROSTER SLOT (A'ja shows up
         # as F 57.2% and again as UTIL 1.0%), so true ownership is the sum across
@@ -1658,6 +1694,29 @@ def _roster_payload(roster, slots, scored, locked_names, pool_names, core_names)
 SWAP_NEWS_PROJ_DROP = 0.25   # share of projection lost that counts as news
 SWAP_NEWS_MIN_DROP = 4.0     # ...and at least this many points, so noise is out
 
+# A benching, detected WITHOUT the logged baseline.
+#
+# The projection-cut test above has two holes, both reproduced on a controlled
+# slate. It needs a logged build for this exact game set, so a night without one
+# sees nothing but scratches — and a benching is not a scratch. Worse, when the
+# baseline IS there the cut gets damped away: a benched player's LineStar
+# projection collapses but her SEASON AVERAGE does not, and blend_projections
+# mixes the two, so a projection cut to a quarter came through as 29 -> 18 and a
+# milder one never cleared the 25% gate at all. The mechanism of a benching is
+# exactly what defeats the detector built to catch it.
+#
+# The starter flag has neither problem. It is in the fresh file, it needs no
+# history, and the review already measured this as the whole edge: LineStar-bench
+# players who actually started scored 2.1x their projection (+11.6), expected
+# starters who sat lost 13.5, and all 44 starter-flag disagreements landed in a
+# game after the first tip.
+#
+# It fires only when there is something to DO about it — a starter at the same
+# roster position, costing no more, projecting materially better. A sixth woman
+# who is priced for it and projects fine is not news, and this is what keeps the
+# rule from re-opening every bench body in the set and bringing back the churn.
+SWAP_BENCH_EDGE = 1.5        # replacement must project at least this multiple
+
 
 def _news_baseline(games):
     """{norm name: proj} from the most recent logged build of THIS slate.
@@ -1694,26 +1753,59 @@ def _news_baseline(games):
         for p in lu.get("players", []):
             nm = normalize_name(p.get("name", ""))
             if nm:
-                out[nm] = p.get("proj", 0.0)
+                # Prefer the raw LineStar number where the record carries it, so
+                # the comparison is raw against raw. Records written before that
+                # field existed fall back to the blended one.
+                out[nm] = {"proj": p.get("proj", 0.0),
+                           "ls": p.get("lsProj", p.get("proj", 0.0)),
+                           "starter": p.get("starter")}
     return out
 
 
-def _news_names(players, baseline):
+def _news_names(players, baseline, locked_names=()):
     """Players something has actually been said about since the build.
 
-    Ruled out is detectable from the fresh file alone; a projection cut needs the
-    logged baseline, so it only fires when a build for this slate was logged."""
+    Ruled out and benched are both readable from the fresh file alone. A
+    projection cut needs the logged baseline, so that test only fires when a
+    build for this slate was logged — see the note on SWAP_BENCH_EDGE for why
+    that is not enough on its own.
+    """
     news = {}
+    # Who could actually take the slot: a starter whose game has not tipped.
+    raw = lambda p: p.ls_proj if p.ls_proj > 0 else p.proj
+    live = [p for p in players if p.proj > 0 and p.starter
+            and normalize_name(p.name) not in locked_names]
     for p in players:
         nm = normalize_name(p.name)
         if p.proj <= 0 or p.status == "OUT":
             news[nm] = "ruled out"
             continue
-        was = baseline.get(nm, 0.0)
-        if was > 0:
-            drop = was - p.proj
-            if drop >= SWAP_NEWS_MIN_DROP and drop >= was * SWAP_NEWS_PROJ_DROP:
-                news[nm] = f"projection cut {was:.0f} to {p.proj:.0f}"
+        b = baseline.get(nm)
+        if b:
+            # Raw against raw — see the note in _lineup_log.
+            was, now = b["ls"] or 0.0, raw(p)
+            drop = was - now
+            if was > 0 and drop >= SWAP_NEWS_MIN_DROP \
+                    and drop >= was * SWAP_NEWS_PROJ_DROP:
+                news[nm] = f"projection cut {was:.0f} to {now:.0f}"
+                continue
+            if b.get("starter") and not p.starter:
+                news[nm] = "was starting at lock, now on the bench"
+                continue
+        if p.starter or nm in locked_names:
+            continue
+        # Benched, and there is a same-position starter who costs no more and
+        # projects materially better. Report the alternative, because that is the
+        # fact that makes it actionable rather than a status line.
+        alt = [q for q in live
+               if q.is_guard == p.is_guard and q.salary <= p.salary
+               and raw(q) >= raw(p) * SWAP_BENCH_EDGE
+               and normalize_name(q.name) != nm]
+        if alt:
+            best = max(alt, key=raw)
+            news[nm] = (f"on the bench — {best.name} is starting at "
+                        f"${best.salary:,} and projects {raw(best):.0f} "
+                        f"against {raw(p):.0f}")
     return news
 
 
@@ -1755,6 +1847,7 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
     by_norm = {normalize_name(p.name): p for p in players}
     n_sims = _int(options.get("sims"), 3000)
     n_lu = len(entries)
+    stale = []     # entries where DK disagrees with the entries file we were given
 
     # Optional contest standings: replaces the projection-based pace proxy with a
     # real leaderboard position, and gives actual contest ownership for the
@@ -1771,6 +1864,33 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
             actual = contest["ownership"].get(normalize_name(p.name))
             if actual is not None and actual > 0:
                 p.ownership = actual
+        # The entries export is a snapshot; the contest file is what DK holds
+        # RIGHT NOW. Edit a lineup on the site, re-download the contest file and
+        # the two disagree — and the tool used to carry on against the roster it
+        # built, silently, which is worse than useless once you have fixed a
+        # lineup by hand. So compare them, and trust DK.
+        for e in entries:
+            live = my_rank.get(e["entryId"])
+            if not live:
+                continue
+            shown = live.get("revealed") or []
+            if len(shown) != len(e["names"]):
+                continue                        # shapes disagree — do not guess
+            nice = lambda n: by_norm[n].name if n in by_norm else n
+            fixed, swapped = list(e["names"]), []
+            for i, n in enumerate(shown):
+                if n and n != normalize_name(e["names"][i]):
+                    swapped.append((e["names"][i], nice(n)))
+                    fixed[i] = nice(n)
+            if not swapped:
+                continue
+            e["names"] = fixed
+            stale.append(
+                f"Entry {e['entryId']}: your DK entries file is out of date. DK "
+                f"has " + ", ".join(f"{new} where the file says {old}"
+                                    for old, new in swapped)
+                + ". Those games have already tipped, so DK's version is the one "
+                  "that counts and late swap is using it.")
 
     # Cores carry over from the build — protected, not optimized away.
     core_names = _parse_names(options.get("cores"))
@@ -1796,7 +1916,7 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
     # went 8 for 8.
     news_only = True
     baseline = _news_baseline(sorted({p.game for p in players if p.game}))
-    news = _news_names(players, baseline)
+    news = _news_names(players, baseline, locked_names)
     # Players in the next game to tip: filling a slot from there costs optionality.
     starts = sorted({p["start"] for p in dk["pool"].values()
                      if p.get("start") and not p.get("locked")})
@@ -1919,6 +2039,7 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
         # Nothing has been said about anyone in this lineup, so there is nothing
         # to react to. Re-optimising here is the move the data scored at noise.
         held = news_only and not row["news"] and row["open"] > 0
+        blocked_by_pool = None      # why the obvious upgrade was turned down
         # And when there IS news, react to the news — don't let one scratch
         # license a rebuild of the whole roster. The measured edge is in
         # replacing the player something was said about; every additional slot
@@ -1948,8 +2069,29 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
                 # Scaled by how many unvetted names it takes: two of them have to
                 # earn twice as much, so a roster can't sneak several marginal
                 # off-pool plays in under one lump gain.
-                if incoming_off and (sum(p.proj for p in lu.players) - cur_proj
-                                     < SWAP_OFF_POOL_MIN_GAIN * len(incoming_off)):
+                gain_proj = sum(p.proj for p in lu.players) - cur_proj
+                # The high off-pool bar exists to stop DISCRETIONARY reaching
+                # outside the vetted list. A move forced by news is not that: the
+                # pool was written before anyone knew this player would be
+                # benched, and holding her because her replacement was not on a
+                # list drawn up at noon is the pool overruling the one category
+                # of swap the review measured as reliably good (+24.5 per entry,
+                # positive 15 of 15). So when a news player is the one leaving,
+                # the incoming name clears the normal gain bar instead.
+                forced = any(n in news for n in
+                             here - {normalize_name(x.name) for x in lu.players})
+                bar = SWAP_MIN_GAIN if forced else SWAP_OFF_POOL_MIN_GAIN
+                if incoming_off and gain_proj < bar * len(incoming_off):
+                    # Say which bar stopped it. A hold reported as "no move
+                    # clears the gain threshold" reads as "nothing better
+                    # exists", when what actually happened is that the upgrade
+                    # was outside the pool you typed and missed a bar you were
+                    # never shown. On news the fact you need is the name.
+                    if row["news"] and blocked_by_pool is None:
+                        blocked_by_pool = (
+                            f"{', '.join(p.name for p in incoming_off)} would fix "
+                            f"it (+{gain_proj:.1f} proj) but is not in your pool, "
+                            f"and an off-pool move needs +{bar * len(incoming_off):.0f}")
                     continue
             pick = lu
             break
@@ -1978,7 +2120,8 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
             "news": row["news"],
             # why we are holding, so a "keep" is never a silent shrug
             "hold": ("no news on anyone still movable" if held
-                     else None if pick else "no move clears the gain threshold"),
+                     else None if pick
+                     else blocked_by_pool or "no move clears the gain threshold"),
         }
         if pick:
             # Never report a change without the diff that explains it — the UI
@@ -2035,10 +2178,11 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
         # Without a baseline only "ruled out" news is detectable — a projection
         # CUT cannot be seen, because there is nothing to compare against. Say so
         # instead of quietly running at half strength.
-        "warnings": ([] if baseline else [
+        "warnings": stale + ([] if baseline else [
             "No pre-lock build found for this slate, so late swap can only react "
-            "to players ruled OUT — it cannot see a projection cut. Build this "
-            "slate first (even once) and the full news check comes back."]),
+            "to players ruled OUT and to benchings — it cannot see a projection "
+            "cut. Build this slate first (even once) and the full news check "
+            "comes back."]),
         "slots": slots,
         "csvHeader": csv_header,
         "dkCsv": ("\n".join(lines) + "\n") if len(lines) > 1 else None,
