@@ -561,8 +561,33 @@ MAX_LEFTOVER = 5000
 MIN_PROJ = 2.0
 # How hard construction concentrates on the top of the board. A candidate's
 # chance of being drawn into a roster goes as projection to this power, so at 3
-# a player projected 13 is sampled 16x as often as one projected 5. Nobody has
-# ever tested the number — it has been 3 since the first commit.
+# a player projected 13 is sampled 16x as often as one projected 5.
+#
+# TESTED, AND IT STAYS AT 3. Realised money on five real contests, each scored
+# on its own ladder against its own field, eight seeds per setting:
+#
+#   slate      exp 1.0      exp 1.5      exp 3.0
+#   DAL@NYG     97 +-2       97 +-6       96 +-2
+#   DET@BUF     29 +-2       31 +-7       28 +-3
+#   DEN@KC      99 +-67      72 +-4       77 +-5
+#   SF@LAR     196 +-95     175 +-74     145 +-16
+#   main        34 +-6       32 +-4       31 +-5
+#
+# Every gap is inside its own seed noise. The number that matters is not the
+# mean, it is the SPREAD: flattening does not find better lineups, it widens the
+# distribution. SF @ LAR returns 145 +-16 at the cube and 196 +-95 flattened —
+# six times the variance for a mean that cannot be distinguished from it.
+#
+# This was nearly shipped. An earlier run at FOUR seeds reported exp 1.0 ahead
+# by $94 across the same five contests and leave-one-slate-out picked 1.0 on
+# four of five. That run printed no error bars, and with a per-seed SD of 95 on
+# one slate it had simply caught the good tail. Any future test of this knob
+# reports variance or it is not a test.
+#
+# 2.0, 3.0 and 4.0 were indistinguishable from each other in the first pass
+# (372 / 370 / 371 total), so if anything is ever found here it is a cliff below
+# 2.0 rather than a gradient, and it will be a variance decision rather than an
+# expected-value one.
 FILL_EXP = 3.0
 # Ownership lean: OFF. Positive leans toward the field, negative fades it.
 #

@@ -123,8 +123,10 @@ DST_MATCHUP = 0.0
 DST_EXP = 3.0
 MAX_OVERLAP = 6           # of 9
 # How hard construction concentrates on the top of the board — see the note on
-# engine.FILL_EXP. At 3 a player projected 13 is drawn 16x as often as one
-# projected 5, which is a real thumb on the scale and has never been measured.
+# engine.FILL_EXP, which carries the numbers. Tested across five real contests
+# at eight seeds each and every gap sat inside its own seed noise; on this slate
+# 1.0 returned $34 +-6 against $31 +-5 for the cube. Flattening buys variance,
+# not money. It stays at 3.
 FILL_EXP = 3.0
 MIN_PROJ = 3.0            # a roster spot needs some path to a useful score
 MAX_LEFTOVER = 2000
