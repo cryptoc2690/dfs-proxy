@@ -311,11 +311,15 @@ INDEX_HTML = r"""<!doctype html>
         first place.</div>
       <label>Two-game slate shape rules</label>
       <select id="slaterules">
-        <option value="on" selected>On — no 3-3 split, majority in the higher-owned game</option>
+        <option value="on" selected>On — a 4+ block sits in the higher-owned game, and needs a bring-back</option>
         <option value="off">Off</option>
       </select>
-      <div class="hint">Only bites on a two-game slate. 4-2 beat the balanced 3-3 on cash in
-        7 of 7 slates, and loading the higher-owned game won 7 of 7 (29.8% vs 12.3%).</div>
+      <div class="hint">Only bites on a two-game slate. A lineup that loads one game puts that
+        block in the higher-owned game (won 7 of 7 slates, 29.8% vs 12.3%), and 3 or more from
+        one team needs a player from its opponent (2-for-3,376 on top-1% without one).
+        <b>The 3-3 split is no longer banned</b> — it is an ordinary shape and the simulator
+        ranks it on merit. Banning it put 3-3 at 0 of 150 on a board where it was 40% of every
+        legal lineup and 37% of the best-scoring ones, and one won real money.</div>
       <div class="hint"><b>Late swap fires on news only.</b> Replayed across seven real
         mid-slate snapshots, reacting to a scratch or a benching was +$24 and never
         negative; re-optimising freely wrecked two nights (52.9 → 31.5 and 40.0 → 0.0) and
@@ -456,6 +460,29 @@ function wireSlot(slotId, inputId, handler){
 const stamp = () => new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
 function readFile(f, done){ if(!f) return; const r=new FileReader(); r.onload=()=>done(r.result); r.readAsText(f); }
 
+// The board the page draws itself reads ONE column of the LineStar file, while
+// the build runs on a blend of LineStar, the season average and the daily file.
+// That put two different projections for the same player on one screen — the
+// table showing 36.8 next to a lineup showing 35.4 — and the table is the thing
+// picks get made from. So ask the server for the blended board and draw that.
+// The local parse stays as the fallback: it is what makes the board appear
+// instantly and keeps it working if the request fails.
+async function refreshBoard(){
+  if(!csvText) return;
+  try{
+    const res = await fetch('/api/board', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({csv:csvText, options:{minutes:minText}})});
+    const d = await res.json();
+    if(d.error || !Array.isArray(d.players) || !d.players.length) return;
+    slate = d.players.map(p=>({name:p.name, team:p.team,
+      pos:(p.pos||'').split('/')[0], salary:p.salary, proj:p.proj,
+      lsProj:p.lsProj, own:p.own, implied:p.implied}));
+    medImplied = slateMedianImplied(slate);
+    renderSlate(); railMeta(); drawPicks();
+  }catch(e){ /* keep the local parse — a board is better than no board */ }
+}
+
 wireSlot('#f-slate','#file', f=>readFile(f, txt=>{
   csvText=txt; slate=parseSlate(txt); medImplied=slateMedianImplied(slate);
   markSlot('#f-slate', f.name, 'loaded '+stamp()+' — click to replace');
@@ -464,10 +491,11 @@ wireSlot('#f-slate','#file', f=>readFile(f, txt=>{
   $('#poolin').disabled=false; $('#corein').disabled=false;
   $('#slateempty').style.display='none';
   if(swapText) $('#swapgo').disabled=false;
-  renderSlate(); railMeta(); drawPicks();
+  renderSlate(); railMeta(); drawPicks(); refreshBoard();
 }));
 wireSlot('#f-min','#minfile', f=>readFile(f, txt=>{
   minText=txt; markSlot('#f-min', f.name, 'loaded '+stamp()); railMeta();
+  refreshBoard();   // the daily file is a third vote in the blend
 }));
 wireSlot('#f-dk','#swapfile', f=>readFile(f, txt=>{
   swapText=txt; markSlot('#f-dk', f.name, 'loaded '+stamp());
@@ -673,7 +701,13 @@ function renderSlate(){
       '<td class="mkcol">'+marks+'</td>'+
       '<td>'+r.name+'</td><td class="num">'+r.team+'</td><td class="num">'+r.pos+'</td>'+
       '<td class="num">$'+r.salary.toLocaleString()+'</td>'+
-      '<td class="num">'+r.proj.toFixed(1)+'</td>'+
+      // Hovering says where the number came from. The blend moves some players
+      // several points, and being able to see that without leaving the row is
+      // the difference between trusting the column and second-guessing it.
+      '<td class="num"'+(r.lsProj!==undefined && Math.abs(r.lsProj-r.proj)>=0.05
+        ? ' title="blended '+r.proj.toFixed(1)+' — LineStar had '+r.lsProj.toFixed(1)+'"'
+          +' style="border-bottom:1px dotted var(--line)"' : '')
+        +'>'+r.proj.toFixed(1)+'</td>'+
       '<td class="num">'+r.own.toFixed(1)+'%</td>'+
       '<td class="num '+impCls+'">'+(r.implied?r.implied.toFixed(1):'—')+'</td></tr>';
   }).join('');

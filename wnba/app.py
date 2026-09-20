@@ -711,6 +711,43 @@ def _build_warnings(report, unmatched_pool, requested, lineups=()):
     return out
 
 
+def run_board(csv_text: str, options: dict) -> dict:
+    """The slate board, with the projection the BUILD will actually use.
+
+    The page draws its own board straight from the LineStar CSV so you can mark
+    players before a build exists. That parse reads one column, `Projected`,
+    while the build runs on a blend of LineStar, the season average and the daily
+    file — so the table you pick from showed Rhyne Howard at 36.8 while every
+    lineup on the same screen showed him at 35.4, and the numbers a decision gets
+    made on were not the numbers the decision was made with.
+
+    This returns the blended board from the same three functions the build calls,
+    in the same order, so there is one projection on the screen instead of two.
+    """
+    text = (csv_text or "").strip()
+    if not text:
+        return {"error": "Drop your LineStar projections CSV."}
+    players = parse_linestar(text)
+    if sum(1 for p in players if p.proj > 0) < ROSTER_SIZE:
+        return {"error": "Couldn't read that file as a LineStar export "
+                         "(or it has no projected players)."}
+    had_minutes = apply_daily_projections(players, options.get("minutes") or "")
+    blend_projections(players)
+    _apply_removals(players, _parse_names(options.get("remove")))
+    return {
+        "hadMinutes": had_minutes,
+        "players": [{
+            "name": p.name, "team": p.team, "pos": p.pos, "salary": p.salary,
+            "game": p.game, "proj": round(p.proj, 1),
+            # The raw number too, so the page can show what moved and by how
+            # much rather than silently replacing one figure with another.
+            "lsProj": round(p.ls_proj, 1),
+            "own": round(p.ownership, 1), "implied": round(p.implied, 1),
+            "starter": p.starter,
+        } for p in players if p.proj > 0],
+    }
+
+
 def run_optimize(csv_text: str, options: dict) -> dict:
     """Project from LineStar + build lineups, returning plain dicts for the GUI."""
     text = (csv_text or "").strip()
@@ -2209,7 +2246,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, json.dumps({"error": "not found"}))
 
     def do_POST(self):
-        if self.path not in ("/api/optimize", "/api/lateswap", "/api/dkfill"):
+        if self.path not in ("/api/optimize", "/api/lateswap", "/api/dkfill",
+                             "/api/board"):
             return self._send(404, json.dumps({"error": "not found"}))
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -2223,7 +2261,9 @@ class Handler(BaseHTTPRequestHandler):
             if not csv_text.strip():
                 return self._send(400, json.dumps(
                     {"error": "Drop your LineStar projections CSV."}))
-            if self.path == "/api/lateswap":
+            if self.path == "/api/board":
+                result = run_board(csv_text, payload.get("options") or {})
+            elif self.path == "/api/lateswap":
                 result = run_late_swap(csv_text, payload.get("dk") or "",
                                        payload.get("contest") or "",
                                        payload.get("options") or {})

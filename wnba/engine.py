@@ -76,8 +76,6 @@ STUD_SALARY = 10_000
 # Two-game slates are the one place a shape rule survived, and only INSIDE the
 # stripped build: with them on, 90 cashes held out against 86 with them off. They
 # are cheap and specific, so they stay:
-#   * the balanced 3-3 game split is the WORST construction on the board —
-#     cash 17.2% vs 23.0% (4-2) vs 28.9% (5-1), and 4-2 beat 3-3 in 7 of 7 slates
 #   * a 3+ block from one team with NO player from its opponent went 2-for-3,376
 #     on top-1% finishes, against about 34 expected at the field rate
 #   * putting the majority in the game with the higher projected-ownership sum
@@ -87,6 +85,23 @@ STUD_SALARY = 10_000
 # and the last rung of the relaxation ladder silent no-ops: each passed None and
 # got the rules handed straight back. RULES_OFF is a sentinel that means off.
 RULES_OFF = {"two_game": False, "major_game": None}
+
+# The 3-3 ban is GONE. It is an ordinary shape now — neither blocked nor
+# preferred, just one the simulator is allowed to rank on its merits.
+#
+# The cash numbers above are about which shape wins MORE OFTEN. They were
+# enforced as though they were about which shape can win at all, and the
+# difference showed up the hard way: on CHI@ATL / SEA@GSV the ban put 3-3 at 0 of
+# 150, a 3-3 built by hand off lineup #1 took second, and left alone on that
+# board a 3-3 is 40.1% of every legal candidate and 36.7% of the top sixty by
+# simulated score. The rule was not trimming a fringe shape, it was deleting the
+# most common one on the slate — and a construction that cashes 17% against 23%
+# still wins often enough that its absence is a hole in the set, not a saving.
+#
+# Nothing replaced it. A quota tilting the set back toward 4-2 was written and
+# then thrown away: the whole complaint was that the shape was being decided by a
+# rule instead of by the board, and a share is the same mistake with a softer
+# edge. The scorer already sees game totals, ownership and ceilings.
 
 
 class Lineup:
@@ -171,9 +186,14 @@ def _rules_ok(picked, rules):
         for p in picked:
             games[p.game] = games.get(p.game, 0) + 1
         big_game, big_ct = max(games.items(), key=lambda kv: kv[1])
-        if big_ct < 4:                          # kills the 3-3 split
-            return False
-        if rules["major_game"] and big_game != rules["major_game"]:
+        # 3-3 is legal, and nothing downstream trims it either — see the note by
+        # RULES_OFF. It is an ordinary shape competing on simulated score.
+        #
+        # The major-game test only applies when there IS a majority. On a 3-3 the
+        # max() above picks a "biggest" game arbitrarily between two equal counts,
+        # so running the test there would reject or accept the same shape
+        # depending on dictionary order.
+        if big_ct >= 4 and rules["major_game"] and big_game != rules["major_game"]:
             return False
         teams = {}
         for p in picked:
