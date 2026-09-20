@@ -122,6 +122,10 @@ DST_MATCHUP = 0.0
 # by moving Titans 21 -> 31 into a 0.0. Both knobs stay at their no-op values.
 DST_EXP = 3.0
 MAX_OVERLAP = 6           # of 9
+# How hard construction concentrates on the top of the board — see the note on
+# engine.FILL_EXP. At 3 a player projected 13 is drawn 16x as often as one
+# projected 5, which is a real thumb on the scale and has never been measured.
+FILL_EXP = 3.0
 MIN_PROJ = 3.0            # a roster spot needs some path to a useful score
 MAX_LEFTOVER = 2000
 CORE_BOOST = 3.0          # construction weight on a core, so its floor is reachable
@@ -490,7 +494,7 @@ def build_candidates(players, n, *, rng=None, stack_targets=None,
                 # A core gets extra weight here so its floor is reachable at
                 # all: with none, a core QB projected 13.6 reached 32 of 4,000
                 # candidates and his "guaranteed" floor was a fiction.
-                e = DST_EXP if p.is_dst else 3.0
+                e = DST_EXP if p.is_dst else FILL_EXP
                 wt = max(p.proj, 0.1) ** e * (CORE_BOOST if p.core else 1.0)
                 if p.is_dst and matchup:
                     wt *= matchup.get(p.dk_id, 1.0)

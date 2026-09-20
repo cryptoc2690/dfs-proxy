@@ -559,6 +559,11 @@ MAX_LEFTOVER = 5000
 # is the showdown equivalent of the WNBA minutes gate: a floor on whether a slot
 # has any path to a useful score, not a grade on how good the player is.
 MIN_PROJ = 2.0
+# How hard construction concentrates on the top of the board. A candidate's
+# chance of being drawn into a roster goes as projection to this power, so at 3
+# a player projected 13 is sampled 16x as often as one projected 5. Nobody has
+# ever tested the number — it has been 3 since the first commit.
+FILL_EXP = 3.0
 # Ownership lean: OFF. Positive leans toward the field, negative fades it.
 #
 # This was +0.35 on the strength of the vendor's own simulation saying chalk
@@ -772,7 +777,7 @@ def build_candidates(players, n, *, teams, split_targets=None, rng=None,
                         continue
                 elig.append(p)
                 spend = min(p.salary / per_slot, 1.6)
-                w.append((max(p.proj, 0.1) ** 3) * (0.35 + spend))
+                w.append((max(p.proj, 0.1) ** FILL_EXP) * (0.35 + spend))
             if not elig:
                 ok = False
                 break
