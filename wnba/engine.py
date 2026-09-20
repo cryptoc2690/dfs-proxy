@@ -77,9 +77,31 @@ STUD_SALARY = 10_000
 # stripped build: with them on, 90 cashes held out against 86 with them off. They
 # are cheap and specific, so they stay:
 #   * a 3+ block from one team with NO player from its opponent went 2-for-3,376
-#     on top-1% finishes, against about 34 expected at the field rate
+#     on top-1% finishes, against 52 expected at the two-game field rate of 1.55%
+#     (the figure recorded here was once "about 34", which used the all-slate
+#     rate of 1.0% and understated the rule)
 #   * putting the majority in the game with the higher projected-ownership sum
 #     paid in 7 of 7 slates on cash: 30.0% vs 12.3%
+#
+# The bring-back clause was re-examined across 68,376 real rosters on 23 slates,
+# 28,242 of them carrying a 3+ block, and three things came back:
+#
+#   IT IS A TWO-GAME FACT. On slates of three games or more a bring-backless
+#   block BEATS the field — 1.90% top-1% against 1.28%, and against 1.17% for
+#   blocks that do carry a bring-back. The clause already sits inside the
+#   two-game branch, which is the only reason that is not a live bug.
+#
+#   CONCENTRATION IS NOT THE ESCAPE HATCH. The hypothesis was that stacking a
+#   team whose scoring sits in its top three makes the bring-back redundant.
+#   Pooled it looks that way, but pooled is a slate-size effect: inside two-game
+#   slates the highest-concentration blocks went 0 of 1,066 on top-1%, and at or
+#   above the concentration that prompted the question, 0 of 2,191.
+#
+#   IT IS NOW THE ONLY THING ENFORCING IT. With max_per_team at 3, a
+#   bring-backless 3-block on a two-game slate IS a 3-3 roster, so while 3-3 was
+#   banned this clause was unreachable dead code. Since the 3-3 ban was removed
+#   (see below) it is live: deleting it admits 1,016 of 4,000 candidates on a
+#   real two-game board. Removing both at once would have been a bad trade.
 #
 # `rules=None` used to mean "work them out", which made both the UI's off switch
 # and the last rung of the relaxation ladder silent no-ops: each passed None and
@@ -102,6 +124,15 @@ RULES_OFF = {"two_game": False, "major_game": None}
 # then thrown away: the whole complaint was that the shape was being decided by a
 # rule instead of by the board, and a share is the same mistake with a softer
 # edge. The scorer already sees game totals, ownership and ceilings.
+#
+# Checked afterwards against 68,376 real rosters, and the ban was over-broad in
+# exactly the way removing it assumed. On two-game slates the top-1% rate for a
+# 3-3 roster carrying NO 3-block is about 1.4% (55 of roughly 3,900) against a
+# two-game field rate of 1.55% — an ordinary shape, which is what it is now
+# treated as. The whole of the old penalty was the subset that also held a
+# bring-backless 3-block, at 2 of 2,409. That subset is still refused, by the
+# bring-back clause above. The two rules were doing one job badly between them;
+# they now do two jobs, separately.
 
 
 class Lineup:
