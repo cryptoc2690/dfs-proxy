@@ -170,6 +170,24 @@ def parse_linestar(text):
 #   REAL MINUTES. A stale daily row on a player ruled out after that file was
 #   built still carries his old line, so a token four minutes is not enough. The
 #   bar is ROTATION_MINUTES, read at call time because it is defined below.
+#
+# CHECKED AGAINST 16 SLATES, and the honest summary is "harmless and nearly
+# inert". LineStar zeroes about 29 players a slate and roughly 6.8 of them play,
+# but they score a mean of 6.3 — so most of what the zero hides is not worth
+# having. With the 14-minute guard the rule fires on FOUR players across 16
+# slates, all four played, mean 7.4 points, and only one was in a pool. The
+# failure mode it was built to avoid did not occur once: 0 of 4 resurrected a
+# player who was genuinely out.
+#
+# The guard is at the right place. Play rate by daily minutes among zeroed
+# players: 8 min 65% (n=23), 10 min 86% (n=14), 12 min 100% (n=5), 14 min 100%
+# (n=4). Lowering it to 10 would roughly triple how often this fires and buy a
+# 14% chance each time of starting someone who never plays.
+#
+# Two things to keep in view. The daily number is a MEDIOCRE projection for these
+# players — it over-projects the ones clearing 14 minutes by 6.6. And 93 of the
+# 97 zeroed players who actually played had under 14 daily minutes, so the rule
+# cannot reach them by design. Expect this to matter about once a month.
 
 
 def revive_pooled_zeros(players, daily_text, report=None):
@@ -1498,6 +1516,26 @@ SWAP_MIN_GAIN = 6.0        # was 2.0 — sub-noise churn is how the damage happe
 # real ownership, real scores and a real leaderboard for every game that started,
 # against a builder that had only a vendor's simulation of 10,000 strangers.
 #
+# THE ASSUMPTION UNDERNEATH ALL OF THIS IS NOW TESTED. "The later number is
+# better" was reasoning, not evidence, until the archive was asked. Ten slates
+# with a lock file, a mid-slate pull and actuals, restricted to players whose
+# game had not started (287 of them, the only ones a swap can reach):
+#
+#   27 players moved 4% or more.  MAE against actual: lock 10.24, late 4.76,
+#   late better on 9 of 10 slates. Excluding the ruled-out and newly-projected,
+#   the 17 genuine revisions go 9.31 -> 7.05, late better on 12 of 17.
+#   UP moves specifically: 11 of them, 9.86 -> 7.12, late better on 9 of 11.
+#   The seven 25%+ rises projected 9.1 at lock, 17.2 late, and SCORED 19.5.
+#
+# And the mechanism is what we guessed, not scatter: on 9 of 10 slates the
+# most-affected team held 50-100% of that slate's movers while holding 18-56% of
+# its players, 5 of 7 big up-movers had a teammate revised DOWN in the same file,
+# and the 9 bench-to-starter flips realised +9.3 against lock while the 4
+# starter-to-bench flips realised -12.2. It is a starting-five resolving.
+#
+# Sub-threshold moves are noise in both directions — 65 small ups realised -0.7,
+# 51 small downs -0.1 — which is what the news thresholds are for.
+#
 # But the reason news-only existed is real, and it is in the numbers:
 #
 #   news-forced swaps        simulated gain 24-45   ->   8 for 8 positive
@@ -1509,9 +1547,28 @@ SWAP_MIN_GAIN = 6.0        # was 2.0 — sub-noise churn is how the damage happe
 # So the gate goes and the bar takes over: news keeps the low bar it earned,
 # everything else has to clear the noise floor the data actually measured.
 #
-# 20 is read off that 6-13 / 24-45 split, not measured directly. Every decision
-# is logged with its gain so the number can be set from real nights instead.
-SWAP_DISCRETIONARY_GAIN = 20.0
+# MEASURED, and 20 was too high. The seven mid-slate snapshots were replayed on
+# this code — 97 entries, 15,915 scored candidate rosters — taking each entry's
+# best discretionary candidate with the rank gate applied, and scoring the
+# REALISED change rather than the simulated one:
+#
+#   bar   moves   realised   mean    positive   slates positive
+#     6      30       +359   +12.0     26/30          6 of 7
+#    10      22       +323   +14.7     20/22          6 of 6
+#    12      17       +284   +16.7     15/17          6 of 6
+#    15      11       +156   +14.1      9/11          5 of 5
+#    20       8        +98   +12.2      6/8           3 of 3
+#
+# By band the separation is sharp: moves worth 6-10 simulated points realised
+# +4.4 (6 of 8 positive), 10-15 realised +15.2 (11 of 11), 15-20 realised +19.2
+# (3 of 3). Realised change parts from zero at about 10, not 20 — and a bar of 20
+# left 14 moves worth roughly +225 on the table, ALL FOURTEEN POSITIVE.
+#
+# So it drops to 10, which takes every good move and still excludes the marginal
+# 6-10 band. The review's own read was "10-12 as the estimate, not a constant",
+# on 22 entries across 7 slates. Every decision is still logged with its gain, so
+# this moves again when there are more nights.
+SWAP_DISCRETIONARY_GAIN = 10.0
 SWAP_OFF_POOL_MIN_GAIN = 12.0   # projection a player OUTSIDE the pool must add
 SWAP_MAX_LEFTOVER = 700    # match the build's salary floor; still a preference
                            # rather than a filter, since locks can strand money
@@ -2282,7 +2339,23 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
         # much softer than it looks and 40th can become 100th by itself. A number
         # that unreliable must not drive a decision, but it can refuse one: a
         # lineup already projecting to win does not get re-optimised on a
-        # 20-point simulated edge. News can still move it.
+        # discretionary edge. News can still move it.
+        #
+        # The estimate is as soft as feared and the gate was still right. Across
+        # 8 snapshots, 217 entries projecting top 1% finished there 13% of the
+        # time — and it is almost entirely about how much is left to play: 60%
+        # held with 1 slot hidden, 30% with 2, 4% with 3, 0% with 5. Median rank
+        # error is 14-20 percentile points. But on the one slate the gate fired
+        # (9 entries), their best discretionary candidates would have realised
+        # -13.8 on average, 1 of 9 positive. Refusing to act on a bad estimate
+        # was correct even though the estimate was bad.
+        #
+        # The obvious refinement — protect only when 2 or fewer slots are left,
+        # since a 3-slot top-1% projection holds 4% of the time — would make the
+        # gate fire LESS. It is not taken yet: the 9 entries it fired on are the
+        # only evidence, and whether they had 3+ slots open is unknown. Narrowing
+        # a gate that went 9 for 9 on the strength of a rate computed elsewhere
+        # is how a good rule gets deleted.
         winning = row.get("pct") is not None and row["pct"] <= SWAP_WIN_PCT
         disc_bar = float("inf") if winning else SWAP_DISCRETIONARY_GAIN
         # And when there IS news, react to the news — don't let one scratch
@@ -2354,6 +2427,12 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
                     # on a list drawn up at noon is the pool overruling the one
                     # category of swap the review measured as reliably good
                     # (+24.5 per entry, positive 15 of 15).
+                    #
+                    # The high bar is pointed the right way: replayed at MATCHED
+                    # simulated gain, off-pool incoming players underperform
+                    # in-pool ones by 10-14 realised points (+3 against +18 in
+                    # the 0-10 band, +5 against +15 in 10-20). The pool is
+                    # carrying real information, not just the sharp's habit.
                     bar = SWAP_MIN_GAIN if forced else SWAP_OFF_POOL_MIN_GAIN
                     if incoming_off and gain_proj < bar * len(incoming_off):
                         # Say which bar stopped it. A hold reported as "no move
