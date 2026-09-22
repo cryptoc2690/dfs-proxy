@@ -320,7 +320,20 @@ INDEX_HTML = r"""<!doctype html>
         <b>The 3-3 split is no longer banned</b> — it is an ordinary shape and the simulator
         ranks it on merit. Banning it put 3-3 at 0 of 150 on a board where it was 40% of every
         legal lineup and 37% of the best-scoring ones, and one won real money.</div>
-      <div class="hint"><b>Late swap fires on news only.</b> Replayed across seven real
+      <label>Late swap mode</label>
+      <select id="newsonly">
+        <option value="off" selected>Re-optimise — any move worth 20+ simulated points</option>
+        <option value="on">News only — move a slot only if something was said about it</option>
+      </select>
+      <div class="hint">Every trigger in the old news-only mode was about a player in YOUR
+        lineup getting worse. Nothing fired when a player you do not hold got better — which
+        is exactly what happens when LineStar hedges a team it cannot call and then resolves
+        it an hour later. Re-optimise mode drops that gate and leans on the bar instead: news
+        keeps its low threshold, anything else has to clear <b>+20 simulated points</b>,
+        because measured swaps at 6-13 points landed anywhere from −30 to +35 while swaps at
+        24-45 went 8 for 8. A lineup already projecting to win is only moved by news.
+        <b>Both modes are evaluated and logged every run</b>, so one night grades both.</div>
+      <div class="hint"> Replayed across seven real
         mid-slate snapshots, reacting to a scratch or a benching was +$24 and never
         negative; re-optimising freely wrecked two nights (52.9 → 31.5 and 40.0 → 0.0) and
         its whole gain came from one slate whose "updated" file had not actually changed.
@@ -731,7 +744,7 @@ async function runSwap(){
     const res=await fetch('/api/lateswap',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({csv:csvText, dk:swapText, contest:conText,
         options:{cores:[...sel.core].join('\n'), pool:[...sel.pool].join('\n'),
-                 minutes:minText}})});
+                 newsOnly:$('#newsonly').value, minutes:minText}})});
     const data=await res.json();
     if(data.error) showErr(data.error); else renderSwaps(data);
   }catch(e){ showErr(e.message); }

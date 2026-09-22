@@ -10,6 +10,7 @@ no cheatsheet to reconcile and no external API. Pure standard library.
 
 from __future__ import annotations
 
+import bisect
 import json
 import os
 import re
@@ -210,6 +211,64 @@ def revive_pooled_zeros(players, daily_text, report=None):
               "your pool, so that is being read as you knowing better. Drop them "
               "from the pool if that is not what you meant.")
     return out
+
+
+def _log_swap(result, players, baseline, options, news):
+    """Append one late-swap record. Never let logging break a swap run.
+
+    Two things are captured that nothing else records.
+
+    BOTH POLICIES. Every entry carries what news-only would have done and what
+    free re-optimisation would have done, whichever was acted on — so a single
+    night grades the policy that ran AND the one that did not.
+
+    EVERY PROJECTION THAT MOVED, with its value at lock, its value now, and the
+    actual score where the game has finished. That is the evidence for the
+    question underneath all of this: LineStar hedges when it does not know a
+    starting five, so is the later number actually BETTER, or just different? If
+    it is not better, re-optimising on it is a more expensive way to churn.
+    """
+    try:
+        from datetime import datetime
+        moved = []
+        for p in players:
+            was = (baseline.get(normalize_name(p.name)) or {}).get("ls")
+            now = p.ls_proj if p.ls_proj > 0 else p.proj
+            if was is None or (abs(now - was) < 1.5 and not p.status):
+                continue
+            moved.append({
+                "name": p.name, "team": p.team, "salary": p.salary,
+                "lockLs": round(was, 1), "nowLs": round(now, 1),
+                "nowBlend": round(p.proj, 1), "starter": p.starter,
+                "status": p.status,
+                "scored": result.get("_scored", {}).get(normalize_name(p.name)),
+            })
+        record = {
+            "ts": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "games": sorted({p.game for p in players if p.game}),
+            "mode": "newsOnly" if result.get("newsOnly") else "free",
+            "discBar": SWAP_DISCRETIONARY_GAIN, "newsBar": SWAP_MIN_GAIN,
+            "hadBaseline": result.get("hadBaseline"),
+            "hadContest": result.get("field") is not None,
+            "field": result.get("field"), "winScore": result.get("winScore"),
+            "lockedPlayers": result.get("lockedPlayers"),
+            "entries": result.get("entries"), "changed": result.get("changed"),
+            "news": {k: v for k, v in (news or {}).items()},
+            "projectionsMoved": moved,
+            "swaps": [{k: v for k, v in s.items()
+                       if k in ("entryId", "keep", "hold", "gain", "projGain",
+                                "rank", "projFinal", "pct", "banked", "proj",
+                                "salary", "open", "news", "shadow")}
+                      for s in result.get("swaps", [])],
+        }
+        os.makedirs(os.path.dirname(SWAP_LOG_PATH), exist_ok=True)
+        with open(SWAP_LOG_PATH, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
+    except Exception as exc:  # noqa: BLE001
+        # Same rule as the build log: never break the run, never disappear.
+        result.setdefault("warnings", []).append(
+            f"Swap log not written ({exc.__class__.__name__}: {exc}). The swap "
+            f"itself is unaffected, but this night will not be gradable later.")
 
 
 def parse_linestar_scored(text):
@@ -1032,6 +1091,12 @@ def run_optimize(csv_text: str, options: dict) -> dict:
 # time, so a change shows up as a new record rather than overwriting anything.
 LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "logs", "builds.jsonl")
+# Late swap keeps its own file. One record per run, and every record carries
+# BOTH policies' decisions — the one that was acted on and the one that was not —
+# so a single night grades news-only against free re-optimisation instead of
+# only telling you how the policy you happened to run did.
+SWAP_LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "logs", "swaps.jsonl")
 
 
 def _lineup_log(lu, med_implied, game_totals):
@@ -1422,6 +1487,31 @@ _LS_SLOTS = ["G", "G", "F", "F", "F", "UTIL"]
 # used to chase is the same ownership-fading the wider review found -EV, so the
 # bar to touch a lineup is now high enough that only real news moves it.
 SWAP_MIN_GAIN = 6.0        # was 2.0 — sub-noise churn is how the damage happened
+# The bar a move must clear when NOTHING was said about anyone in the lineup.
+#
+# News-only was the whole policy, and it is the wrong shape. Every trigger in
+# _news_names is about a player in YOUR lineup getting worse; nothing fires when
+# a player you do not hold gets better. LineStar shaves a whole team when it does
+# not know the starting five, then resolves hours later — your player never got
+# worse, so there was no news, so the lineup held while the board underneath it
+# rearranged. And post-lock is the moment of MAXIMUM information, not minimum:
+# real ownership, real scores and a real leaderboard for every game that started,
+# against a builder that had only a vendor's simulation of 10,000 strangers.
+#
+# But the reason news-only existed is real, and it is in the numbers:
+#
+#   news-forced swaps        simulated gain 24-45   ->   8 for 8 positive
+#   free re-optimisation     simulated gain  6-13   ->   realised -30 to +35
+#
+# At a 6-13 point edge the simulator has no discriminating power at all. What
+# separated the good swaps from the churn was the SIZE of the gain, not the
+# reason for it — news was only ever a proxy for "something moved 20+ points".
+# So the gate goes and the bar takes over: news keeps the low bar it earned,
+# everything else has to clear the noise floor the data actually measured.
+#
+# 20 is read off that 6-13 / 24-45 split, not measured directly. Every decision
+# is logged with its gain so the number can be set from real nights instead.
+SWAP_DISCRETIONARY_GAIN = 20.0
 SWAP_OFF_POOL_MIN_GAIN = 12.0   # projection a player OUTSIDE the pool must add
 SWAP_MAX_LEFTOVER = 700    # match the build's salary floor; still a preference
                            # rather than a filter, since locks can strand money
@@ -1902,8 +1992,26 @@ def _news_names(players, baseline, locked_names=()):
                     and drop >= was * SWAP_NEWS_PROJ_DROP:
                 news[nm] = f"projection cut {was:.0f} to {now:.0f}"
                 continue
+            # ...and UP. Every other trigger here is about a player in your
+            # lineup getting worse, which is why nothing ever fired when a
+            # player you do NOT hold got better — the exact case LineStar
+            # creates when it hedges a team it cannot call and then resolves it.
+            # A big raw move is new information whichever way it points.
+            #
+            # It has to be measured raw, for the reason the cut test is: the
+            # blend mixes in a season average that does not know the role
+            # changed, so a 22-point raw jump arrives as an 11-point blended one
+            # and a 20-point bar is quietly a 40-point raw bar.
+            rise = now - was
+            if was > 0 and rise >= SWAP_NEWS_MIN_DROP \
+                    and rise >= was * SWAP_NEWS_PROJ_DROP:
+                news[nm] = f"projection up {was:.0f} to {now:.0f}"
+                continue
             if b.get("starter") and not p.starter:
                 news[nm] = "was starting at lock, now on the bench"
+                continue
+            if p.starter and not b.get("starter"):
+                news[nm] = "was on the bench at lock, now starting"
                 continue
         if p.starter or nm in locked_names:
             continue
@@ -2034,7 +2142,11 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
     # to realised changes from -30 to +35, i.e. the threshold does not separate
     # signal from noise at all. News swaps carried simulated gains of 24-45 and
     # went 8 for 8.
-    news_only = True
+    #
+    # That is why news-only existed and why it is no longer the gate — the fix is
+    # the BAR, not the trigger. See SWAP_DISCRETIONARY_GAIN. Both policies are
+    # still evaluated on every run and both are logged; only one is acted on.
+    news_only = str(options.get("newsOnly", "off")) != "off"
     baseline = _news_baseline(sorted({p.game for p in players if p.game}))
     news = _news_names(players, baseline, locked_names)
     # Players in the next game to tip: filling a slot from there costs optionality.
@@ -2069,7 +2181,7 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
         # Real standing beats the proxy: if the contest file gave us this entry,
         # drive aggression off the actual gap to a winning score.
         me = my_rank.get(e["entryId"])
-        rank = proj_final = None
+        rank = proj_final = pct = None
         if me is not None and field_finals:
             banked = me["points"] or banked
             # Project OUR finish the same way we projected theirs, then rank it
@@ -2077,6 +2189,11 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
             proj_final = banked + sum(p.proj for i, p in enumerate(lineup)
                                       if i in open_idx or normalize_name(p.name) not in locked_names)
             aggr = _aggression_from_rank(proj_final, field_finals)
+            # Keep the percentile itself, not just the dial it produced. The dial
+            # tilts ranking between alternatives; the percentile is what decides
+            # whether this lineup is allowed a discretionary move at all.
+            ahead = len(field_finals) - bisect.bisect_left(field_finals, proj_final)
+            pct = 100.0 * ahead / len(field_finals)
             rank = me["rank"]
         else:
             aggr = _aggression(wdef)
@@ -2121,6 +2238,7 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
             "banked": round(banked, 1), "expected": round(expected, 1),
             "pace": round(deficit, 1), "aggression": round(aggr, 2),
             "rank": rank, "projFinal": None if proj_final is None else round(proj_final, 1),
+            "pct": None if pct is None else round(pct, 3),
             "lineup": lineup, "news": why,
         })
 
@@ -2155,69 +2273,110 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
         # the fifth-best because the first hit a quota.
 
         cur_proj = sum(p.proj for p in lineup)
-        pick = None
-        # Nothing has been said about anyone in this lineup, so there is nothing
-        # to react to. Re-optimising here is the move the data scored at noise.
-        held = news_only and not row["news"] and row["open"] > 0
         blocked_by_pool = None      # why the obvious upgrade was turned down
+        # Projecting to WIN: the rank gate, and the only thing rank is allowed to
+        # decide. It does not rank anything and it does not tilt anything — it
+        # answers one coarse question, "am I clearly winning", which is the only
+        # question this estimate is good enough to answer. Rivals' unplayed slots
+        # are modelled as a single average with no variance, so "I am 40th" is
+        # much softer than it looks and 40th can become 100th by itself. A number
+        # that unreliable must not drive a decision, but it can refuse one: a
+        # lineup already projecting to win does not get re-optimised on a
+        # 20-point simulated edge. News can still move it.
+        winning = row.get("pct") is not None and row["pct"] <= SWAP_WIN_PCT
+        disc_bar = float("inf") if winning else SWAP_DISCRETIONARY_GAIN
         # And when there IS news, react to the news — don't let one scratch
         # license a rebuild of the whole roster. The measured edge is in
         # replacing the player something was said about; every additional slot
         # that moves alongside it is discretionary re-optimisation, which
         # measured at noise. One spare slot is allowed because a straight
         # one-for-one swap often can't be afforded under the cap.
-        move_cap = len(row["news"]) + 1
-        for lu in ([] if held else lus):
-            if lu.metrics.get("isCurrent"):
-                continue
-            if lu.salary > SALARY_CAP:
-                continue
-            if len(here - {normalize_name(p.name) for p in lu.players}) > move_cap:
-                continue
-            if SALARY_CAP - lu.salary > SWAP_MAX_LEFTOVER and current and \
-                    lu.metrics["swapScore"] - cur_score < SWAP_MIN_GAIN * 2:
-                continue  # only strand salary for a clearly better roster
-            # Pool discipline. The pool is the vetted list; reaching outside it
-            # for a couple of points is a bad trade, because the projection edge
-            # is inside the model's error bars while the pool encodes judgement
-            # the model doesn't have. So an unvetted name has to clear a much
-            # higher bar — a real projection jump, not a rounding win.
-            if pool_names:
-                incoming_off = [p for p in lu.players
-                                if normalize_name(p.name) not in here
-                                and normalize_name(p.name) not in pool_names]
-                # Scaled by how many unvetted names it takes: two of them have to
-                # earn twice as much, so a roster can't sneak several marginal
-                # off-pool plays in under one lump gain.
-                gain_proj = sum(p.proj for p in lu.players) - cur_proj
-                # The high off-pool bar exists to stop DISCRETIONARY reaching
-                # outside the vetted list. A move forced by news is not that: the
-                # pool was written before anyone knew this player would be
-                # benched, and holding her because her replacement was not on a
-                # list drawn up at noon is the pool overruling the one category
-                # of swap the review measured as reliably good (+24.5 per entry,
-                # positive 15 of 15). So when a news player is the one leaving,
-                # the incoming name clears the normal gain bar instead.
-                forced = any(n in news for n in
-                             here - {normalize_name(x.name) for x in lu.players})
-                bar = SWAP_MIN_GAIN if forced else SWAP_OFF_POOL_MIN_GAIN
-                if incoming_off and gain_proj < bar * len(incoming_off):
-                    # Say which bar stopped it. A hold reported as "no move
-                    # clears the gain threshold" reads as "nothing better
-                    # exists", when what actually happened is that the upgrade
-                    # was outside the pool you typed and missed a bar you were
-                    # never shown. On news the fact you need is the name.
-                    if row["news"] and blocked_by_pool is None:
-                        blocked_by_pool = (
-                            f"{', '.join(p.name for p in incoming_off)} would fix "
-                            f"it (+{gain_proj:.1f} proj) but is not in your pool, "
-                            f"and an off-pool move needs +{bar * len(incoming_off):.0f}")
+        news_cap = len(row["news"]) + 1
+
+        def consider(*, news_slots_only, disc):
+            """Best roster clearing the bars. -> (pick, blocked_by_pool note).
+
+            Called twice per lineup — once under news-only and once free — so one
+            night's results grade both policies. Only one of the two is acted on;
+            both are logged.
+            """
+            blocked = None
+            for lu in lus:
+                if lu.metrics.get("isCurrent"):
                     continue
-            pick = lu
-            break
-        if pick and cur_score is not None and \
-                pick.metrics["swapScore"] - cur_score < SWAP_MIN_GAIN:
-            pick = None  # not worth the churn
+                if lu.salary > SALARY_CAP:
+                    continue
+                outgoing = here - {normalize_name(p.name) for p in lu.players}
+                incoming = {normalize_name(p.name) for p in lu.players} - here
+                # A move is news-forced when a player something was SAID about is
+                # leaving OR arriving. Only "leaving" was ever checked, which is
+                # what made the whole thing one-directional: it reacted to your
+                # player collapsing and never to a better one becoming available.
+                out_news = any(n in news for n in outgoing)
+                forced = out_news or any(n in news for n in incoming)
+                if news_slots_only:
+                    # The ORIGINAL policy, kept intact so the shadow comparison
+                    # stays honest: only a slot whose own occupant has news may
+                    # move, plus one spare for the salary. An arriving news
+                    # player does not open a slot here — that is precisely the
+                    # blind spot the free policy is being tested against.
+                    if not out_news or len(outgoing) > news_cap:
+                        continue
+                    if len([n for n in outgoing if n not in news]) > 1:
+                        continue
+                    need = SWAP_MIN_GAIN
+                else:
+                    need = SWAP_MIN_GAIN if forced else disc
+                if cur_score is not None and \
+                        lu.metrics["swapScore"] - cur_score < need:
+                    continue
+                if SALARY_CAP - lu.salary > SWAP_MAX_LEFTOVER and current and \
+                        lu.metrics["swapScore"] - cur_score < SWAP_MIN_GAIN * 2:
+                    continue  # only strand salary for a clearly better roster
+                # Pool discipline. The pool is the vetted list; reaching outside
+                # it for a couple of points is a bad trade, because the
+                # projection edge is inside the model's error bars while the pool
+                # encodes judgement the model doesn't have. So an unvetted name
+                # has to clear a much higher bar — a real projection jump, not a
+                # rounding win.
+                if pool_names:
+                    incoming_off = [p for p in lu.players
+                                    if normalize_name(p.name) not in here
+                                    and normalize_name(p.name) not in pool_names]
+                    # Scaled by how many unvetted names it takes: two of them
+                    # have to earn twice as much, so a roster can't sneak several
+                    # marginal off-pool plays in under one lump gain.
+                    gain_proj = sum(p.proj for p in lu.players) - cur_proj
+                    # The high off-pool bar exists to stop DISCRETIONARY reaching
+                    # outside the vetted list. A move forced by news is not that:
+                    # the pool was written before anyone knew this player would
+                    # be benched, and holding her because her replacement was not
+                    # on a list drawn up at noon is the pool overruling the one
+                    # category of swap the review measured as reliably good
+                    # (+24.5 per entry, positive 15 of 15).
+                    bar = SWAP_MIN_GAIN if forced else SWAP_OFF_POOL_MIN_GAIN
+                    if incoming_off and gain_proj < bar * len(incoming_off):
+                        # Say which bar stopped it. A hold reported as "no move
+                        # clears the gain threshold" reads as "nothing better
+                        # exists", when what actually happened is that the
+                        # upgrade was outside the pool you typed and missed a bar
+                        # you were never shown.
+                        if row["news"] and blocked is None:
+                            blocked = (
+                                f"{', '.join(p.name for p in incoming_off)} would "
+                                f"fix it (+{gain_proj:.1f} proj) but is not in "
+                                f"your pool, and an off-pool move needs "
+                                f"+{bar * len(incoming_off):.0f}")
+                        continue
+                return lu, blocked
+            return None, blocked
+
+        # Both policies, every run. `news_only` decides which one is acted on.
+        news_pick, news_blocked = consider(news_slots_only=True, disc=float("inf"))
+        free_pick, free_blocked = consider(news_slots_only=False, disc=disc_bar)
+        pick = news_pick if news_only else free_pick
+        blocked_by_pool = news_blocked if news_only else free_blocked
+        held = pick is None and not row["news"] and row["open"] > 0
         final = pick.players if pick else list(lineup)
         if pick:  # move exposure from the dropped players onto the added ones
             now = {normalize_name(p.name) for p in final}
@@ -2239,9 +2398,33 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
             "keep": pick is None,
             "news": row["news"],
             # why we are holding, so a "keep" is never a silent shrug
-            "hold": ("no news on anyone still movable" if held
-                     else None if pick
-                     else blocked_by_pool or "no move clears the gain threshold"),
+            "hold": (None if pick else blocked_by_pool
+                     or ("projecting to win — only news moves this one" if winning
+                         else f"nothing clears +{disc_bar:.0f}" if not row["news"]
+                         else "no move clears the gain threshold")),
+        }
+        # What the OTHER policy would have done, so one night grades both.
+        best = max((l for l in lus if not l.metrics.get("isCurrent")),
+                   key=lambda l: l.metrics["swapScore"], default=None)
+        rec["shadow"] = {
+            "actedOn": "newsOnly" if news_only else "free",
+            "newsOnlyWouldMove": news_pick is not None,
+            "freeWouldMove": free_pick is not None,
+            "sameChoice": (news_pick is free_pick),
+            "winning": bool(winning),
+            "discBar": None if disc_bar == float("inf") else disc_bar,
+            # the best roster on the board regardless of any bar — so the log can
+            # say what was left on the table, not just what was taken
+            "bestGain": (round(best.metrics["swapScore"] - cur_score, 1)
+                         if best is not None and cur_score is not None else None),
+            "newsGain": (round(news_pick.metrics["swapScore"] - cur_score, 1)
+                         if news_pick is not None and cur_score is not None else None),
+            "freeGain": (round(free_pick.metrics["swapScore"] - cur_score, 1)
+                         if free_pick is not None and cur_score is not None else None),
+            "freeRoster": ([p.name for p in free_pick.players]
+                           if free_pick is not None else None),
+            "newsRoster": ([p.name for p in news_pick.players]
+                           if news_pick is not None else None),
         }
         if pick:
             # Never report a change without the diff that explains it — the UI
@@ -2285,7 +2468,7 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
     win_score = None
     if field_finals:  # informational: what the top 1% is projected to finish on
         win_score = round(field_finals[int(len(field_finals) * 0.99)], 1)
-    return {
+    out = {
         "lockedPlayers": len(locked_names),
         "field": contest["field"] if contest else None,
         "winScore": win_score,
@@ -2308,6 +2491,10 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
         "dkCsv": ("\n".join(lines) + "\n") if len(lines) > 1 else None,
         "swaps": results,
     }
+    out["_scored"] = scored
+    _log_swap(out, players, baseline, options, news)
+    out.pop("_scored", None)
+    return out
 
 
 class Handler(BaseHTTPRequestHandler):
