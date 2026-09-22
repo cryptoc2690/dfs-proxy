@@ -144,6 +144,74 @@ def parse_linestar(text):
     return players
 
 
+# A player LineStar projects at 0 is dead three times over: parse_linestar marks
+# him OUT and zeroes him, apply_daily_projections skips him before it attaches
+# anything, and blend_projections skips him again. So when LineStar does not know
+# whether someone is starting and prints a 0, the daily file's minutes and stat
+# line for that same player are never even read.
+#
+# That is the wrong file to ignore. The 24-contest review ranked how well each
+# signal's lineup sum predicts finish, and the daily file BEAT LineStar:
+#
+#   realised ownership  -0.32     daily-file DK sum   -0.29
+#   projected ownership -0.23     season PPG sum      -0.22
+#   LineStar projection -0.19     LineStar ceiling    -0.17
+#
+# It is already a third of the blend for everyone else. This uses it for the one
+# group where LineStar has admitted it has no opinion.
+#
+# Two guards, because a 0 usually does mean OUT and resurrecting a scratch would
+# be far worse than missing a starter:
+#
+#   YOU have to have named him. Pool or core only — the sharp asserting he plays
+#   is the whole evidence here, and it is the same "your instruction outranks the
+#   vendor" rule cores already run on. Nothing is revived off a bare slate.
+#   REAL MINUTES. A stale daily row on a player ruled out after that file was
+#   built still carries his old line, so a token four minutes is not enough. The
+#   bar is ROTATION_MINUTES, read at call time because it is defined below.
+
+
+def revive_pooled_zeros(players, daily_text, report=None):
+    """Give a pooled player LineStar zeroed a projection from the daily file.
+
+    Runs AFTER cores and pool are assigned, because being named is the licence.
+    -> [(player, minutes, dk)] for everyone revived, so the caller can say so.
+    """
+    dmap = parse_daily_projections(daily_text or "")
+    if not dmap:
+        return []
+    out = []
+    for p in players:
+        if p.proj > 0 or not p.in_pool:
+            continue
+        d = dmap.get(normalize_name(p.name))
+        if not d or d["minutes"] < ROTATION_MINUTES or d["compdk"] <= 0:
+            continue
+        p.proj = round(d["compdk"], 1)
+        # Same shape parse_linestar falls back to when LineStar's own ceiling and
+        # floor are unusable — which they are here, since both were zeroed.
+        p.ceil = round(p.proj * 1.3, 1)
+        p.floor = round(p.proj * 0.6, 1)
+        p.minutes, p.stuffer, p.daily_dk = d["minutes"], d["stuffer"], d["compdk"]
+        p.risk = False
+        p.status = ""                      # no longer "OUT" — he is playable
+        # ls_proj stays 0. LineStar really did say nothing, and late swap's
+        # projection-cut test compares raw to raw; a fabricated baseline there
+        # would invent news later.
+        p.ownership = p.ownership or 1.0
+        p.notes.append(f"revived: LineStar 0, daily file {d['minutes']:.0f} min "
+                       f"/ {d['compdk']:.1f} DK, and you pooled him")
+        out.append((p, d["minutes"], d["compdk"]))
+    if out and report is not None:
+        report.append(
+            "Using the daily file for " + ", ".join(
+                f"{p.name} ({m:.0f} min, {dk:.1f} DK)" for p, m, dk in out)
+            + " — LineStar has them at 0, which usually means out. They are in "
+              "your pool, so that is being read as you knowing better. Drop them "
+              "from the pool if that is not what you meant.")
+    return out
+
+
 def parse_linestar_scored(text):
     """{normalized name: actual DK points so far} from LineStar's `Scored` column.
 
@@ -824,6 +892,11 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         elif pool_names and not p.in_pool:
             p.notes.append("off-pool")
 
+    # Only now is it known who you named, and being named is the licence — see
+    # revive_pooled_zeros.
+    revived_note = []
+    revive_pooled_zeros(players, options.get("minutes") or "", revived_note)
+
     playable = [p for p in players if p.proj > 0]
     if len(playable) < ROSTER_SIZE:
         return {"error": "Not enough playable players — check the file.",
@@ -864,6 +937,9 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         build_report.setdefault("relaxed", []).append(
             "these cap lines could not be read and were ignored: "
             + "; ".join(cap_bad))
+    # Never revive anyone quietly — a resurrected scratch is the failure mode.
+    for note in revived_note:
+        build_report.setdefault("relaxed", []).append(note)
     lineups = optimize_gpp(
         players,
         n=_int(options.get("n"), 20),
@@ -1936,7 +2012,14 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
     if pool_names:
         pool_names |= core_names
     for p in players:   # the minutes gate exempts cores, same as the build
-        p.core = normalize_name(p.name) in core_names
+        nmp = normalize_name(p.name)
+        p.core = nmp in core_names
+        p.in_pool = p.core or (nmp in pool_names)
+    # Same licence as the build: a player you named, whom LineStar has at 0, is
+    # read off the daily file instead. Without this a pooled zero stays invisible
+    # to late swap too — so the one player the sharp knew about could never be
+    # swapped IN either, which is half of the problem this is meant to fix.
+    revive_pooled_zeros(players, options.get("minutes") or "", stale)
     # What has actually changed since the build. Everything downstream keys off
     # this: no news about a lineup means the lineup is left alone.
     # News-only is the ONLY mode now. Replayed on all seven mid-slate snapshots in
