@@ -1,0 +1,779 @@
+"""The single-page GUI served by nba/app.py — nfl/gui.py adapted. Plain HTML/CSS/JS, no external
+assets, so it works offline and needs no build step."""
+
+INDEX_HTML = r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NBA Optimizer</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#171b22; --panel2:#1e232c; --line:#2a313c;
+    --text:#e6e9ee; --muted:#9aa4b2; --accent:#4c8dff; --accent2:#ff8a3c;
+    --good:#39d98a; --warn:#e0a030; --chip:#232935;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  header{padding:18px 24px;border-bottom:1px solid var(--line);display:flex;
+    align-items:center;gap:12px}
+  header h1{font-size:18px;margin:0;letter-spacing:.3px}
+  header .ball{width:18px;height:18px;border-radius:50%;
+    background:radial-gradient(circle at 35% 35%,#f59a4a,#c4561b);border:1px solid #7a3510}
+  header .sub{color:var(--muted);font-size:13px;margin-left:auto}
+  label{display:block;font-size:12.5px;color:var(--muted);margin:12px 0 5px}
+  input[type=number],input[type=text],select,textarea{width:100%;
+    background:var(--panel2);border:1px solid var(--line);color:var(--text);
+    border-radius:8px;padding:8px 10px;font-size:14px;font-family:inherit}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
+  textarea{resize:vertical;line-height:1.5;box-sizing:border-box}
+
+  #filerail{display:flex;flex-wrap:wrap;border-bottom:1px solid var(--line);
+    background:var(--panel)}
+  .fslot{flex:1 1 220px;padding:11px 16px;border-right:1px solid var(--line);
+    cursor:pointer;min-width:0;transition:.15s}
+  .fslot b{display:block;font-size:12.5px;white-space:nowrap;overflow:hidden;
+    text-overflow:ellipsis}
+  .fslot .fstate{display:block;font-size:11px;color:var(--muted);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .fslot:hover,.fslot.over{background:var(--panel2)}
+  .fslot.loaded b{color:var(--good)}
+  .fslot.req b{color:var(--accent2)}
+
+  details#setwrap{border-bottom:1px solid var(--line);background:var(--panel)}
+  details#setwrap>summary{cursor:pointer;padding:9px 22px;font-size:12.5px;
+    color:var(--muted);list-style:none}
+  details#setwrap>summary::-webkit-details-marker{display:none}
+  details#setwrap>summary::before{content:"\2699  ";opacity:.7}
+  details#setwrap>summary:hover{color:var(--text)}
+  .setgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
+    gap:20px;padding:6px 22px 20px}
+  .setgrid label:first-child{margin-top:0}
+  .hint{font-size:11.5px;color:var(--muted);margin-top:5px;line-height:1.45}
+
+  main{padding:18px 22px;max-width:1180px}
+  button{background:var(--accent);color:#06101f;border:0;border-radius:9px;
+    padding:11px 22px;font-size:14.5px;font-weight:650;cursor:pointer}
+  button:disabled{opacity:.5;cursor:default}
+  button.alt{background:var(--panel2);color:var(--text);border:1px solid var(--line)}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:16px}
+  .note{border-radius:9px;padding:9px 12px;margin-bottom:7px;font-size:13.5px;
+    border:1px solid var(--line);background:var(--panel)}
+  .note.good{border-color:#2c6b4a;background:#14251d;color:#a8e0c4}
+  .note.warn{border-color:#7a5a1e;background:#26200f;color:#e8cf9a}
+  .note.info{color:#b9c4d2}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+    gap:10px;margin:14px 0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:11px 13px}
+  .card b{display:block;font-size:19px;font-variant-numeric:tabular-nums}
+  .card span{font-size:11.5px;color:var(--muted)}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin-top:6px}
+  th{position:sticky;top:0;background:var(--panel2);text-align:left;padding:7px 8px;
+    font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
+    border-bottom:1px solid var(--line)}
+  td{padding:5px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  tbody tr:hover td{background:var(--panel2)}
+  .arm{font-size:10.5px;padding:1px 6px;border-radius:9px;border:1px solid var(--line)}
+  .arm.mine{color:#7ec8ff;border-color:#2e5f8f}
+  .arm.vendor{color:#c8a0e8;border-color:#5b3f7a}
+  .cpt{color:var(--accent2);font-weight:650}
+  .tblwrap{max-height:60vh;overflow:auto;border:1px solid var(--line);border-radius:9px}
+  .exp{margin:14px 0 4px}
+  .exp>summary{cursor:pointer;font-size:12.5px;color:var(--muted);padding:4px 0}
+  .expwrap{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,2fr);
+    gap:14px;margin-top:6px}
+  @media (max-width:820px){.expwrap{grid-template-columns:minmax(0,1fr)}}
+  .exptitle{font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+    color:var(--muted);margin-bottom:2px}
+  .exp .tblwrap{max-height:46vh}
+  td.num.up{color:#6ee7a0}
+  td.num.down{color:#ff9f9f}
+  /* Not on the sharp's sheet. Dotted underline rather than a colour swap so it
+     reads as an annotation on the name and not as a score. */
+  .offsheet{color:var(--accent2);border-bottom:1px dotted var(--accent2)}
+  .offsheet::after{content:'*'}
+  .coremark{font-weight:650}
+  .spin{display:inline-block;width:13px;height:13px;margin-right:7px;
+    border:2px solid rgba(255,255,255,.3);border-top-color:#06101f;border-radius:50%;
+    animation:sp .7s linear infinite;vertical-align:-2px}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  #welcome{color:var(--muted);font-size:14px;line-height:1.7;max-width:760px}
+  .fslot.bad b{color:#e08080}
+  .fslot.bad .fstate{color:#e08080}
+
+  /* ---- type-ahead picker ---- */
+  .pick{position:relative}
+  .chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+  .chip{background:var(--chip);border:1px solid var(--line);border-radius:14px;
+    padding:2px 9px;font-size:12.5px;cursor:pointer;user-select:none}
+  .chip:hover{border-color:#e08080;color:#e08080}
+  .chip::after{content:" \00d7";color:var(--muted);font-size:11px}
+  .chip.core{border-color:var(--accent2);color:#ffb27a}
+  .menu{position:absolute;z-index:40;left:0;right:0;top:100%;margin-top:3px;
+    background:var(--panel2);border:1px solid var(--line);border-radius:9px;
+    max-height:230px;overflow:auto;display:none;box-shadow:0 8px 22px rgba(0,0,0,.5)}
+  .menu.open{display:block}
+  .menu div{padding:7px 10px;cursor:pointer;font-size:13px;display:flex;gap:8px}
+  .menu div:hover,.menu div.sel{background:#2a3340}
+  .menu .mt{color:var(--muted);font-size:11.5px;margin-left:auto;
+    font-variant-numeric:tabular-nums}
+  .picknote{font-size:11.5px;color:var(--muted);margin-top:5px}
+  .sd-only,.cl-only{display:none}
+  body.sd .sd-only,body.cl .cl-only{display:block}
+  .trio{display:flex;gap:6px}
+  .trio input{text-align:right}
+</style>
+</head>
+<body>
+<header>
+  <span class="ball"></span>
+  <h1 id="title">NBA Optimizer</h1>
+  <span class="sub" id="slate">drop your files below</span>
+</header>
+
+<div id="filerail">
+  <div class="fslot req" id="s_proj"><b>1 · Stokastic projections</b>
+    <span class="fstate">required — drop or click</span></div>
+  <div class="fslot req" id="s_field"><b>2 · Stokastic lineups</b>
+    <span class="fstate">the opponent field — drop or click</span></div>
+  <div class="fslot req" id="s_dk"><b>3 · DK entries export</b>
+    <span class="fstate">needed to upload — drop or click</span></div>
+  <div class="fslot" id="s_ls"><b>4 · LineStar <span style="opacity:.6">(optional)</span></b>
+    <span class="fstate">Vegas + a second projection, logged only</span></div>
+  <div class="fslot" id="s_st"><b>5 · DK contest standings <span style="opacity:.6">(after)</span></b>
+    <span class="fstate">grade last night's build — drop or click</span></div>
+</div>
+
+<details id="setwrap">
+  <summary>Settings — pool &amp; cores, late scratches, caps, contest size</summary>
+  <div class="setgrid">
+    <div>
+      <label>Lineups</label>
+      <input id="n" type="number" value="150" min="1" max="150">
+      <label>How many are OURS (rest come from their pool)</label>
+      <input id="split" type="number" value="75" min="0" max="150">
+      <div class="hint">Splitting inside one contest is the only way to compare
+        the two without slate luck. Both arms are tagged in the log.</div>
+    </div>
+    <div>
+      <label>Ownership lean — <span id="lv">+0.00</span>
+        <span style="color:var(--muted)">(&minus; fade · + consensus)</span></label>
+      <input id="lean" type="range" min="-100" max="100" value="0" style="width:100%">
+      <div class="hint">Neutral by default, on three sports' evidence: WNBA
+        picked 0 on all 23 held-out folds and fading cost 11-14 cashes; NFL
+        returned the same money at +0.35, 0 and -0.35; and the old NBA chats saw
+        Stokastic's leverage number fade chalk that won. The lever still works —
+        move it if your read says so.</div>
+    </div>
+    <div>
+      <label>Contest size — max entries</label>
+      <input id="cap" type="number" placeholder="e.g. 47000">
+      <label>How full it will get — <span id="fv">100</span>%</label>
+      <input id="fillpct" type="range" min="10" max="100" value="100"
+             style="width:100%">
+      <div class="hint">Off the DK contest page. Assumed to fill. The $0.50
+        150-max main slate has run 47,000-71,000 entries. NBA classic duplicates
+        (the pool of real scorers is small), so without this number duplication
+        is measured against a field several times too small.</div>
+      <label>Min projection for a roster spot</label>
+      <input id="minproj" type="number" value="2" step="0.5">
+    </div>
+    <div>
+      <label>Sharp's pool</label>
+      <div class="pick">
+        <input id="poolin" type="text" autocomplete="off" disabled
+               placeholder="drop the projections file first">
+        <div class="menu" id="poolmenu"></div>
+      </div>
+      <div class="chips" id="poolchips"></div>
+      <div class="picknote" id="poolnote"></div>
+      <div class="picknote">Paste the whole sheet at once — names separated by
+        commas, or one per line. Anything that matches nobody is named back to
+        you rather than dropped quietly.</div>
+      <label>Players from outside the pool, per lineup</label>
+      <select id="offpool">
+        <option value="0" selected>0 — build only from the pool</option>
+        <option value="1">1 — allow one</option>
+        <option value="2">2 — allow two</option>
+        <option value="none">No limit — the pool is only a shortlist</option>
+      </select>
+      <div class="picknote">Only applies if you picked a pool. A sheet that
+        cannot fill all eight classic slots (or six showdown names) is treated as
+        a shortlist instead of a filter, and the build says so.</div>
+    </div>
+    <div>
+      <label>Sharp's cores</label>
+      <div class="pick">
+        <input id="corein" type="text" autocomplete="off" disabled
+               placeholder="drop the projections file first">
+        <div class="menu" id="coremenu"></div>
+      </div>
+      <div class="chips" id="corechips"></div>
+      <div class="picknote">Type a few letters, click or press Enter — or paste a
+        comma-separated list. Cores count as in-pool automatically. Click a chip
+        to remove it.</div>
+      <label>Late scratch — remove players</label>
+      <textarea id="remove" rows="2" spellcheck="false"
+                placeholder="Stephon Castle"></textarea>
+      <div class="picknote">Ruled out after you pulled the projections. He is
+        zeroed and about 65% of his production goes to teammates, weighted to his
+        position — the WNBA tool's removal. A fresh Stokastic pull is better when
+        there is time for one.</div>
+    </div>
+    <div>
+      <label>Cap individual players <span id="capwho" class="muted">— none set</span></label>
+      <textarea id="capplayers" rows="4" spellcheck="false"
+                placeholder="Jalen Johnson 40&#10;Daniss Jenkins 25"></textarea>
+      <div class="picknote">One player and one percentage per line. Your number
+        is the final word on that player — it overrides the board-wide exposure
+        cap (which is off by default: heavy exposure is reported, not capped). Leave a
+        player out and nothing changes for him. The build says which caps it
+        applied and warns about any name it could not find.</div>
+    </div>
+  </div>
+</details>
+
+<main>
+  <div class="row">
+    <button id="go" disabled>Build lineups</button>
+    <button id="dl" class="alt" style="display:none">&#11015; Download DK file</button>
+    <span id="status" style="color:var(--muted);font-size:13px"></span>
+  </div>
+  <div class="row" id="graderow" style="display:none">
+    <button id="grade" class="alt">&#9201; Grade last night against results</button>
+    <span style="color:var(--muted);font-size:12.5px">Score your logged entries
+      against the real field — rank, cashes, duplication, and projected vs actual.</span>
+  </div>
+  <div id="welcome">
+    <p><b>Drop three files above.</b></p>
+    <p>1 and 2 come from Stokastic — the projections export and the lineups
+      export. <b>Pull them in the same minute:</b> the two carry separate
+      ownership snapshots and they drift apart during the day.</p>
+    <p>3 is your DK entries export. Enter or reserve your entries on DK first,
+      then download it. It is the only file carrying your Entry IDs and DK's
+      per-slot player IDs, and without it there is nothing to upload.</p>
+    <p>Their lineup file is not a list of picks — it is a model of your
+      opponents. We use it to score against and to estimate duplication, and
+      build our own lineups on top.</p>
+    <p><b>Classic or showdown is worked out from your files</b>, so the same
+      three slots handle both.</p>
+    <p>4, LineStar, is optional: its Vegas lines, its projection and its
+      starting status are logged beside Stokastic's and not used. It also warns
+      if LineStar has someone at 0 whom Stokastic still projects.</p>
+    <p>5 is for the morning after: drop DK's contest standings and grade the
+      build you logged against the real field.</p>
+  </div>
+  <div id="out"></div>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const files = {proj:null, field:null, dk:null, linestar:null, standings:null};
+let result = null, roster = [], fmt = 'showdown', fmtFromDk = false;
+
+// Showdown and classic are different games, not two sizes of one, so the page
+// has to say which it is reading. The DK entries export is authoritative — its
+// roster columns literally spell out the format — and the projections file is
+// the fallback, since a showdown board is one game and a main slate a dozen.
+function setFmt(f, fromDk){
+  if(fmtFromDk && !fromDk) return;        // never downgrade off the DK answer
+  fmt = f; if(fromDk) fmtFromDk = true;
+  document.body.classList.toggle('sd', f === 'showdown');
+  document.body.classList.toggle('cl', f === 'classic');
+  $('#title').textContent = f === 'showdown' ? 'NBA Showdown Optimizer'
+                                             : 'NBA Classic Optimizer';
+  // The ownership lean genuinely points opposite ways in the two formats, so
+  // the default follows the format until the user touches the slider. Same
+  // for the projection floor: a main-slate roster spot needs 3.0, showdown
+  // 2.0, and sending the showdown value for both meant the page and the
+  // command line built different main-slate lineups from the same files.
+  $('#cap').placeholder = f === 'showdown' ? 'e.g. 30000' : 'e.g. 47000';
+}
+
+// The browser must not navigate away when a file is dropped anywhere else.
+['dragover','drop'].forEach(ev =>
+  window.addEventListener(ev, e => e.preventDefault()));
+
+function slot(key, el){
+  const state = el.querySelector('.fstate');
+  const empty = state.textContent;
+  // A REAL input, in the DOM. A detached one built on the fly does not reliably
+  // open the picker in Safari, which is why this slot appeared to do nothing.
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.csv,text/csv,text/plain';
+  input.style.display = 'none';
+  el.appendChild(input);
+
+  const mark = (cls, msg) => {
+    el.classList.remove('loaded','req','bad');
+    if(cls) el.classList.add(cls);
+    state.textContent = msg;
+    $('#go').disabled = !files.proj;
+  };
+
+  const read = f => {
+    if(!f){ return; }
+    state.textContent = 'reading ' + f.name + '…';
+    const r = new FileReader();
+    r.onerror = () => mark('bad', 'could not read that file');
+    r.onload = async e => {
+      const text = e.target.result;
+      try {
+        const res = await fetch('/api/check', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({kind:key, text:text})
+        });
+        const d = await res.json();
+        if(d.ok){
+          files[key] = text;
+          mark('loaded', '✓ ' + f.name + ' — ' + d.msg);
+          if(d.format) setFmt(d.format, key === 'dk');
+          if(key === 'standings') $('#graderow').style.display = '';
+          if(key === 'proj') loadRoster(text);
+        } else {
+          files[key] = null;
+          mark('bad', '✗ ' + f.name + ' — ' + d.msg);
+        }
+      } catch(err){
+        files[key] = text;               // server unreachable: keep it anyway
+        mark('loaded', '✓ ' + f.name);
+      }
+    };
+    r.readAsText(f);
+  };
+
+  input.addEventListener('change', () => { read(input.files[0]); input.value=''; });
+  el.addEventListener('click', e => { if(e.target !== input) input.click(); });
+  ['dragenter','dragover'].forEach(ev => el.addEventListener(ev, e => {
+    e.preventDefault(); e.stopPropagation(); el.classList.add('over');
+  }));
+  ['dragleave','dragend'].forEach(ev => el.addEventListener(ev, e => {
+    e.preventDefault(); el.classList.remove('over');
+  }));
+  el.addEventListener('drop', e => {
+    e.preventDefault(); e.stopPropagation(); el.classList.remove('over');
+    const dt = e.dataTransfer;
+    read(dt.files && dt.files[0]);
+  });
+  mark('req', empty);
+}
+slot('proj', $('#s_proj'));
+slot('field', $('#s_field'));
+slot('dk', $('#s_dk'));
+slot('linestar', $('#s_ls'));
+slot('standings', $('#s_st'));
+
+// ---- type-ahead pickers, enabled once the slate is known ----
+const sel = {pool:new Set(), core:new Set()};
+
+async function loadRoster(text){
+  try{
+    const res = await fetch('/api/players', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({proj:text})
+    });
+    const d = await res.json();
+    if(d.error) return;
+    roster = d.players || [];
+    if(d.format) setFmt(d.format, false);
+    $('#slate').textContent = slateLabel(d.teams||[]);
+    ['poolin','corein'].forEach(id => {
+      const el = $('#'+id);
+      el.disabled = false;
+      el.placeholder = 'type a name — ' + roster.length + ' players';
+    });
+  }catch(e){ /* picker just stays disabled */ }
+}
+
+// The same folding the server does in normalize_name: accents, punctuation,
+// case and the Jr/Sr/III suffixes. A pasted sheet says "Chris Godwin Jr." where
+// the projections say "Chris Godwin", and matching has to survive that.
+function norm(s){
+  return (s || '').normalize('NFKD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().replace(/[.'\-,]/g, '').replace(/\s+/g, ' ').trim()
+    .replace(/\b(jr|sr|ii|iii|iv|v)\b/g, '').trim();
+}
+
+function picker(kind, inputId, menuId, chipsId){
+  const input = $('#'+inputId), menu = $('#'+menuId), chips = $('#'+chipsId);
+  let hits = [], cur = -1;
+
+  const draw = () => {
+    chips.innerHTML = [...sel[kind]].map(n =>
+      '<span class="chip'+(kind==='core'?' core':'')+'" data-n="'+esc(n)+'">'
+      + esc(n)+'</span>').join('');
+    chips.querySelectorAll('.chip').forEach(c =>
+      c.addEventListener('click', () => { sel[kind].delete(c.dataset.n); draw(); }));
+    if(kind === 'pool'){
+      // Show the arithmetic, not just the total. Adding a player as a core
+      // removes his chip from this box and still counts him in the pool, so a
+      // 60-name sheet with 3 cores shows 57 chips above the number 60 — which
+      // reads as three names that failed to paste.
+      const np = sel.pool.size, nc = sel.core.size, n = np + nc;
+      $('#poolnote').textContent = n
+        ? (nc ? n + ' player(s) in the pool — ' + np + ' here + ' + nc
+                + ' core(s), which count as in-pool and show as chips below'
+              : n + ' player(s) in the pool')
+        : 'Leave empty to build from the whole slate.';
+    }
+  };
+
+  const close = () => { menu.classList.remove('open'); cur = -1; };
+
+  const show = () => {
+    const q = input.value.trim().toLowerCase();
+    if(!q){ close(); return; }
+    // Rank a match on the start of a NAME above one buried mid-word, so "dr"
+    // offers Drake before Rhamondre. Within a tier, higher projection first —
+    // roster already arrives sorted that way.
+    const score = p => {
+      const n = p.name.toLowerCase();
+      if(n.startsWith(q)) return 0;
+      if(n.split(/[\s.'-]+/).some(w => w.startsWith(q))) return 1;
+      return 2;
+    };
+    hits = roster
+      .filter(p => p.name.toLowerCase().includes(q) && !sel[kind].has(p.name))
+      .map((p,i) => [score(p), i, p])
+      .sort((a,b) => a[0]-b[0] || a[1]-b[1])
+      .slice(0, 8).map(x => x[2]);
+    if(!hits.length){ close(); return; }
+    menu.innerHTML = hits.map((p,i) =>
+      '<div data-i="'+i+'"'+(i===cur?' class="sel"':'')+'>'
+      + '<span>'+esc(p.name)+'</span>'
+      + '<span class="mt">'+p.team+' '+p.pos+' · $'+p.salary.toLocaleString()
+      + ' · '+p.proj.toFixed(1)+'</span></div>').join('');
+    menu.classList.add('open');
+    menu.querySelectorAll('div[data-i]').forEach(d =>
+      d.addEventListener('mousedown', e => {
+        e.preventDefault(); add(hits[+d.dataset.i]);
+      }));
+  };
+
+  const add = p => {
+    if(!p) return;
+    sel[kind].add(p.name);
+    if(kind === 'core') sel.pool.delete(p.name);   // a core is already in-pool
+    input.value = ''; close(); draw();
+    if(kind === 'core') pickers.pool.draw();
+    input.focus();
+  };
+
+  // Paste a whole sheet at once. The sharp's list arrives as a screenshot from
+  // Discord and gets retyped, so sixty names one chip at a time was the slowest
+  // step in the whole build. Anything with a separator in it is treated as a
+  // list; a single name still goes through the normal autocomplete.
+  const paste = txt => {
+    const parts = txt.split(/[,;\t\n\r]+/).map(s => s.trim()).filter(s => s.length > 1);
+    if(parts.length < 2) return false;
+    const hit = [], miss = [];
+    parts.forEach(q => {
+      const k = norm(q);
+      if(!k) return;
+      const p = roster.find(x => norm(x.name) === k)
+             || roster.find(x => norm(x.name).startsWith(k));
+      if(p) { sel[kind].add(p.name); if(kind === 'core') sel.pool.delete(p.name); hit.push(p.name); }
+      else miss.push(q);
+    });
+    input.value = ''; close(); draw();
+    if(kind === 'core') pickers.pool.draw();
+    $('#status').textContent = 'Added ' + hit.length + ' to ' + kind
+      + (miss.length ? ' — no match for: ' + miss.join(', ') : '');
+    return true;
+  };
+  input.addEventListener('paste', e => {
+    const txt = (e.clipboardData || window.clipboardData).getData('text') || '';
+    if(paste(txt)) e.preventDefault();
+  });
+
+  input.addEventListener('input', () => { cur = -1; show(); });
+  input.addEventListener('focus', show);
+  input.addEventListener('blur', () => setTimeout(close, 120));
+  input.addEventListener('keydown', e => {
+    if(e.key === 'ArrowDown' || e.key === 'ArrowUp'){
+      e.preventDefault();
+      if(!hits.length) return;
+      cur = (cur + (e.key === 'ArrowDown' ? 1 : hits.length - 1)) % hits.length;
+      show();
+    } else if(e.key === 'Enter'){
+      e.preventDefault(); add(hits[cur >= 0 ? cur : 0]);
+    } else if(e.key === 'Escape'){ close(); }
+  });
+  draw();
+  return {draw};
+}
+const pickers = {};
+pickers.pool = picker('pool', 'poolin', 'poolmenu', 'poolchips');
+pickers.core = picker('core', 'corein', 'coremenu', 'corechips');
+
+function slateLabel(teams){
+  if(fmt === 'showdown') return teams.join(' @ ') + ' · showdown';
+  return teams.length + ' teams · ' + Math.round(teams.length/2) + ' games · classic';
+}
+
+
+$('#lean').addEventListener('input', e => {
+  const v = e.target.value/100;
+  $('#lv').textContent = (v>=0?'+':'') + v.toFixed(2);
+});
+$('#fillpct').addEventListener('input', e => { $('#fv').textContent = e.target.value; });
+
+// Per-player caps: echo back what the server will read, and flag a line that is
+// missing its percentage before the build spends two minutes ignoring it.
+$('#capplayers').addEventListener('input', e => {
+  const lines = e.target.value.split(/[\n;]+/).map(s => s.trim()).filter(Boolean);
+  const good = [], bad = [];
+  lines.forEach(l => (/^.*?[\s,:=]+\d{1,3}(\.\d+)?\s*%?$/.test(l) ? good : bad).push(l));
+  $('#capwho').textContent = !lines.length ? '— none set'
+    : '— ' + good.length + ' capped'
+      + (bad.length ? ', ' + bad.length + ' line(s) need a percentage' : '');
+  $('#capwho').style.color = bad.length ? 'var(--warn, #e0a030)' : '';
+});
+setFmt('showdown', false);
+
+const num = (sel, d) => { const v = parseFloat($(sel).value); return isNaN(v) ? d : v; };
+
+$('#go').addEventListener('click', async () => {
+  const b = $('#go'); b.disabled = true;
+  b.innerHTML = '<span class="spin"></span>Simulating…';
+  $('#status').textContent = ''; $('#welcome').style.display='none';
+  $('#out').innerHTML = ''; $('#dl').style.display='none';
+  try {
+    const res = await fetch('/api/build', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        proj: files.proj, field: files.field, dk: files.dk, linestar: files.linestar,
+        options: {
+          n: num('#n',150), split: num('#split',75),
+          // Deliberately NOT sending the format. The server works it out from
+          // the files and says which signal it used; the page's own guess only
+          // decides which settings to show.
+          ownLean: num('#lean',0)/100,
+          minProj: num('#minproj', 2),
+          remove: $('#remove').value,
+          fieldCap: num('#cap',0), fillPct: num('#fillpct',100),
+          maxOffPool: $('#offpool').value,
+          pool: [...sel.pool].join('\n'), cores: [...sel.core].join('\n'),
+          capPlayers: $('#capplayers').value
+        }
+      })
+    });
+    const d = await res.json();
+    result = d;
+    render(d);
+  } catch(e) {
+    $('#out').innerHTML = '<div class="note warn">'+e.message+'</div>';
+  }
+  b.disabled = false; b.textContent = 'Build lineups';
+});
+
+$('#grade').addEventListener('click', async () => {
+  const b = $('#grade'); b.disabled = true;
+  b.innerHTML = '<span class="spin"></span>Scoring…';
+  try {
+    const res = await fetch('/api/grade', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({standings: files.standings})
+    });
+    renderGrade(await res.json());
+  } catch(e) {
+    $('#out').innerHTML = '<div class="note warn">'+e.message+'</div>';
+  }
+  b.disabled = false; b.innerHTML = '&#9201; Grade last night against results';
+});
+
+function renderGrade(g){
+  if(g.error){ $('#out').innerHTML = '<div class="note warn">'+esc(g.error)+'</div>'; return; }
+  const o = g.overall, pc = g.parse_check, c = g.contest;
+  const trusted = pc.checked > 0 && pc.agree === pc.checked;
+  let h = '<div class="note '+(trusted?'good':'warn')+'">Parse check: '+pc.agree+' of '
+        + pc.checked+' entries rebuild their own Points from the players\' FPTS'
+        + (pc.unreadable_rosters ? '; '+pc.unreadable_rosters+' rosters unreadable' : '')
+        + (trusted ? '.' : ' — the file was not read cleanly, so do not trust what follows.')
+        + '</div>';
+  h += '<div class="note info">Scored <b>'+g.entries+'</b> logged entries from '
+     + esc(String(g.slate)) + ' against a field of '+c.field.toLocaleString()
+     + ' (winner '+c.winning_score.toFixed(1)+', median '+c.median_score.toFixed(1)+'). '
+     + c.matched_by_entry_id+' found by Entry ID, '+c.roster_match+' exactly as built'
+     + (c.roster_match === c.matched_by_entry_id ? '.' : ' — the rest changed after the '
+        + 'build, so they grade a lineup that was not played.') + '</div>';
+  h += '<div class="cards">'
+    + card('#'+o.best_rank.toLocaleString(), 'your best finish')
+    + card(o.median_pct+'%', 'your median percentile')
+    + card(o.best.toFixed(1), 'your best score')
+    + card(o.copies_median+' / '+o.copies_max, 'real copies, median / max')
+    + (o.cashed !== undefined ? card(o.cashed, 'cashed') + card('$'+o.paid.toFixed(2), 'returned') : '')
+    + '</div>';
+  const tbl = (title, obj, lbl) => {
+    let t = '<div style="font-size:12.5px;color:var(--muted);margin:14px 0 4px">'
+          + title + '</div><div class="tblwrap"><table><thead><tr><th>' + lbl
+          + '</th><th class="num">n</th><th class="num">best rank</th>'
+          + '<th class="num">median pct</th><th class="num">best pts</th>'
+          + '<th class="num">copies</th></tr></thead><tbody>';
+    Object.entries(obj).sort((a,b) => a[1].best_rank - b[1].best_rank).forEach(([k,v]) => {
+      t += '<tr><td>'+esc(k)+'</td><td class="num">'+v.n+'</td>'
+        + '<td class="num">'+v.best_rank.toLocaleString()+'</td>'
+        + '<td class="num">'+v.median_pct+'%</td>'
+        + '<td class="num">'+v.best.toFixed(1)+'</td>'
+        + '<td class="num">'+v.copies_median+' / '+v.copies_max+'</td></tr>';
+    });
+    return t + '</tbody></table></div>';
+  };
+  h += tbl('Which half of the split did better — this is the A/B', g.by_arm, 'arm');
+  h += tbl('Which shape did better on this slate', g.by_shape, 'shape');
+  h += '<div style="font-size:12.5px;color:var(--muted);margin:14px 0 4px">Every player '
+     + 'you used — projected vs actual points, projected vs real ownership</div>'
+     + '<div class="tblwrap"><table><thead><tr><th>player</th><th class="num">yours</th>'
+     + '<th class="num">proj</th><th class="num">actual</th><th class="num">gap</th>'
+     + '<th class="num">proj own</th><th class="num">real own</th></tr></thead><tbody>';
+  (g.players||[]).forEach(p => {
+    const cls = p.gap === null ? '' : (p.gap >= 8 ? 'up' : (p.gap <= -8 ? 'down' : ''));
+    const f = v => v === null || v === undefined ? '—' : (+v).toFixed(1);
+    h += '<tr><td>'+esc(p.name)+'</td><td class="num">'+p.exposure.toFixed(0)+'%</td>'
+      + '<td class="num">'+f(p.proj)+'</td><td class="num">'+f(p.actual)+'</td>'
+      + '<td class="num '+cls+'">'+f(p.gap)+'</td>'
+      + '<td class="num">'+f(p.own_proj)+'</td><td class="num">'+f(p.own_real)+'</td></tr>';
+  });
+  h += '</tbody></table></div>';
+  h += '<div class="note info" style="margin-top:14px"><b>One slate is not evidence.</b> '
+     + 'Every NBA default in this tool is borrowed from NFL or WNBA until graded NBA '
+     + 'slates re-fit it. Six to ten is what settles anything — the numbers accumulate '
+     + 'in the log on their own.</div>';
+  if(g.unscored && g.unscored.length)
+    h += '<div class="note warn">No score found for: '+esc(g.unscored.join(', '))+'</div>';
+  $('#out').innerHTML = h;
+  $('#welcome').style.display = 'none';
+}
+
+// Exposure, shown against the field's projected ownership. A share on its own
+// says nothing — 40% is aggressive at 8% field and timid at 60% — so the gap
+// is the column worth reading, and it is the one that is coloured.
+function exposureHtml(e, n, sd){
+  if(!e || !e.players || !e.players.length) return '';
+  let h = '<details class="exp" open><summary>Exposure — who you are actually on</summary>';
+  h += '<div class="expwrap">';
+  h += '<div><div class="exptitle">Teams</div><div class="tblwrap"><table><thead><tr>'
+     + '<th>team</th><th class="num">lineups</th><th class="num">share</th>'
+     + '<th class="num">slots</th></tr></thead><tbody>';
+  e.teams.forEach(t => {
+    h += '<tr><td>'+esc(t.team)+'</td><td class="num">'+t.lineups+'</td>'
+      + '<td class="num">'+t.pct.toFixed(0)+'%</td>'
+      + '<td class="num">'+t.slots+'</td></tr>';
+  });
+  h += '</tbody></table></div></div>';
+  h += '<div><div class="exptitle">Players — yours vs the field</div>'
+     + '<div class="tblwrap"><table><thead><tr><th>player</th><th>pos</th>'
+     + '<th>team</th><th class="num">yours</th><th class="num">field</th>'
+     + '<th class="num">edge</th>'+(sd?'<th class="num">as CPT</th>':'')
+     + '</tr></thead><tbody>';
+  e.players.forEach(p => {
+    const cls = p.edge >= 10 ? 'up' : (p.edge <= -10 ? 'down' : '');
+    const nm = p.off ? '<span class="offsheet" title="not on your sheet">'+esc(p.name)+'</span>'
+             : p.core ? '<span class="coremark" title="core">'+esc(p.name)+'</span>'
+             : esc(p.name);
+    h += '<tr><td>'+nm+'</td><td>'+esc(p.pos)+'</td>'
+      + '<td>'+esc(p.team)+'</td>'
+      + '<td class="num">'+p.pct.toFixed(0)+'%</td>'
+      + '<td class="num">'+p.own.toFixed(0)+'%</td>'
+      + '<td class="num '+cls+'">'+(p.edge>0?'+':'')+p.edge.toFixed(0)+'</td>'
+      + (sd?'<td class="num">'+(p.cpt||'')+'</td>':'')
+      + '</tr>';
+  });
+  h += '</tbody></table></div></div></div></details>';
+  return h;
+}
+
+function render(d){
+  let h = '';
+  (d.notes||[]).forEach(n => {
+    h += '<div class="note '+n.type+'">'+esc(n.text)+'</div>';
+  });
+  if(d.error){
+    h += '<div class="note warn"><b>'+esc(d.error)+'</b></div>';
+    $('#out').innerHTML = h; return;
+  }
+  if(d.coach && d.coach.length){
+    h += '<div class="exptitle" style="margin-top:14px">The read on this build</div>';
+    d.coach.forEach(n => { h += '<div class="note '+n.type+'">'+esc(n.text)+'</div>'; });
+  }
+  const s = d.summary;
+  if(d.format) setFmt(d.format, true);
+  $('#slate').textContent = slateLabel(d.teams||[]);
+  const arms = Object.entries(s.arms).map(([k,v]) => k+' '+v).join(' / ');
+  const sd = d.format !== 'classic';
+  h += '<div class="cards">'
+    + card(s.n, 'lineups ('+arms+')')
+    + (sd ? card(s.captains, 'distinct captains') : '')
+    + card('$'+s.salaryLo.toLocaleString()+'–'+s.salaryHi.toLocaleString(), 'salary used')
+    + card(s.projAvg, 'avg projection')
+    + card(s.ownAvg, 'avg ownership sum')
+    + card(s.dupeAvg, 'avg expected duplicates')
+    + '</div>';
+  h += '<div style="font-size:12.5px;color:var(--muted);margin-bottom:6px">'
+     + esc(s.shapeLabel) + ': '
+     + Object.entries(s.splits).map(([k,v]) => esc(k)+' × '+v).join(' · ')
+     + (sd && s.topCaptains.length ? '<br>Top captains: '
+        + s.topCaptains.map(c => esc(c[0])+' '+c[1]).join(' · ') : '')
+     + '</div>';
+  h += exposureHtml(d.exposure, s.n, sd);
+  const nOff = (d.exposure && d.exposure.players || []).filter(p => p.off).length;
+  if(nOff) h += '<div class="picknote" style="margin:8px 0"><span class="offsheet">'
+    + 'name</span> = not on your sheet (' + nOff + ' of them below)'
+    + ' · <span class="coremark">name</span> = a core.</div>';
+  h += '<div class="tblwrap"><table><thead><tr>'
+     + '<th>#</th><th>arm</th><th>shape</th><th>roster, in DK slot order</th>'
+     + '<th class="num">salary</th><th class="num">proj</th>'
+     + '<th class="num">own</th><th class="num">win%</th><th class="num">dupes</th>'
+     + '</tr></thead><tbody>';
+  const who = p => '<span style="color:var(--muted)">'+p.slot+'</span> '
+    + (p.off ? '<span class="offsheet" title="not on your sheet">' + esc(p.name) + '</span>'
+             : (p.core ? '<span class="coremark" title="core">' + esc(p.name) + '</span>'
+                       : esc(p.name)))
+    + (p.slot === 'CPT' ? '' : ' <span style="color:var(--muted)">('+p.team+')</span>');
+  d.lineups.forEach((l,i) => {
+    h += '<tr><td class="num">'+(i+1)+'</td>'
+      + '<td><span class="arm '+l.source+'">'+l.source+'</span></td>'
+      + '<td>'+esc(l.shape)+'</td>'
+      + '<td>'+l.players.map((p,j) => j===0 && sd ? '<span class="cpt">'+who(p)+'</span>'
+                                                  : who(p)).join(', ')+'</td>'
+      + '<td class="num">'+l.salary.toLocaleString()+'</td>'
+      + '<td class="num">'+l.proj.toFixed(1)+'</td>'
+      + '<td class="num">'+l.ownSum.toFixed(0)+'</td>'
+      + '<td class="num">'+(l.win*100).toFixed(2)+'</td>'
+      + '<td class="num">'+l.dupes.toFixed(1)+'</td></tr>';
+  });
+  h += '</tbody></table></div>';
+  $('#out').innerHTML = h;
+  if(d.dkCsv){
+    $('#dl').style.display = '';
+    $('#status').textContent = 'Logged '+d.lineups.length+' entries for later grading.';
+  } else {
+    $('#status').textContent = 'No DK upload file — see the notes above.';
+  }
+}
+
+function card(v, label){
+  return '<div class="card"><b>'+esc(String(v))+'</b><span>'+esc(label)+'</span></div>';
+}
+function esc(s){
+  return String(s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+$('#dl').addEventListener('click', () => {
+  if(!result || !result.dkCsv) return;
+  const b = new Blob([result.dkCsv], {type:'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(b);
+  a.download = 'DKEntries_NBA_' + (fmt === 'classic' ? 'classic' : 'showdown')
+             + '_upload.csv';
+  a.click();
+});
+</script>
+</body>
+</html>
+"""

@@ -6,3 +6,5 @@
 nfl_upload.csv
 __pycache__/
 *.pyc
+
+nba_upload.csv
