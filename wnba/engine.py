@@ -217,35 +217,68 @@ def _slate_rules(pool):
 
     major_game is the game with the higher summed projected ownership — on all
     seven two-game slates in the study that was also the game the field ended up
-    more heavily on, and the side the winners loaded."""
+    more heavily on, and the side the winners loaded. It is now defined at EVERY
+    slate size, because the major-game test turned out to extend and the
+    bring-back did not; see _rules_ok.
+
+    Ownership is the right proxy and implied total is not. Defining the major
+    game by the highest implied total instead flips sign on every metric at
+    three games. The field says the same thing: at two games the top 1% put
+    their biggest block in the highest-OWNED game 82% of the time against 66%
+    for the field, and that gap holds on 7 of 7 contests.
+    """
     games = {}
     for p in pool:
         if p.game:
             games[p.game] = games.get(p.game, 0.0) + p.ownership
-    two_game = len(games) == 2
     return {
-        "two_game": two_game,
-        "major_game": max(games, key=lambda g: games[g]) if two_game else None,
+        "two_game": len(games) == 2,
+        "major_game": max(games, key=lambda g: games[g]) if games else None,
     }
 
 
 def _rules_ok(picked, rules):
-    """Final check against the two-game shape rules. Runs on a complete roster,
-    so it can see the whole shape."""
+    """Final check against the slate-shape rules. Runs on a complete roster, so
+    it can see the whole shape.
+
+    These used to be gated entirely on a two-game slate, which meant a three,
+    four or five game board had NO shape rule at all — three from one team plus
+    two from its opponent was five of six players out of one game and nothing
+    looked at it. That was not a decision anyone made; it was the two-game
+    branch not firing. Measured by slate size across 26 finished contests
+    (79,781 rosters) and an 18-slate rebuild grid, the two rules turned out to
+    belong in different places.
+    """
+    if not picked:
+        return True      # the game counts below now run unconditionally
+    games = {}
+    for p in picked:
+        games[p.game] = games.get(p.game, 0) + 1
+    big_game, big_ct = max(games.items(), key=lambda kv: kv[1])
+    # The major-game test applies at EVERY slate size.
+    #
+    #   2 games   removing it costs mean 0.83 and 1.6 cashes, worse on 6 of 6
+    #             slates, every leave-one-out fold the same sign.
+    #   3 games   adding it gains 2.0 cashes (better on 6 of 9, worse on 1),
+    #             +0.24 mean, +0.75 top-5%, LOSO +1.25 to +2.4 on cash, over
+    #             9 slates and 139 entries. About one SD on the count, but the
+    #             direction is consistent slate by slate.
+    #   4-5 games it never binds — a 4+ block is 0-6% of lineups there — so it
+    #             is inert rather than untested-and-live.
+    #
+    # It only applies when there IS a majority. On a 3-3 the max() above picks a
+    # "biggest" game arbitrarily between two equal counts, so running the test
+    # there would reject or accept the same shape depending on dictionary order.
+    # 3-3 is legal, and nothing downstream trims it either — see RULES_OFF.
+    if big_ct >= 4 and rules["major_game"] and big_game != rules["major_game"]:
+        return False
+    # The bring-back stays TWO-GAME ONLY, and that is a measurement, not an
+    # oversight. Required at three games it costs mean 1.9 (worse on 9 of 9),
+    # 4.6 cashes (8 of 9) and $209, every fold the same sign. The field says why:
+    # winners behind a 3+ team block carry an opponent 100% of the time at two
+    # games, 14% at three and 6% at five. It is a two-game fact about the only
+    # other game there is, not a correlation rule.
     if rules["two_game"]:
-        games = {}
-        for p in picked:
-            games[p.game] = games.get(p.game, 0) + 1
-        big_game, big_ct = max(games.items(), key=lambda kv: kv[1])
-        # 3-3 is legal, and nothing downstream trims it either — see the note by
-        # RULES_OFF. It is an ordinary shape competing on simulated score.
-        #
-        # The major-game test only applies when there IS a majority. On a 3-3 the
-        # max() above picks a "biggest" game arbitrarily between two equal counts,
-        # so running the test there would reject or accept the same shape
-        # depending on dictionary order.
-        if big_ct >= 4 and rules["major_game"] and big_game != rules["major_game"]:
-            return False
         teams = {}
         for p in picked:
             teams[p.team] = teams.get(p.team, 0) + 1
@@ -255,6 +288,25 @@ def _rules_ok(picked, rules):
                 if not any(q.team == opp for q in picked):
                     return False
     return True
+
+
+# A per-game cap was the change this whole investigation was opened to find, and
+# the data refused it. Capping players-per-game at 3 on a two-game slate costs
+# 9.8 cashes and $328; at 4 on a three-game slate it costs 4.9 cashes, worse on
+# 7 of 7 slates. That is 15 of 18 rebuild slates and 20 of 26 field contests
+# saying a cap is pure cost, because the builder's best lineups ARE the
+# concentrated ones.
+#
+# The shape of winning inverts with slate size, which is why no single cap works.
+# Top-1% rate by biggest game block: at two games a 5-block hits 3.01% against
+# 0.90% for a 3-block, and residual variance is flat across block sizes (23.1 to
+# 23.4). At four games a 5-block hits 0.00% and residual variance RISES with the
+# block (26.5 to 31.4).
+#
+# At four and five games a cap of 3 does show a tail gain (top-1% +0.5, top-5%
+# +1.75, better on 2 of 2) while rejecting only 3-6% of lineups — that is the
+# one place it has a case, and the case is three slates. Not shipped. Revisit at
+# roughly five more finished contests of each size.
 
 
 def _build_one(pool, max_per_team, rng, cores=None, min_cores=0, reserve=MIN_SALARY,
