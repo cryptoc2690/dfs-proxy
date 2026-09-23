@@ -1628,69 +1628,66 @@ def _aggression(deficit_weighted):
     return max(0.15, min(0.85, 0.5 - deficit_weighted / 60.0))
 
 
-# DK writes a roster as "G Name G Name F Name F Name F Name UTIL Name", with
+# DK writes a roster as "F Name F Name F Name G Name G Name UTIL Name", with
 # LOCKED standing in for a player whose game has not started. UTIL comes first in
 # the alternation so it is not matched as a bare U-less token; the capture group
-# keeps the slot labels, which is the whole point — see _standings_names.
+# keeps the slot labels, which is what lets us tell this file from another sport's.
 _STANDINGS_SLOT = re.compile(r"\s*\b(UTIL|G|F)\s+")
 
 
-def _standings_names(cell, slots):
-    """-> one entry per roster slot, in DK's slot order: the normalized name if
-    DK has revealed it, else None. None (not []) if the cell isn't in a layout
-    we recognise.
+def _standings_revealed(cell, slots):
+    """-> the set of normalized names DK has revealed on this roster, or None if
+    the cell isn't a roster layout we recognise.
 
-    Position is kept rather than the bare list of names, because it is what makes
-    the comparison against an entries export usable slot by slot. And a revealed
-    name is not merely newer information, it is FINAL: DK only reveals a player
-    once their game has tipped, and a tipped slot can no longer be edited. So
-    where the contest file has a name, that name is what is entered, full stop.
+    A SET, not a slot-by-slot list, because a set is all this file contains.
+    Measured on the 5,945 rosters of contest 195934561, unanimously:
 
-    That licence is exactly why this refuses to guess. The old version threw the
-    slot labels away and kept whatever fell out of the split, so a layout it had
-    not anticipated still produced a plausible-looking list of six names — which
-    the caller then wrote into a roster. It did: on 2026-09-22 it moved a locked
-    F into a G slot, left that player in the lineup twice and took the roster to
-    $55,500. Nothing in the archive could have caught it, because no standings
-    export we have ever held contains a single LOCKED — every one was pulled
-    after its contest finished. So the labels are read and checked against the
-    slot order DK asked for, and anything else is "I don't know", not a guess.
+      * DK writes the roster grouped by position, F F F G G UTIL — NOT the
+        G G F F F UTIL that the entries export asks you to fill in.
+      * Inside each group the revealed players come first, ordered by salary
+        descending, and the LOCKED placeholders fill the rest of the group.
+
+    So the cell says WHO has tipped. It cannot say which slot any of them sits
+    in — DK has already reordered them, and nothing in the file records where
+    they started. The old code read it slot by slot anyway, against the entries
+    file's slot order, which is how 2026-09-22 put a locked forward into a G
+    slot, left her in the lineup twice and took the roster to $55,500 against a
+    $50,000 cap. It went unnoticed for so long because no standings export in
+    the archive contains a single LOCKED — every one was pulled after its
+    contest finished, when the groups are full and any read looks plausible.
+
+    A revealed name is not merely newer information, it is FINAL: DK only
+    reveals a player once their game has tipped, and a tipped player cannot be
+    taken out of a lineup. So where this file has a name, that player is
+    entered, full stop — which is exactly the claim a set can carry.
     """
     parts = _STANDINGS_SLOT.split(cell or "")
     # split on a capturing group -> [lead, label, name, label, name, ...]
     if not parts or parts[0].strip():
         return None                      # text before the first slot label
     labels, names = parts[1::2], [p.strip() for p in parts[2::2]]
-    if len(labels) != len(names) or labels != list(slots):
-        return None                      # not the roster shape DK asked us for
-    return [None if n in ("", "LOCKED") else normalize_name(n) for n in names]
+    if len(labels) != len(names) or sorted(labels) != sorted(slots):
+        return None                      # not this slate's roster shape at all
+    return {normalize_name(n) for n in names if n not in ("", "LOCKED")}
 
 
-def _standings_overwrite_problem(fixed, original, locked, slots, pool):
-    """Why the contest file's version of this roster can't be believed, or "".
+def _roster_illegal(names, revealed, slots, pool):
+    """Why this roster can't be what is entered on DK, or "".
 
-    Taking DK's word over the entries export is right — but only once we are sure
-    we read DK correctly, and a misread here rewrites a roster silently. So every
-    overwrite has to survive the things DK itself guarantees about a roster. This
-    is not defensive padding: the 2026-09-22 slate produced all four of these.
+    Every repair drawn from the contest file goes through here before it is
+    believed. Taking DK's word over the entries export is right, but only once
+    we are sure we read DK correctly, and a bad read rewrites a roster silently.
+    So the result has to survive what DK itself guarantees. Not defensive
+    padding: the 2026-09-22 misread tripped four of these five.
     """
-    locked = {normalize_name(n) for n in locked}
-    for new, old in zip(fixed, original):
-        if normalize_name(new) == normalize_name(old):
-            continue
-        # A slot whose game has tipped cannot be edited — not by the user, not by
-        # DK. If the contest file appears to hold someone else there, then it is
-        # not this slot we are looking at and the whole row is misaligned.
-        if normalize_name(old) in locked:
-            return f"it has someone other than {old}, whose game has started"
-    names = [normalize_name(n) for n in fixed]
-    if len(set(names)) != len(names):
+    norm = [normalize_name(n) for n in names]
+    if len(set(norm)) != len(norm):
         return "it puts the same player in two slots"
-    recs = [pool.get(n) for n in names]
-    for nm, rec in zip(fixed, recs):
+    recs = [pool.get(n) for n in norm]
+    for nm, rec in zip(names, recs):
         if rec is None:
             return f"{nm} is not in this slate's player pool"
-    for slot, rec, nm in zip(slots, recs, fixed):
+    for slot, rec, nm in zip(slots, recs, names):
         if slot == "G" and not rec["guard"]:
             return f"it puts {nm}, a forward, in a G slot"
         if slot == "F" and rec["guard"]:
@@ -1698,7 +1695,75 @@ def _standings_overwrite_problem(fixed, original, locked, slots, pool):
     salary = sum(int(rec["salary"] or 0) for rec in recs)
     if salary > SALARY_CAP:
         return f"it costs ${salary:,}, over the ${SALARY_CAP:,} cap"
+    # A player DK has revealed is playing for this entry and cannot be taken out
+    # of it. If a repair drops one, the repair is wrong.
+    gone = [n for n in revealed if n not in norm]
+    if gone:
+        missing = (pool.get(gone[0]) or {}).get("name") or gone[0]
+        return f"it drops {missing}, who DK says is already playing for you"
     return ""
+
+
+def _reconcile_with_dk(names, revealed, slots, pool):
+    """-> (roster, ""), (None, "") when nothing needs changing, or (None, why).
+
+    The contest file is what DK holds RIGHT NOW, including a hand edit made
+    after the entries export was downloaded — that is the whole reason to read
+    it, and a stale roster is worse than useless once you have fixed a lineup by
+    hand. But it reports a SET of tipped players, not slots (see
+    _standings_revealed), so reconciling is a question about membership:
+
+      add   DK has them, our roster doesn't -> the entries file is stale
+      drop  our roster has them, their game has tipped, DK does NOT list them
+            -> they are provably not entered; a tipped player DK does not show
+               for this entry is a player this entry does not have
+
+    `drop` is a proof, not a guess, which is what makes the repair safe. When
+    the two don't balance, the player who was replaced had not tipped yet and
+    nothing in this file says who they were — so say so and leave the roster
+    alone rather than picking a victim. Re-downloading the entries file is the
+    fix for that, and it is a one-line ask.
+    """
+    import itertools
+    ours = [normalize_name(n) for n in names]
+    add = sorted(n for n in revealed if n not in ours)
+    if not add:
+        return None, ""                  # DK shows nobody we don't already have
+    drop = [i for i, n in enumerate(ours)
+            if (pool.get(n) or {}).get("locked") and n not in revealed]
+    nice = lambda n: (pool.get(n) or {}).get("name") or n
+    if len(drop) != len(add):
+        have = ", ".join(nice(n) for n in add)
+        return None, (f"DK has {have} on this entry and your file doesn't, but "
+                      f"the file doesn't say who they replaced")
+    # Which slot each one lands in is ours to choose — DK regrouped the roster
+    # before writing it, so the file cannot tell us. Any assignment DK would
+    # accept is the right answer. Prefer the smallest change: drop the new
+    # player straight into the slot the old one held.
+    held = set(drop)
+    for perm in itertools.permutations(add):
+        cand = list(names)
+        for i, n in zip(drop, perm):
+            cand[i] = nice(n)
+        if not _roster_illegal(cand, revealed, slots, pool):
+            return cand, ""
+    # That fails whenever the swap crossed a position — a forward out for a
+    # guard leaves a guard standing in an F slot. DK re-slots freely and so may
+    # we, with one thing fixed: a player whose game has tipped is pinned to her
+    # slot, and the entries export is DK's own word on which slot that is.
+    pinned = {i for i, n in enumerate(ours)
+              if i not in held and (pool.get(n) or {}).get("locked")}
+    free = [i for i in range(len(names)) if i not in pinned]
+    movable = ([n for i, n in enumerate(names) if i not in pinned and i not in held]
+               + [nice(n) for n in add])
+    for perm in itertools.permutations(movable):
+        cand = list(names)
+        for i, n in zip(free, perm):
+            cand[i] = n
+        if not _roster_illegal(cand, revealed, slots, pool):
+            return cand, ""
+    return None, ("no legal roster fits " + ", ".join(nice(n) for n in add)
+                  + " around the players of yours that have already tipped")
 
 
 def parse_contest_standings(text, slots=None):
@@ -1731,7 +1796,7 @@ def parse_contest_standings(text, slots=None):
                 # entries file was exported. Kept so late swap can notice that
                 # the entries file it was given is out of date. None means the
                 # cell was not in a layout we recognise.
-                "revealed": _standings_names(r[5], slots),
+                "revealed": _standings_revealed(r[5], slots),
                 # Kept verbatim so an unrecognised layout can be shown rather
                 # than merely counted — this is the one thing that makes a
                 # format we have never seen diagnosable instead of a shrug.
@@ -2212,41 +2277,33 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
             if shown is None:
                 unreadable.append(live)
                 continue                        # layout unknown — do not guess
-            if len(shown) != len(e["names"]):
-                continue                        # shapes disagree — do not guess
-            nice = lambda n: by_norm[n].name if n in by_norm else n
-            fixed, swapped = list(e["names"]), []
-            for i, n in enumerate(shown):
-                if n and n != normalize_name(e["names"][i]):
-                    swapped.append((e["names"][i], nice(n)))
-                    fixed[i] = nice(n)
-            if not swapped:
-                continue
-            # Believing DK is only safe once the row survives what DK itself
-            # guarantees. A roster that fails this is not news, it is a misread,
-            # and the entries file is the better of the two.
-            bad = _standings_overwrite_problem(
-                fixed, e["names"], e.get("locked") or [], slots, dk["pool"])
-            if bad:
+            fixed, why = _reconcile_with_dk(
+                e["names"], shown, slots, dk["pool"])
+            if why:
                 stale.append(
-                    f"Entry {e['entryId']}: the contest file's roster can't be "
-                    f"right — {bad}. Leaving this lineup as your entries file "
-                    "has it. Re-download the contest file; if it says the same "
-                    "thing, the file needs looking at.")
+                    f"Entry {e['entryId']}: your DK entries file is out of date "
+                    f"and can't be repaired from the contest file — {why}. "
+                    "Leaving this lineup as your entries file has it; "
+                    "re-download the entries file to fix it properly.")
                 continue
+            if fixed is None:
+                continue                        # the two already agree
+            was = [o for o, n in zip(e["names"], fixed) if o != n]
+            now = [n for o, n in zip(e["names"], fixed) if o != n]
             e["names"] = fixed
             stale.append(
                 f"Entry {e['entryId']}: your DK entries file is out of date. DK "
-                f"has " + ", ".join(f"{new} where the file says {old}"
-                                    for old, new in swapped)
+                f"has " + ", ".join(f"{n} where the file says {o}"
+                                    for o, n in zip(was, now))
                 + ". Those games have already tipped, so DK's version is the one "
                   "that counts and late swap is using it.")
         if unreadable:
             stale.append(
                 f"Couldn't read the roster layout in the contest file for "
                 f"{len(unreadable)} of your entries, so it was only used for "
-                f"standing, not for what is entered. Expected "
-                f"{' '.join(slots)}; got: {unreadable[0]['lineupCell'][:160]!r}")
+                f"standing, not for what is entered. Expected the "
+                f"{len(slots)} slots {' '.join(sorted(set(slots)))}; "
+                f"got: {unreadable[0]['lineupCell'][:160]!r}")
 
     # Cores carry over from the build — protected, not optimized away.
     core_names = _parse_names(options.get("cores"))
