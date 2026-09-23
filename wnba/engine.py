@@ -37,14 +37,15 @@ MIN_SALARY = 3000  # DK WNBA min; used so partial lineups stay completable
 # candidate-diversity cost and could not see the cliff, because at 12 entries on
 # 23 slates almost nothing lands past $800 anyway. The field data can see it.
 #
-# ...and then 800 was measured on OUR OWN BUILDS and it was wrong. 18 slates,
-# 8 seeds, 309 entries, ablated one change at a time against the commit before
-# it: turning this floor off restores +1.18 of mean on 15 of 18 slates and +5.1
-# cashes on 13 of 18, and that is the entire drift between the two commits (the
-# all-reverted arm reproduces the old one on 18 of 18 slates, every seed, so
-# nothing else is hiding in it). It bought NOTHING for the cost: top-1% sits flat
-# at 5.5-5.9 from off all the way down to a $400 floor, while mean, top-5% and
-# cashes fall monotonically the tighter it gets.
+# ...and then 800 was measured on OUR OWN BUILDS and it was wrong. 22 slates,
+# 8 seeds, 387 entries, ablated one change at a time against the commit before
+# it: turning this floor off is worth +4.9 cashes, better on 14 of the 19 slates
+# where it changes anything, and that is the entire drift between the two
+# commits (the all-reverted arm reproduces the old one slate for slate, every
+# seed, so nothing else is hiding in it). It bought NOTHING for the cost: top-1%
+# sits flat from off all the way down to a $400 floor, while mean, top-5% and
+# cashes fall monotonically the tighter it gets — and on the larger set the
+# best-lineup and best-rank effects FLIP SIGN, so the tail is flatter still.
 #
 # The mistake was turning a fact about WINNERS into a constraint on a BUILDER
 # without checking whether the builder had the problem. It doesn't. Unconstrained
@@ -54,10 +55,11 @@ MIN_SALARY = 3000  # DK WNBA min; used so partial lineups stay completable
 # the floor made it spend anyway — that one slate is -6.8 on its own.
 #
 # 2,000 is where both readings agree: no roster in 71,936 that left more than
-# $2,000 reached the top 1%, and forbidding it is measured identical to no floor
-# at all (mean 175.4 either way, 105.0 cashes against 104.8, top-1% 5.6 both).
-# So it stays as a junk filter that catches a starved or broken build, at a
-# measured cost of nothing, and it is no longer a diversity tax.
+# $2,000 reached the top 1%, and forbidding it is measured identical to having
+# no floor at all on every metric. The reviewer's phrase for the 22-slate run is
+# "off in all but name", which is the intent — a junk filter that catches a
+# starved or broken build, at a measured cost of nothing, and no longer a
+# diversity tax. If it ever shows up as binding on anything, it is wrong.
 MAX_LEFTOVER = 2000
 
 # DraftKings Classic requires players from at least two different games, so a
@@ -257,12 +259,16 @@ def _rules_ok(picked, rules):
     big_game, big_ct = max(games.items(), key=lambda kv: kv[1])
     # The major-game test applies at EVERY slate size.
     #
-    #   2 games   removing it costs mean 0.83 and 1.6 cashes, worse on 6 of 6
-    #             slates, every leave-one-out fold the same sign.
-    #   3 games   adding it gains 2.0 cashes (better on 6 of 9, worse on 1),
-    #             +0.24 mean, +0.75 top-5%, LOSO +1.25 to +2.4 on cash, over
-    #             9 slates and 139 entries. About one SD on the count, but the
-    #             direction is consistent slate by slate.
+    # Figures below are the 22-slate set (2-game 7, 3-game 10, 4-game 2,
+    # 5-game 3); the 18-slate run that first justified this said the same thing
+    # more loudly, and where it differs the larger set wins.
+    #
+    #   2 games   removing it costs mean 0.2 — it was 0.8 on 18 slates, so the
+    #             mean effect is SMALL and should be quoted as small. Cash and
+    #             top-5% still move the same way, which is why it stays.
+    #   3 games   adding it is a small positive, about one seed SD on the count,
+    #             consistent slate by slate across 10 slates. Keep, labelled
+    #             small; it is not a result to build anything else on.
     #   4-5 games it never binds — a 4+ block is 0-6% of lineups there — so it
     #             is inert rather than untested-and-live.
     #
@@ -273,8 +279,9 @@ def _rules_ok(picked, rules):
     if big_ct >= 4 and rules["major_game"] and big_game != rules["major_game"]:
         return False
     # The bring-back stays TWO-GAME ONLY, and that is a measurement, not an
-    # oversight. Required at three games it costs mean 1.9 (worse on 9 of 9),
-    # 4.6 cashes (8 of 9) and $209, every fold the same sign. The field says why:
+    # oversight. Required at three games it costs 5.9 cashes, worse on 9 of the
+    # 10 three-game slates — the rejection got STRONGER as the set grew, which
+    # is the direction you want a rejection to move. The field says why:
     # winners behind a 3+ team block carry an opponent 100% of the time at two
     # games, 14% at three and 6% at five. It is a two-game fact about the only
     # other game there is, not a correlation rule.
@@ -293,9 +300,9 @@ def _rules_ok(picked, rules):
 # A per-game cap was the change this whole investigation was opened to find, and
 # the data refused it. Capping players-per-game at 3 on a two-game slate costs
 # 9.8 cashes and $328; at 4 on a three-game slate it costs 4.9 cashes, worse on
-# 7 of 7 slates. That is 15 of 18 rebuild slates and 20 of 26 field contests
+# 7 of 7 slates. That is 17 of 22 rebuild slates and 24 of 29 field contests
 # saying a cap is pure cost, because the builder's best lineups ARE the
-# concentrated ones.
+# concentrated ones. The 2- and 3-game rejections held when the set grew.
 #
 # The shape of winning inverts with slate size, which is why no single cap works.
 # Top-1% rate by biggest game block: at two games a 5-block hits 3.01% against
@@ -303,10 +310,15 @@ def _rules_ok(picked, rules):
 # 23.4). At four games a 5-block hits 0.00% and residual variance RISES with the
 # block (26.5 to 31.4).
 #
-# At four and five games a cap of 3 does show a tail gain (top-1% +0.5, top-5%
-# +1.75, better on 2 of 2) while rejecting only 3-6% of lineups — that is the
-# one place it has a case, and the case is three slates. Not shipped. Revisit at
-# roughly five more finished contests of each size.
+# At four and five games a cap of 3 does show a tail gain while rejecting only
+# 3-6% of lineups — that is the one place it has a case. The five-game bucket
+# went from 1 grid slate to 3 and K=3 was mildly positive on all three, which is
+# the right direction but is still three slates. Not shipped, and the threshold
+# for shipping it is the bucket reaching 5, not another favourable reading.
+#
+# Two facts live ONLY in that bucket and are held to the same bar: K=3 helping,
+# and pushing single-player exposure to ~94% hurting on all three. Both stay
+# "insufficient data" until there are five.
 
 
 def _build_one(pool, max_per_team, rng, cores=None, min_cores=0, reserve=MIN_SALARY,

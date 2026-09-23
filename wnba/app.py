@@ -1037,9 +1037,24 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         n_sims=_int(options.get("sims"), 5000),
         cores=cores,
         # Anchor rule: every lineup built around at least this many cores (which
-        # ones vary across the set). Default 1 when cores are set — held out, the
-        # set built with this on cashed 3 more lineups per 23 slates than the same
-        # tool with it off, in the same direction at 12 and at 20 entries.
+        # ones vary across the set). Default 1 when cores are set.
+        #
+        # What coring is worth, on 22 slates and 387 entries: +0.87 of mean per
+        # slate, better on 16 of 22, positive under every leave-one-out fold,
+        # and NO cost in the tail. That is the whole case and it is a modest one.
+        #
+        # It is NOT a cash edge. An 18-slate read of this said +8 cashes; adding
+        # 9-22 took that to +0.2, and the difference is entirely 9-22, where the
+        # three logged cores scored 21.5 against 74.5 projected and the cored arm
+        # cashed 2 of 50 against 10.6 uncored. Do not quote the cash number.
+        #
+        # That slate is also the honest caveat on this default: min_cores is a
+        # HARD FLOOR, so every lineup carries an anchor and a bad core night
+        # costs about a fifth of a set's cashes with no branch of the portfolio
+        # exempt. Worth it for the mean, and worth knowing before a 50-entry
+        # night. Note what it is NOT: the set does not get narrower — measured
+        # spread was 16.2 cored against 16.7 uncored, so the damage is the anchor
+        # being wrong, not the lineups being alike.
         min_cores=(_int(options.get("minCores"), 1) if cores else 0),
         max_off_pool=max_off_pool,
         stars_and_scrubs=(slate_type == "stars-and-scrubs"),
