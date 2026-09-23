@@ -120,7 +120,40 @@ respecting a conviction pick.
 | `gui.py` | The single-page UI (drop, pickers, results, exposure, download). |
 | `engine.py` | Pure-Python GPP engine: pool filter, construction, Monte-Carlo sim, selection, pool-legal alternatives. |
 | `dk.py` | DK ruleset, name normalization, the Player record. |
+| `smoke.py` | End-to-end suite. Run before every commit. |
+| `swap_repro.py` | Late-swap fixtures the suite imports. |
+| `analysis/` | One-off harnesses kept for their method (see below). |
 | `../WNBA-Optimizer.command` | Double-click launcher (Mac). |
+
+## Tests
+
+```bash
+python3 wnba/smoke.py        # 126 checks, ~3 min, exits non-zero on failure
+```
+
+Not a unit-test file. Nearly every check exists because something shipped
+broken, and the check names say which thing — a builder that abandoned exposure
+caps when the board ran thin, a late-swap baseline that could never fire on a
+real night, a standings parser that corrupted 22 of 50 rosters, a salary floor
+whose three copies drifted apart. Several checks pin a value a measurement set,
+so a future edit has to argue with the run that set it.
+
+**The summary and `sys.exit` must stay at the end of `smoke.py`.** A section
+appended after them is silently skipped and the suite still reports a clean
+pass. That has happened twice.
+
+`analysis/` holds harnesses written to answer one question each. They are kept
+for the method rather than the numbers:
+
+| | |
+|---|---|
+| `standings_parse.py` | Standalone reproduction of the 2026-09-22 standings corruption. Needs no data; run it directly. |
+| `core_test.py` | Core vs no-core on one slate, scored against real actuals and ranked against the real field. |
+| `real_standings.py` | Runs a real entries + standings pair through the reconciler and reports agree / repaired / refused. |
+
+The last two read slate files that were uploaded to a chat session and are not
+in the repo. Point `WNBA_SLATE_DIR` at a directory holding them to re-run; they
+exit with a clear message otherwise.
 
 ## Build log
 
