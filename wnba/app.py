@@ -1046,11 +1046,11 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         player_caps=player_caps,
         # The two-game shape rules, and a switch that now actually switches.
         slate_rules=str(options.get("slateRules", "on")) != "off",
-        # Salary floor, restored. 71,936 real rosters say leaving up to $700
-        # costs nothing and $800+ falls off a cliff: top-1% 1.2-1.4% inside $700
-        # against 0.41% at $800-$1,000 and 0.00% past $2,000. One of 48 winners
-        # left more than $1,000.
-        max_leftover=_int(options.get("maxLeftover"), 800),
+        # Salary floor. Was 800 on the field's leftover table; measured on our
+        # own builds across 18 slates it cost 1.2 of mean and 5 cashes and bought
+        # no tail, so it sits at the level that is measured identical to having
+        # no floor at all. See MAX_LEFTOVER in the engine for the numbers.
+        max_leftover=_int(options.get("maxLeftover"), 2000),
         # The engine has always taken a seed; nothing ever passed it, so every
         # build was seed 0 and "run it on eight seeds" quietly produced the same
         # run eight times. An exponent test earlier this month was nearly read as
@@ -1576,8 +1576,16 @@ SWAP_MIN_GAIN = 6.0        # was 2.0 — sub-noise churn is how the damage happe
 # this moves again when there are more nights.
 SWAP_DISCRETIONARY_GAIN = 10.0
 SWAP_OFF_POOL_MIN_GAIN = 12.0   # projection a player OUTSIDE the pool must add
-SWAP_MAX_LEFTOVER = 700    # match the build's salary floor; still a preference
-                           # rather than a filter, since locks can strand money
+SWAP_MAX_LEFTOVER = 2000   # match the build's salary floor; still a preference
+                           # rather than a filter, since locks can strand money.
+                           # Moved with the build's floor when that was measured
+                           # on 18 slates and found to cost cashes for no tail —
+                           # this path was never tested separately, and leaving
+                           # it at 700 would have had late swap refusing rosters
+                           # on exactly the rule the build had just dropped.
+                           # Untested here in its own right: it gates a swap
+                           # that strands salary unless the gain is large, and
+                           # at 2,000 it will gate far less often.
 SWAP_TOP_PER_POS = 14      # candidate breadth per position (keeps combos sane)
 SWAP_MAX_PER_TEAM = 3      # same team-correlation cap the build uses
 

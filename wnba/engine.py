@@ -36,9 +36,29 @@ MIN_SALARY = 3000  # DK WNBA min; used so partial lineups stay completable
 # The earlier hold-out run that justified deleting this measured it at 700 as a
 # candidate-diversity cost and could not see the cliff, because at 12 entries on
 # 23 slates almost nothing lands past $800 anyway. The field data can see it.
-# Set high enough to bind only past the cliff, so it is a junk filter and not a
-# diversity tax.
-MAX_LEFTOVER = 800
+#
+# ...and then 800 was measured on OUR OWN BUILDS and it was wrong. 18 slates,
+# 8 seeds, 309 entries, ablated one change at a time against the commit before
+# it: turning this floor off restores +1.18 of mean on 15 of 18 slates and +5.1
+# cashes on 13 of 18, and that is the entire drift between the two commits (the
+# all-reverted arm reproduces the old one on 18 of 18 slates, every seed, so
+# nothing else is hiding in it). It bought NOTHING for the cost: top-1% sits flat
+# at 5.5-5.9 from off all the way down to a $400 floor, while mean, top-5% and
+# cashes fall monotonically the tighter it gets.
+#
+# The mistake was turning a fact about WINNERS into a constraint on a BUILDER
+# without checking whether the builder had the problem. It doesn't. Unconstrained
+# our builds already leave $700 or less 78% of the time and more than $1,200 only
+# 5.5% of the time, so a floor at 800 binds on the ~17% of lineups where spending
+# down is what costs the cashes. On 9-17 the free build left a median of $700 and
+# the floor made it spend anyway — that one slate is -6.8 on its own.
+#
+# 2,000 is where both readings agree: no roster in 71,936 that left more than
+# $2,000 reached the top 1%, and forbidding it is measured identical to no floor
+# at all (mean 175.4 either way, 105.0 cashes against 104.8, top-1% 5.6 both).
+# So it stays as a junk filter that catches a starved or broken build, at a
+# measured cost of nothing, and it is no longer a diversity tax.
+MAX_LEFTOVER = 2000
 
 # DraftKings Classic requires players from at least two different games, so a
 # roster can never be more than ROSTER_SIZE-1 from one game. This is a contest
