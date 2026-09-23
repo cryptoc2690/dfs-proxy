@@ -1051,6 +1051,12 @@ def run_optimize(csv_text: str, options: dict) -> dict:
         # against 0.41% at $800-$1,000 and 0.00% past $2,000. One of 48 winners
         # left more than $1,000.
         max_leftover=_int(options.get("maxLeftover"), 800),
+        # The engine has always taken a seed; nothing ever passed it, so every
+        # build was seed 0 and "run it on eight seeds" quietly produced the same
+        # run eight times. An exponent test earlier this month was nearly read as
+        # a +$94 result on exactly that basis. A knob you cannot vary is a knob
+        # you cannot measure, so it is wired through — default unchanged.
+        seed=_int(options.get("seed"), 0),
         report=build_report,
     )
 
