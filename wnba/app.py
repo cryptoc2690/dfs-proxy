@@ -1630,29 +1630,78 @@ def _aggression(deficit_weighted):
 
 # DK writes a roster as "G Name G Name F Name F Name F Name UTIL Name", with
 # LOCKED standing in for a player whose game has not started. UTIL comes first in
-# the alternation so it is not matched as a bare U-less token.
-_STANDINGS_SLOT = re.compile(r"\s*(?:UTIL|G|F)\s+")
+# the alternation so it is not matched as a bare U-less token; the capture group
+# keeps the slot labels, which is the whole point — see _standings_names.
+_STANDINGS_SLOT = re.compile(r"\s*\b(UTIL|G|F)\s+")
 
 
-def _standings_names(cell):
+def _standings_names(cell, slots):
     """-> one entry per roster slot, in DK's slot order: the normalized name if
-    DK has revealed it, else None.
+    DK has revealed it, else None. None (not []) if the cell isn't in a layout
+    we recognise.
 
     Position is kept rather than the bare list of names, because it is what makes
     the comparison against an entries export usable slot by slot. And a revealed
     name is not merely newer information, it is FINAL: DK only reveals a player
     once their game has tipped, and a tipped slot can no longer be edited. So
     where the contest file has a name, that name is what is entered, full stop.
+
+    That licence is exactly why this refuses to guess. The old version threw the
+    slot labels away and kept whatever fell out of the split, so a layout it had
+    not anticipated still produced a plausible-looking list of six names — which
+    the caller then wrote into a roster. It did: on 2026-09-22 it moved a locked
+    F into a G slot, left that player in the lineup twice and took the roster to
+    $55,500. Nothing in the archive could have caught it, because no standings
+    export we have ever held contains a single LOCKED — every one was pulled
+    after its contest finished. So the labels are read and checked against the
+    slot order DK asked for, and anything else is "I don't know", not a guess.
     """
-    out = []
-    for part in _STANDINGS_SLOT.split(cell or ""):
-        part = part.strip()
-        if part:
-            out.append(None if part == "LOCKED" else normalize_name(part))
-    return out
+    parts = _STANDINGS_SLOT.split(cell or "")
+    # split on a capturing group -> [lead, label, name, label, name, ...]
+    if not parts or parts[0].strip():
+        return None                      # text before the first slot label
+    labels, names = parts[1::2], [p.strip() for p in parts[2::2]]
+    if len(labels) != len(names) or labels != list(slots):
+        return None                      # not the roster shape DK asked us for
+    return [None if n in ("", "LOCKED") else normalize_name(n) for n in names]
 
 
-def parse_contest_standings(text):
+def _standings_overwrite_problem(fixed, original, locked, slots, pool):
+    """Why the contest file's version of this roster can't be believed, or "".
+
+    Taking DK's word over the entries export is right — but only once we are sure
+    we read DK correctly, and a misread here rewrites a roster silently. So every
+    overwrite has to survive the things DK itself guarantees about a roster. This
+    is not defensive padding: the 2026-09-22 slate produced all four of these.
+    """
+    locked = {normalize_name(n) for n in locked}
+    for new, old in zip(fixed, original):
+        if normalize_name(new) == normalize_name(old):
+            continue
+        # A slot whose game has tipped cannot be edited — not by the user, not by
+        # DK. If the contest file appears to hold someone else there, then it is
+        # not this slot we are looking at and the whole row is misaligned.
+        if normalize_name(old) in locked:
+            return f"it has someone other than {old}, whose game has started"
+    names = [normalize_name(n) for n in fixed]
+    if len(set(names)) != len(names):
+        return "it puts the same player in two slots"
+    recs = [pool.get(n) for n in names]
+    for nm, rec in zip(fixed, recs):
+        if rec is None:
+            return f"{nm} is not in this slate's player pool"
+    for slot, rec, nm in zip(slots, recs, fixed):
+        if slot == "G" and not rec["guard"]:
+            return f"it puts {nm}, a forward, in a G slot"
+        if slot == "F" and rec["guard"]:
+            return f"it puts {nm}, a guard, in an F slot"
+    salary = sum(int(rec["salary"] or 0) for rec in recs)
+    if salary > SALARY_CAP:
+        return f"it costs ${salary:,}, over the ${SALARY_CAP:,} cap"
+    return ""
+
+
+def parse_contest_standings(text, slots=None):
     """Parse a DK contest-standings export.
 
     Two blocks share the file: the live leaderboard (Rank, EntryId, Points,
@@ -1667,6 +1716,7 @@ def parse_contest_standings(text):
     import csv as _csv
     import io
     rows = list(_csv.reader(io.StringIO((text or "").lstrip("﻿"))))
+    slots = list(slots or _LS_SLOTS)
     entries, own = [], {}
     for r in rows[1:]:
         if len(r) > 5 and r[0].strip().isdigit():
@@ -1679,8 +1729,13 @@ def parse_contest_standings(text):
                 # entries this is the live truth about what is entered — it is
                 # what DK holds right now, including a hand edit made after the
                 # entries file was exported. Kept so late swap can notice that
-                # the entries file it was given is out of date.
-                "revealed": _standings_names(r[5]),
+                # the entries file it was given is out of date. None means the
+                # cell was not in a layout we recognise.
+                "revealed": _standings_names(r[5], slots),
+                # Kept verbatim so an unrecognised layout can be shown rather
+                # than merely counted — this is the one thing that makes a
+                # format we have never seen diagnosable instead of a shrug.
+                "lineupCell": r[5].strip(),
             })
         # The player block lists each player once PER ROSTER SLOT (A'ja shows up
         # as F 57.2% and again as UTIL 1.0%), so true ownership is the sum across
@@ -2130,7 +2185,8 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
     # Optional contest standings: replaces the projection-based pace proxy with a
     # real leaderboard position, and gives actual contest ownership for the
     # players already revealed.
-    contest = parse_contest_standings(contest_text) if (contest_text or "").strip() else None
+    contest = (parse_contest_standings(contest_text, slots)
+               if (contest_text or "").strip() else None)
     field_finals = []
     my_rank = {}
     if contest and contest["entries"]:
@@ -2147,11 +2203,15 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
         # the two disagree — and the tool used to carry on against the roster it
         # built, silently, which is worse than useless once you have fixed a
         # lineup by hand. So compare them, and trust DK.
+        unreadable = []
         for e in entries:
             live = my_rank.get(e["entryId"])
             if not live:
                 continue
-            shown = live.get("revealed") or []
+            shown = live.get("revealed")
+            if shown is None:
+                unreadable.append(live)
+                continue                        # layout unknown — do not guess
             if len(shown) != len(e["names"]):
                 continue                        # shapes disagree — do not guess
             nice = lambda n: by_norm[n].name if n in by_norm else n
@@ -2162,6 +2222,18 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
                     fixed[i] = nice(n)
             if not swapped:
                 continue
+            # Believing DK is only safe once the row survives what DK itself
+            # guarantees. A roster that fails this is not news, it is a misread,
+            # and the entries file is the better of the two.
+            bad = _standings_overwrite_problem(
+                fixed, e["names"], e.get("locked") or [], slots, dk["pool"])
+            if bad:
+                stale.append(
+                    f"Entry {e['entryId']}: the contest file's roster can't be "
+                    f"right — {bad}. Leaving this lineup as your entries file "
+                    "has it. Re-download the contest file; if it says the same "
+                    "thing, the file needs looking at.")
+                continue
             e["names"] = fixed
             stale.append(
                 f"Entry {e['entryId']}: your DK entries file is out of date. DK "
@@ -2169,6 +2241,12 @@ def run_late_swap(csv_text, dk_text, contest_text=None, options=None):
                                     for old, new in swapped)
                 + ". Those games have already tipped, so DK's version is the one "
                   "that counts and late swap is using it.")
+        if unreadable:
+            stale.append(
+                f"Couldn't read the roster layout in the contest file for "
+                f"{len(unreadable)} of your entries, so it was only used for "
+                f"standing, not for what is entered. Expected "
+                f"{' '.join(slots)}; got: {unreadable[0]['lineupCell'][:160]!r}")
 
     # Cores carry over from the build — protected, not optimized away.
     core_names = _parse_names(options.get("cores"))
