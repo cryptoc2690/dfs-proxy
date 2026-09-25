@@ -705,7 +705,7 @@ def _dst_ok(players):
 
 def build_candidates(players, n, *, teams, split_targets=None, rng=None,
                      max_off_pool=None, cpt_pool=None, max_leftover=MAX_LEFTOVER,
-                     min_proj=MIN_PROJ, force=None):
+                     min_proj=MIN_PROJ, force=None, major_side=None):
     """Randomised construction aimed at the shapes the field under-builds."""
     rng = rng or random.Random(0)
     split_targets = split_targets or SPLIT_TARGETS
@@ -734,7 +734,11 @@ def build_candidates(players, n, *, teams, split_targets=None, rng=None,
         tries += 1
         want = _weighted_pick([s for s, _ in splits], [w for _, w in splits], rng)
         big, small = (int(x) for x in want.split("-"))
-        major = teams[rng.randrange(len(teams))]
+        # Which side carries the block is normally a coin flip per candidate —
+        # SIDE_CAP then balances the finished set at 50/50, which is neutral
+        # rather than contrarian. major_side pins it, and the only caller that
+        # pins it is the lottery.
+        major = major_side if major_side in teams else teams[rng.randrange(len(teams))]
         minor = [t for t in teams if t != major][0]
         need = {major: big, minor: small}
 
@@ -917,6 +921,43 @@ def rank(lineups, mat, bar, sims, dupes_idx, own_lean=None, dupe_scale=1.0,
 
 LOTTERY_MIN_N = 150     # only a full max-entry set can spare the tickets
 LOTTERY_TICKETS = 5     # lineups reserved for players nobody else reached
+
+
+def light_side(field_entries):
+    """-> the team the field loaded LESS often, or None if it cannot tell.
+
+    Counts the majority team of every field lineup that actually has one; 3-3
+    rosters have no side and are ignored. On ATL @ GB the field went GB 61.9% /
+    ATL 38.1% among lopsided lineups, and the winning roster was a 4-2 ATL.
+
+    The tool's own SIDE_CAP is 0.50 — neutral, and its note says so outright:
+    it does not bet against the field, it only stops an arm quietly betting
+    with it. This is the first place that changes, and only for the five
+    lottery lineups, because that is where the evidence is: the winner scored
+    7.09% on our own duplication-adjusted objective against 3.66% for the best
+    ticket we built, and it got there on expected dupes of 0.75 against 3.71
+    while projecting six points LESS. Same-side tickets are the crowd.
+
+    One slate. It is a judgement call on the five lineups already reserved for
+    judgement calls, not a finding, and it must not leak into the other 145.
+    """
+    sides = {}
+    for e in field_entries or ():
+        cpt, flex = e.get("cpt"), e.get("flex") or []
+        if cpt is None or len(flex) != ROSTER_SIZE - 1:
+            continue
+        cnt = {}
+        for pl in [cpt] + list(flex):
+            if pl is not None and pl.team:
+                cnt[pl.team] = cnt.get(pl.team, 0) + 1
+        if len(cnt) != 2:
+            continue
+        big, n_big = max(cnt.items(), key=lambda kv: kv[1])
+        if n_big * 2 > ROSTER_SIZE:            # 3-3 has no side
+            sides[big] = sides.get(big, 0) + 1
+    if len(sides) < 2:
+        return None
+    return min(sides, key=sides.get)
 
 
 def lottery_targets(final, pool_players, k=LOTTERY_TICKETS):

@@ -1250,6 +1250,11 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
             chosen, {p.dk_id: p for p in players if p.in_pool and p.proj > 0})
         got, stuck, tickets, tcache = [], [], [], {}
         seen = {lu.key() for lu in chosen}
+        # The block goes on the side the FIELD is light on. Everywhere else the
+        # tool is deliberately neutral (SIDE_CAP 0.50), which lands at 50/50
+        # while the field sits at 62/38 — overweight the light side by accident
+        # of neutrality rather than on purpose. These five are on purpose.
+        light = E.light_side(field) if field else None
         for want in take:
             # Built by the ORDINARY builder with one player seeded, the way a
             # core is seeded. Every normal rule still applies — split shape,
@@ -1260,9 +1265,16 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
             # freed, which honoured none of those rules and invented a spend
             # requirement showdown does not have.
             if want.dk_id not in tcache:
+                # Lopsided shapes only. A 3-3 has no side, so pinning the
+                # major side does nothing to it — and 3-3 is the shape the
+                # field builds MOST (34.5% here), so it is the opposite of a
+                # leverage play. The other 145 keep the normal shape mix.
                 tcache[want.dk_id] = E.build_candidates(
                     players, 600, teams=teams, cpt_pool=cpt_pool or None,
-                    force=want, **common)
+                    force=want, major_side=light,
+                    split_targets=({k: v for k, v in E.SPLIT_TARGETS.items()
+                                    if k != "3-3"} if light else None),
+                    **common)
             # `seen` grows as tickets are taken, so a player given a second
             # ticket gets a DIFFERENT roster rather than the same one twice.
             tc = [lu for lu in tcache[want.dk_id]
@@ -1304,6 +1316,9 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
             # queue behind them is on the same line.
             msg = (f"Lottery: {len(tickets)} lineup(s), one punt each, went to "
                    + show(got) + ".")
+            if light:
+                msg += (f" Built {light}-heavy — that is the side the field is "
+                        "lighter on.")
             msg += ((" Next in line if you drop one: " + show(leftover) + ".")
                     if leftover else
                     " Nobody else was missed, so dropping one just hands the "
