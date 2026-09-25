@@ -1243,28 +1243,65 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
     # about one arm. Showdown only, and only on a full max-entry set — below
     # 150 the entries are too few to spare five, and the pool is what the user
     # typed, so taking someone off the sheet is the control.
-    if (fmt == "showdown" and pool_names and len(chosen) >= E.LOTTERY_MIN_N
+    if (fmt == "showdown" and pool_names and n_mine and cands
+            and len(chosen) >= E.LOTTERY_MIN_N
             and o.get("lottery", "on") != "off"):
-        lotto, leftover, stuck = E.lottery(
+        take, leftover = E.lottery_targets(
             chosen, {p.dk_id: p for p in players if p.in_pool and p.proj > 0})
-        if lotto:
-            say("info", f"{len(lotto)} lottery ticket(s) — the last "
-                        f"{E.LOTTERY_TICKETS} lineups were rebuilt around "
-                        f"players no other entry reached: " + ", ".join(lotto))
+        lotto, stuck, tickets = [], [], []
+        seen = {lu.key() for lu in chosen}
+        for want in take:
+            # Built by the ORDINARY builder with one player seeded, the way a
+            # core is seeded. Every normal rule still applies — split shape,
+            # team counts, the pool, the captain pool, the salary rail — so a
+            # ticket is a normal lineup that happens to contain him, not a
+            # special case with its own physics. An earlier version swapped him
+            # into a finished roster and then greedily spent the salary he
+            # freed, which honoured none of those rules and invented a spend
+            # requirement showdown does not have.
+            tc = E.build_candidates(players, 600, teams=teams,
+                                    cpt_pool=cpt_pool or None, force=want,
+                                    **common)
+            tc = [lu for lu in tc
+                  if want.dk_id in lu.ids() and lu.key() not in seen]
+            if not tc:
+                stuck.append(want.name)
+                continue
+            M.rank(tc, mat, bar, sims, idx,
+                   own_lean=_f(o.get("ownLean"), M.OWN_LEAN),
+                   dupe_scale=dupe_scale, field_n=modelled) if bar else None
+            if not bar:
+                for lu in tc:
+                    sc = M.score_lineup(lu, mat, sims)
+                    d = M.estimated_dupes(lu, idx, scale=dupe_scale,
+                                          field_n=modelled)
+                    lu.metrics = {"mean": round(sum(sc) / sims, 2),
+                                  "dupes": round(d, 2)}
+                    lu.metrics["score"] = lu.metrics["mean"] / (1 + d)
+            best = max(tc, key=lambda l: l.metrics.get("score", 0.0))
+            seen.add(best.key())
+            tickets.append(best)
+            lotto.append(want.name)
+        if tickets:                      # spend our arm's weakest on them
+            chosen = chosen[:len(chosen) - len(tickets)] + tickets
+            say("info", f"{len(tickets)} lottery ticket(s) — the last "
+                        f"{len(tickets)} lineups were rebuilt around players "
+                        f"no other entry reached: " + ", ".join(lotto))
         # The useful half. There are only five tickets, so a bigger pool leaves
         # names over — and those are exactly the ones to prune, because taking
         # them off the sheet hands their slots to somebody who can use them.
         if leftover:
-            say("warn", f"No entry reached these and there were no tickets "
-                        f"left: " + ", ".join(leftover)
+            say("warn", "No entry reached these and there were no tickets "
+                        "left: " + ", ".join(leftover)
                         + f". Only {E.LOTTERY_TICKETS} lottery lineups exist, "
                           "and the most expensive missed players got them. "
                           "Take these off your pool and the next build spends "
                           "those slots on somebody else.")
         if stuck:
-            say("warn", "No legal swap could fit " + ", ".join(stuck)
-                        + " into a lottery lineup — salary, or DK's two-team "
-                          "rule.")
+            say("warn", "No legal lineup could be built around "
+                        + ", ".join(stuck)
+                        + " under the normal rules — salary, the split shapes, "
+                          "or your pool.")
 
     # The caps are enforced per arm, so the number that matters — what lands in
     # the uploaded file across both arms and the top-up — is checked HERE, once,

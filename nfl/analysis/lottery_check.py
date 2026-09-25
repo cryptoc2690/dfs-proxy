@@ -2,10 +2,9 @@
 
 ATL @ GB, 150 entries. The tool returned 0 of 900 roster spots for Austin Hooper
 and the winning lineup had him. Build with the tickets off and on, then check
-four things: coverage, cost, ONE punt per ticket, and that each ticket is the
-best lineup that holds its punt rather than a weak lineup with a punt dropped
-in. Legality is re-checked on the output because lottery() edits chosen
-rosters rather than building new ones.
+five things: coverage, cost, ONE punt per ticket, that every ticket still obeys
+the ordinary construction rules (legal split shape, salary rail, both teams),
+and legality on the output.
 
 The pool carries three extra dead names on purpose, so the more-missed-than-
 tickets path runs and the leftover report is seen.
@@ -120,3 +119,20 @@ for lu in new_r["lineups"][-5:]:
           + ", ".join(pl["name"] for pl in lu["players"]))
 print(f"\nleftover salary on tickets: "
       f"{[50000 - lu['salary'] for lu in new_r['lineups'][-5:]]}")
+
+
+# Every normal rule still applies to a ticket: it is an ordinary lineup with one
+# player seeded, so the split shapes and the team cap must hold, and there must
+# be NO spend requirement beyond the ordinary $5,000 rail.
+import collections as _c
+print("\nticket shapes and leftover:")
+for lu in new_r["lineups"][-5:]:
+    tm = _c.Counter(pl["team"] for pl in lu["players"])
+    print(f"  {'-'.join(str(v) for v in sorted(tm.values(), reverse=True))}"
+          f"  ${lu['salary']:>6,}  left ${50000 - lu['salary']:>5,}  "
+          f"proj {lu['proj']:>5.1f}")
+shapes = set()
+for lu in new_r["lineups"][-5:]:
+    tm = _c.Counter(pl["team"] for pl in lu["players"])
+    shapes.add(tuple(sorted(tm.values(), reverse=True)))
+print(f"shapes seen: {sorted(shapes)}  (5-1 / 4-2 / 3-3 are the legal ones)")
