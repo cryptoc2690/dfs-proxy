@@ -1,13 +1,13 @@
 """Do the lottery tickets reach the players the set missed?
 
 ATL @ GB, 150 entries. The tool returned 0 of 900 roster spots for Austin Hooper
-and the winning lineup had him. Build with the tickets off and on, then check
-five things: coverage, cost, ONE punt per ticket, that every ticket still obeys
-the ordinary construction rules (legal split shape, salary rail, both teams),
-and legality on the output.
+and the winning lineup was a 4-2 that had him. Build with the tickets off and
+on, then check five things: coverage, cost, ONE punt per ticket, that every
+ticket still obeys the ordinary construction rules (legal split shape, salary
+rail, both teams), and legality on the output.
 
 The pool carries three extra dead names on purpose, so the more-missed-than-
-tickets path runs and the leftover report is seen.
+tickets path runs and the queue behind the tickets is seen.
 """
 import sys, collections
 # Resolve the package from this file, not from an absolute scratchpad path.
@@ -77,8 +77,7 @@ print(f"\nmean lineup projection: {pj(base_r):.2f} -> {pj(new_r):.2f} "
       f"({pj(new_r) - pj(base_r):+.2f})")
 print(f"lineups: {len(base_r['lineups'])} -> {len(new_r['lineups'])}")
 for note in new_r.get("notes", []):
-    if "lottery" in note["text"] or "no tickets" in note["text"] or "No entry reached" in note["text"] or "No legal swap" in note["text"]:
-        print(f"note[{note['type']}]: {note['text']}")
+    print(f'note[{note["type"]}]: {note["text"]}')
 
 # ---------------------------------------------------------------------------
 # Legality. _cover_repair EDITS a chosen roster in place, so every rule DK

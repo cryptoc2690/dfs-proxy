@@ -920,7 +920,7 @@ LOTTERY_TICKETS = 5     # lineups reserved for players nobody else reached
 
 
 def lottery_targets(final, pool_players, k=LOTTERY_TICKETS):
-    """-> (players to give a ticket, names left over with none to give).
+    """-> (players to give a ticket, players left over with none to give).
 
     Showdown is one game and about 28 live bodies, and what wins it is routinely
     a cheap player nobody owned. But the builder weights its flex fill on
@@ -958,7 +958,7 @@ def lottery_targets(final, pool_players, k=LOTTERY_TICKETS):
     if not missed:
         return [], []                  # everyone already has a lineup
     missed.sort(key=lambda p: (-p.salary, -p.proj, p.name))
-    return missed[:k], [p.name for p in missed[k:]]
+    return missed[:k], missed[k:]
 
 
 def select(lineups, n, *, captain_cap=None,

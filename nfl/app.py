@@ -1248,7 +1248,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
             and o.get("lottery", "on") != "off"):
         take, leftover = E.lottery_targets(
             chosen, {p.dk_id: p for p in players if p.in_pool and p.proj > 0})
-        lotto, stuck, tickets = [], [], []
+        got, stuck, tickets = [], [], []
         seen = {lu.key() for lu in chosen}
         for want in take:
             # Built by the ORDINARY builder with one player seeded, the way a
@@ -1281,22 +1281,25 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
             best = max(tc, key=lambda l: l.metrics.get("score", 0.0))
             seen.add(best.key())
             tickets.append(best)
-            lotto.append(want.name)
+            got.append(want)
+        show = lambda ps: ", ".join(f"{q.name} ${q.salary:,}" for q in ps)
         if tickets:                      # spend our arm's weakest on them
             chosen = chosen[:len(chosen) - len(tickets)] + tickets
-            say("info", f"{len(tickets)} lottery ticket(s) — the last "
-                        f"{len(tickets)} lineups were rebuilt around players "
-                        f"no other entry reached: " + ", ".join(lotto))
-        # The useful half. There are only five tickets, so a bigger pool leaves
-        # names over — and those are exactly the ones to prune, because taking
-        # them off the sheet hands their slots to somebody who can use them.
-        if leftover:
-            say("warn", "No entry reached these and there were no tickets "
-                        "left: " + ", ".join(leftover)
-                        + f". Only {E.LOTTERY_TICKETS} lottery lineups exist, "
-                          "and the most expensive missed players got them. "
-                          "Take these off your pool and the next build spends "
-                          "those slots on somebody else.")
+            # WHO GOT ONE is the line that matters. These are the players the
+            # other 145 entries never touched, so this is the first and only
+            # place they appear. If one of them is somebody you looked at and
+            # passed on, the fix is to take him off the pool — which is why the
+            # queue behind them is on the same line.
+            msg = (f"Lottery: {len(tickets)} lineup(s), one punt each, went to "
+                   + show(got) + ".")
+            msg += ((" Next in line if you drop one: " + show(leftover) + ".")
+                    if leftover else
+                    " Nobody else was missed, so dropping one just hands the "
+                    "lineup back to the normal build.")
+            say("info", msg)
+        elif leftover:
+            say("info", "No lottery ticket could be placed. Missed by every "
+                        "entry: " + show(leftover) + ".")
         if stuck:
             say("warn", "No legal lineup could be built around "
                         + ", ".join(stuck)
