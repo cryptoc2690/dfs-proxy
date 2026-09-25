@@ -921,9 +921,9 @@ def lottery(final, pool_players, k=LOTTERY_TICKETS):
     so more entries only multiply the same answer.
 
     So take the k lineups we would have been least sorry to lose and rebuild
-    them around whoever was missed, cheapest swap first. Every other lineup in
-    the set is untouched, which is the point: this is a fixed, bounded bet on
-    the tail rather than a tax on the whole portfolio.
+    them around whoever was missed, one player each, cheapest swap first. Every
+    other lineup in the set is untouched, which is the point: this is a fixed,
+    bounded bet on the tail rather than a tax on the whole portfolio.
 
     Ships on judgement, not measurement. The cost is real and small and the
     benefit is a tail event no archive we will ever hold can separate from
@@ -934,46 +934,84 @@ def lottery(final, pool_players, k=LOTTERY_TICKETS):
     game a four-sigma event; and zero is not a number a 900-slot portfolio
     should return for a player the user deliberately typed in.
 
-    Returns the names given a ticket, for the build note.
+    ONE player per ticket. Two punts in one roster is not a lottery ticket, it
+    is a lineup that needs two miracles, and it also hides a missed player
+    behind another one.
+
+    So with more missed players than tickets, the expensive ones go first and
+    the rest are NAMED rather than quietly squeezed in. A $200 body projecting
+    0.44 cannot win a slate; a $7,400 back who got squeezed out on price can.
+    Knowing who was left over is the useful half — take them off the sheet and
+    the next build spends those tickets on somebody who can do something.
+
+    -> (names given a ticket, names left over, names nothing legal could hold)
     """
     if not final or not pool_players:
-        return []
+        return [], [], []
     used = {p.dk_id for lu in final for p in lu.players}
     missed = [p for pid, p in pool_players.items() if pid not in used]
     if not missed:
-        return []                      # everyone already has a lineup
-    # Richest first: if there are more missed players than tickets, the ones
-    # that can actually swing a slate go in before the $200 bodies.
-    missed.sort(key=lambda p: -p.proj)
+        return [], [], []              # everyone already has a lineup
+    missed.sort(key=lambda p: (-p.salary, -p.proj, p.name))
     tickets = final[-k:]
-    if not tickets:
-        return []
-    # Spread them round-robin, so with 8 missed and 5 tickets three lineups
-    # carry two punts rather than three players going uncovered.
-    plan = {id(lu): [] for lu in tickets}
-    for i, p in enumerate(missed):
-        plan[id(tickets[i % len(tickets)])].append(p)
+    take, over = missed[:len(tickets)], missed[len(tickets):]
 
-    placed = []
-    for lu in tickets:
-        for want in plan[id(lu)]:
-            best = None                            # (proj lost, outgoing)
-            for out in lu.flex:
-                if out.dk_id in {q.dk_id for q in placed}:
-                    continue                       # do not undo a ticket
-                if want.salary - out.salary > SALARY_CAP - lu.salary:
+    placed, stuck = [], []
+    for lu, want in zip(tickets, take):
+        best = None                                # (proj lost, outgoing)
+        for out in lu.flex:
+            if want.salary - out.salary > SALARY_CAP - lu.salary:
+                continue
+            rest = [q for q in lu.players if q.dk_id != out.dk_id]
+            if len({q.team for q in rest + [want] if q.team}) < 2:
+                continue                           # DK needs both teams
+            cost = out.proj - want.proj
+            if best is None or cost < best[0]:
+                best = (cost, out)
+        if best is None:
+            stuck.append(want.name)                # no legal swap in this one
+            continue
+        lu.flex[lu.flex.index(best[1])] = want
+        _spend_up(lu, pool_players, keep=want.dk_id)
+        placed.append(want.name)
+    return placed, [p.name for p in over], stuck
+
+
+def _spend_up(lu, pool_players, keep):
+    """Rebuild the rest of the roster around the punt, best-first.
+
+    A punt is cheap, so dropping one in leaves money on the table — and a
+    lottery ticket carrying an unspent $4,000 is just a worse lineup with a
+    punt in it. The point is ONE punt and the best five players that can be
+    afforded alongside him, which is the whole reason the ticket is worth a
+    slot at all.
+
+    Greedy and repeated: take the single upgrade that gains the most projection
+    and is legal, then look again, until nothing is left. The punt itself and
+    the captain never move — the captain was chosen on merit and swapping it
+    would change the lineup's identity rather than improve it.
+    """
+    while True:
+        here = {p.dk_id for p in lu.players}
+        best = None                                # (gain, slot index, player)
+        for i, out in enumerate(lu.flex):
+            if out.dk_id == keep:
+                continue
+            room = SALARY_CAP - lu.salary + out.salary
+            for cand in pool_players.values():
+                if cand.dk_id in here or cand.salary > room:
+                    continue
+                gain = cand.proj - out.proj
+                if gain <= 0:
                     continue
                 rest = [q for q in lu.players if q.dk_id != out.dk_id]
-                if len({q.team for q in rest + [want] if q.team}) < 2:
-                    continue                       # DK needs both teams
-                cost = out.proj - want.proj
-                if best is None or cost < best[0]:
-                    best = (cost, out)
-            if best is None:
-                continue                           # nothing legal in this one
-            lu.flex[lu.flex.index(best[1])] = want
-            placed.append(want)
-    return [p.name for p in placed]
+                if len({q.team for q in rest + [cand] if q.team}) < 2:
+                    continue
+                if best is None or gain > best[0]:
+                    best = (gain, i, cand)
+        if best is None:
+            return
+        lu.flex[best[1]] = best[2]
 
 
 def select(lineups, n, *, captain_cap=None,

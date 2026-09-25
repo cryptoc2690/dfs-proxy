@@ -1,8 +1,14 @@
 """Do the lottery tickets reach the players the set missed?
 
 ATL @ GB, 150 entries. The tool returned 0 of 900 roster spots for Austin Hooper
-and the winning lineup had him. Build with the tickets off and on, compare
-coverage and cost, and re-check legality — lottery() EDITS chosen rosters.
+and the winning lineup had him. Build with the tickets off and on, then check
+four things: coverage, cost, ONE punt per ticket, and that each ticket is the
+best lineup that holds its punt rather than a weak lineup with a punt dropped
+in. Legality is re-checked on the output because lottery() edits chosen
+rosters rather than building new ones.
+
+The pool carries three extra dead names on purpose, so the more-missed-than-
+tickets path runs and the leftover report is seen.
 """
 import sys, collections
 # Resolve the package from this file, not from an absolute scratchpad path.
@@ -31,7 +37,7 @@ Drake London, Matthew Golden, MarShawn Lloyd, Tucker Kraft, Kyle Pitts Sr.,
 Chris Brooks, Trey Smack, Packers, Nick Folk, Brian Robinson Jr.,
 Kaleb Johnson, Falcons, Jahan Dotson, Jonnu Smith, Skyy Moore,
 Olamide Zaccheaus, Austin Hooper, Bo Melton, J. Michael Sturdivant,
-Charlie Woerner, Mark Redman"""
+Charlie Woerner, Mark Redman, Chris Blair, Nick Muse, Josh Whyle"""
 
 
 def run(on):
@@ -72,8 +78,8 @@ print(f"\nmean lineup projection: {pj(base_r):.2f} -> {pj(new_r):.2f} "
       f"({pj(new_r) - pj(base_r):+.2f})")
 print(f"lineups: {len(base_r['lineups'])} -> {len(new_r['lineups'])}")
 for note in new_r.get("notes", []):
-    if "lottery" in note["text"]:
-        print(f"note: {note['text']}")
+    if "lottery" in note["text"] or "no tickets" in note["text"] or "No entry reached" in note["text"] or "No legal swap" in note["text"]:
+        print(f"note[{note['type']}]: {note['text']}")
 
 # ---------------------------------------------------------------------------
 # Legality. _cover_repair EDITS a chosen roster in place, so every rule DK
@@ -95,3 +101,22 @@ print(f"\nlegality over {len(new_r['lineups'])} rosters: "
       + ("ALL LEGAL" if not bad else f"{len(bad)} BROKEN {bad[:5]}"))
 mx = max(l["salary"] for l in new_r["lineups"])
 print(f"max salary {mx:,}")
+
+
+# One player per ticket. Two punts in one roster is two miracles, not a ticket.
+tail = new_r["lineups"][-5:]
+newly = set(za) ^ set(zb)
+per = [sum(1 for pl in lu["players"] if pl["name"] in newly) for lu in tail]
+print(f"\nmissed players per lottery lineup: {per}  "
+      + ("OK" if max(per) <= 1 else "MORE THAN ONE IN A LINEUP"))
+
+
+# The five tickets should be the BEST lineup that holds each punt, not a weak
+# lineup with a punt dropped in: salary spent, one punt each.
+print("\nthe five lottery lineups:")
+for lu in new_r["lineups"][-5:]:
+    punts = [pl["name"] for pl in lu["players"] if pl["name"] in newly]
+    print(f"  ${lu['salary']:>6,}  proj {lu['proj']:>6.1f}  punt {punts}  "
+          + ", ".join(pl["name"] for pl in lu["players"]))
+print(f"\nleftover salary on tickets: "
+      f"{[50000 - lu['salary'] for lu in new_r['lineups'][-5:]]}")

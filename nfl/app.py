@@ -1243,15 +1243,28 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
     # about one arm. Showdown only, and only on a full max-entry set — below
     # 150 the entries are too few to spare five, and the pool is what the user
     # typed, so taking someone off the sheet is the control.
-    lotto = []
     if (fmt == "showdown" and pool_names and len(chosen) >= E.LOTTERY_MIN_N
             and o.get("lottery", "on") != "off"):
-        lotto = E.lottery(chosen, {p.dk_id: p for p in players
-                                   if p.in_pool and p.proj > 0})
+        lotto, leftover, stuck = E.lottery(
+            chosen, {p.dk_id: p for p in players if p.in_pool and p.proj > 0})
         if lotto:
             say("info", f"{len(lotto)} lottery ticket(s) — the last "
                         f"{E.LOTTERY_TICKETS} lineups were rebuilt around "
                         f"players no other entry reached: " + ", ".join(lotto))
+        # The useful half. There are only five tickets, so a bigger pool leaves
+        # names over — and those are exactly the ones to prune, because taking
+        # them off the sheet hands their slots to somebody who can use them.
+        if leftover:
+            say("warn", f"No entry reached these and there were no tickets "
+                        f"left: " + ", ".join(leftover)
+                        + f". Only {E.LOTTERY_TICKETS} lottery lineups exist, "
+                          "and the most expensive missed players got them. "
+                          "Take these off your pool and the next build spends "
+                          "those slots on somebody else.")
+        if stuck:
+            say("warn", "No legal swap could fit " + ", ".join(stuck)
+                        + " into a lottery lineup — salary, or DK's two-team "
+                          "rule.")
 
     # The caps are enforced per arm, so the number that matters — what lands in
     # the uploaded file across both arms and the top-up — is checked HERE, once,
