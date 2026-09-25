@@ -1,7 +1,8 @@
-"""Does the pool floor actually reach Hooper on the slate that missed him?
+"""Do the lottery tickets reach the players the set missed?
 
-ATL @ GB, 150 entries. Before this change the tool returned 0 of 900 slots for
-Austin Hooper and the winning lineup had him. Run both ways and compare.
+ATL @ GB, 150 entries. The tool returned 0 of 900 roster spots for Austin Hooper
+and the winning lineup had him. Build with the tickets off and on, compare
+coverage and cost, and re-check legality — lottery() EDITS chosen rosters.
 """
 import sys, collections
 # Resolve the package from this file, not from an absolute scratchpad path.
@@ -33,21 +34,21 @@ Olamide Zaccheaus, Austin Hooper, Bo Melton, J. Michael Sturdivant,
 Charlie Woerner, Mark Redman"""
 
 
-def run(floor):
-    E.POOL_FLOOR = floor
+def run(on):
     r = app.run_build(PROJ, FIELD, "", {"n": 150, "format": "showdown",
-                                        "pool": POOL, "maxOffPool": 0})
+                                        "pool": POOL, "maxOffPool": 0,
+                                        "lottery": "on" if on else "off"})
     if r.get("error"):
         raise SystemExit(r["error"])
-    flex = collections.Counter()
+    seen = collections.Counter()
     for lu in r["lineups"]:
-        for p in lu["players"][1:]:
-            flex[p["name"]] += 1
-    return r, flex
+        for p in lu["players"]:          # any slot counts as covered now
+            seen[p["name"]] += 1
+    return r, seen
 
 
-base_r, base = run(0)
-new_r, new = run(2)
+base_r, base = run(False)
+new_r, new = run(True)
 
 names = sorted(set(base) | set(new))
 typed = [n.strip() for n in POOL.replace("\n", " ").split(",") if n.strip()]
@@ -63,7 +64,7 @@ print(f"\n{moved} players changed exposure")
 
 zb = [n for n in typed if base.get(n, 0) == 0]
 za = [n for n in typed if new.get(n, 0) == 0]
-print(f"typed-pool players at ZERO flex spots: before {len(zb)} {zb}")
+print(f"typed-pool players at ZERO roster spots: before {len(zb)} {zb}")
 print(f"                                        after {len(za)} {za}")
 
 pj = lambda r: sum(l["proj"] for l in r["lineups"]) / len(r["lineups"])
@@ -71,7 +72,7 @@ print(f"\nmean lineup projection: {pj(base_r):.2f} -> {pj(new_r):.2f} "
       f"({pj(new_r) - pj(base_r):+.2f})")
 print(f"lineups: {len(base_r['lineups'])} -> {len(new_r['lineups'])}")
 for note in new_r.get("notes", []):
-    if "pool player" in note["text"] or "floor" in note["text"]:
+    if "lottery" in note["text"]:
         print(f"note: {note['text']}")
 
 # ---------------------------------------------------------------------------

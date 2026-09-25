@@ -901,13 +901,84 @@ def rank(lineups, mat, bar, sims, dupes_idx, own_lean=None, dupe_scale=1.0,
     return lineups
 
 
-POOL_FLOOR = 2          # flex spots every typed-pool player is guaranteed
+LOTTERY_MIN_N = 150     # only a full max-entry set can spare the tickets
+LOTTERY_TICKETS = 5     # lineups reserved for players nobody else reached
+
+
+def lottery(final, pool_players, k=LOTTERY_TICKETS):
+    """Spend the last k of our own lineups on players the other n-k never used.
+
+    Showdown is one game and about 28 live bodies, and what wins it is routinely
+    a cheap player nobody owned. But the builder weights its flex fill on
+    projection, so a player priced above his projection's tier is drawn into
+    none of four thousand candidates and appears in exactly zero of 900 roster
+    spots. On ATL @ GB that was Austin Hooper — $1,600 for 1.11, above the $200
+    and $600 salary punts and below the $2,000 and $3,000 real ones, so no
+    lineup in the search ever wanted him — and the winning roster had him.
+    MarShawn Lloyd went zero the same way: Kaleb Johnson projects 7.02 at
+    $4,000 against his 7.03 at $7,400. Exposure tracks distance from the
+    price/projection frontier and past some distance it snaps to exactly zero,
+    so more entries only multiply the same answer.
+
+    So take the k lineups we would have been least sorry to lose and rebuild
+    them around whoever was missed, cheapest swap first. Every other lineup in
+    the set is untouched, which is the point: this is a fixed, bounded bet on
+    the tail rather than a tax on the whole portfolio.
+
+    Ships on judgement, not measurement. The cost is real and small and the
+    benefit is a tail event no archive we will ever hold can separate from
+    noise. The argument is structural: 70% of showdown lineups carry a dupe, so
+    being different is the only edge on offer; a symmetric standard deviation
+    cannot represent an outcome that is bimodal — near zero, or a touchdown,
+    and Hooper's SD of 2.18 around a mean of 1.11 makes his realistic scoring
+    game a four-sigma event; and zero is not a number a 900-slot portfolio
+    should return for a player the user deliberately typed in.
+
+    Returns the names given a ticket, for the build note.
+    """
+    if not final or not pool_players:
+        return []
+    used = {p.dk_id for lu in final for p in lu.players}
+    missed = [p for pid, p in pool_players.items() if pid not in used]
+    if not missed:
+        return []                      # everyone already has a lineup
+    # Richest first: if there are more missed players than tickets, the ones
+    # that can actually swing a slate go in before the $200 bodies.
+    missed.sort(key=lambda p: -p.proj)
+    tickets = final[-k:]
+    if not tickets:
+        return []
+    # Spread them round-robin, so with 8 missed and 5 tickets three lineups
+    # carry two punts rather than three players going uncovered.
+    plan = {id(lu): [] for lu in tickets}
+    for i, p in enumerate(missed):
+        plan[id(tickets[i % len(tickets)])].append(p)
+
+    placed = []
+    for lu in tickets:
+        for want in plan[id(lu)]:
+            best = None                            # (proj lost, outgoing)
+            for out in lu.flex:
+                if out.dk_id in {q.dk_id for q in placed}:
+                    continue                       # do not undo a ticket
+                if want.salary - out.salary > SALARY_CAP - lu.salary:
+                    continue
+                rest = [q for q in lu.players if q.dk_id != out.dk_id]
+                if len({q.team for q in rest + [want] if q.team}) < 2:
+                    continue                       # DK needs both teams
+                cost = out.proj - want.proj
+                if best is None or cost < best[0]:
+                    best = (cost, out)
+            if best is None:
+                continue                           # nothing legal in this one
+            lu.flex[lu.flex.index(best[1])] = want
+            placed.append(want)
+    return [p.name for p in placed]
 
 
 def select(lineups, n, *, captain_cap=None,
            player_cap=None, player_caps=None, max_overlap=None, side_cap=None,
-           split_targets=None, core_floors=None, prior=None, kdst_cap=None,
-           pool_floors=None, pool_players=None, short=None):
+           split_targets=None, core_floors=None, prior=None, kdst_cap=None):
     """Pick the final N under coverage rules rather than diversification ones.
 
     150 showdown entries are worth roughly two independent bets — mean pairwise
@@ -1038,24 +1109,9 @@ def select(lineups, n, *, captain_cap=None,
     quota = {}
     if split_targets:
         quota = {k: int(round(v * n)) for k, v in split_targets.items()}
-    # A floor above a cap is a contradiction: the cap is a risk control the user
-    # typed on purpose, the floor is a coverage preference, so the cap wins and
-    # the clamp is reported rather than silently applied.
-    pool_floors = dict(pool_floors or {})
-    for pid in list(pool_floors):
-        capped = (player_caps or {}).get(pid)
-        if capped is not None and pool_floors[pid] > capped:
-            if short is not None:
-                short.append(("clamped", pid, pool_floors[pid], capped))
-            pool_floors[pid] = capped
     chosen, sets = [], []
     cross = max_overlap + 1
     cpt_ct, ply_used, split_ct, side_used, split_side_ct = {}, {}, {}, {}, {}
-    # Flex appearances counted separately from ply_used, which counts a player
-    # whichever slot he fills. The pool floor is a FLEX floor: a captain spot is
-    # a far bigger claim than coverage, and the captain cap already spreads that
-    # decision on its own.
-    flex_used = {}
     kd_used = [0]
     prior_sets = [set(lu.overlap_ids()) for lu in prior]
     for lu in prior:
@@ -1067,8 +1123,6 @@ def select(lineups, n, *, captain_cap=None,
             side_used[s] = side_used.get(s, 0) + 1
         for p in lu.players:
             ply_used[p.dk_id] = ply_used.get(p.dk_id, 0) + 1
-        for p in lu.flex:
-            flex_used[p.dk_id] = flex_used.get(p.dk_id, 0) + 1
 
     def take(lu):
         chosen.append(lu)
@@ -1084,8 +1138,6 @@ def select(lineups, n, *, captain_cap=None,
             split_side_ct[k] = split_side_ct.get(k, 0) + 1
         for p in lu.players:
             ply_used[p.dk_id] = ply_used.get(p.dk_id, 0) + 1
-        for p in lu.flex:
-            flex_used[p.dk_id] = flex_used.get(p.dk_id, 0) + 1
 
     def ok(lu, overlap, honour_side=True):
         if cpt_ct.get(lu.cpt.dk_id, 0) >= cap_ct:
@@ -1110,14 +1162,13 @@ def select(lineups, n, *, captain_cap=None,
     taken = set()
 
     def pass_over(overlap, want_split=None, limit=None, need=None, floor=None,
-                  honour_side=True, want_side=None, flex_only=False):
+                  honour_side=True, want_side=None):
         counter = split_side_ct if want_side else split_ct
         ckey = (want_split, want_side) if want_side else want_split
-        seen = flex_used if flex_only else ply_used
         for lu in lineups:
             if len(chosen) >= n or (limit is not None and counter.get(ckey, 0) >= limit):
                 return
-            if floor is not None and seen.get(need, 0) >= floor:
+            if floor is not None and ply_used.get(need, 0) >= floor:
                 return
             if id(lu) in taken:
                 continue
@@ -1125,10 +1176,8 @@ def select(lineups, n, *, captain_cap=None,
                 continue
             if want_side and lu.major_side() != want_side:
                 continue
-            if need is not None:
-                where = [p.dk_id for p in lu.flex] if flex_only else lu.ids()
-                if need not in where:
-                    continue
+            if need is not None and need not in lu.ids():
+                continue
             if ok(lu, overlap, honour_side):
                 take(lu)
                 taken.add(id(lu))
@@ -1142,38 +1191,6 @@ def select(lineups, n, *, captain_cap=None,
     # other pass, so the lean it allows is only ever the lean the cores force.
     for cid, floor in (core_floors or {}).items():
         pass_over(max_overlap, need=cid, floor=floor, honour_side=False)
-    # Pool coverage. Every player the sharp TYPED into the pool appears in at
-    # least POOL_FLOOR flex spots. Everyone reaches 1 before anyone reaches 2,
-    # so a board too tight for full coverage spends what it has on breadth
-    # rather than on whoever the sort order happened to reach first.
-    #
-    # This is coverage, not conviction: it makes no claim that the player is
-    # good and never touches the projection. On ATL@GB the tool returned 0 of
-    # 900 slots for Austin Hooper and the winning lineup had him — not a close
-    # call lost 150 times, but a player priced above the salary punts ($200
-    # Redman, $600 Woerner) and below the real ones ($2,000 Zaccheaus, $3,000
-    # Dotson), so no lineup in the search ever wanted him. MarShawn Lloyd went
-    # 0 for the same reason: Kaleb Johnson projects 7.02 at $4,000 against his
-    # 7.03 at $7,400. Exposure tracks distance from the price/projection
-    # frontier and past some distance it snaps to exactly zero, and more entries
-    # only multiply the same answer.
-    #
-    # Ships on judgement, not measurement, and the code should say so. The cost
-    # is real and small — a forced lineup is a slightly worse lineup, 12 of 150
-    # entries touched on that slate. The benefit is a tail event that no archive
-    # we will ever hold can separate from noise: the 2.5%-owned punt catches a
-    # touchdown and you have one. The argument is structural. Showdown is one
-    # game and 28 bodies, 70% of showdown lineups carry a dupe so being
-    # different is the only edge there is, a symmetric standard deviation cannot
-    # represent an outcome that is bimodal (near zero, or a touchdown — Hooper's
-    # SD of 2.18 around a mean of 1.11 makes his realistic scoring game a
-    # four-sigma event), and zero is not a number a 900-slot portfolio should
-    # return for a player the user deliberately typed in.
-    for want in range(1, (max(pool_floors.values()) if pool_floors else 0) + 1):
-        for pid, floor in pool_floors.items():
-            if floor >= want:
-                pass_over(max_overlap, need=pid, floor=want, honour_side=False,
-                          flex_only=True)
     # Shape quotas, each lopsided shape split evenly between the two teams.
     #
     # Doing this INSIDE the shape quota rather than as a blanket cap is what
@@ -1217,14 +1234,6 @@ def select(lineups, n, *, captain_cap=None,
     for cid, floor in (core_floors or {}).items():    # still short: overlap relaxed
         if ply_used.get(cid, 0) < floor:
             pass_over(ROSTER_SIZE, need=cid, floor=floor, honour_side=False)
-    # Same last resort for pool coverage, and for the same reason: a floor that
-    # fails quietly is worse than no floor. Legality is never relaxed here —
-    # only the near-duplicate rail, which is a preference.
-    for want in range(1, (max(pool_floors.values()) if pool_floors else 0) + 1):
-        for pid, floor in pool_floors.items():
-            if floor >= want and flex_used.get(pid, 0) < want:
-                pass_over(ROSTER_SIZE, need=pid, floor=want, honour_side=False,
-                          flex_only=True)
 
     # Still short. Relax the board-wide player cap but HOLD the captain cap: the
     # captain is the highest-dispersion decision in the format, so it is the last
@@ -1256,81 +1265,7 @@ def select(lineups, n, *, captain_cap=None,
             fill(slack, True)
     fill(None, False)
 
-    final = chosen[:n]
-    if pool_floors:
-        _cover_repair(final, pool_floors, lineups, pool_players)
-    # The merit fills above can push a player past his floor, so count what
-    # actually shipped rather than what the coverage passes managed. Reported,
-    # never swallowed: the whole point of the floor is that zero is visible.
-    if pool_floors and short is not None:
-        got = {}
-        for lu in final:
-            for p in lu.flex:
-                got[p.dk_id] = got.get(p.dk_id, 0) + 1
-        for pid, floor in pool_floors.items():
-            if got.get(pid, 0) < floor:
-                short.append(("short", pid, got.get(pid, 0), floor))
-    return final
-
-
-def _cover_repair(final, pool_floors, candidates, pool_players=None):
-    """Last resort for pool coverage: edit a chosen roster to include a player.
-
-    Selection can only choose among candidates that EXIST, and the builder
-    weights the flex fill on projection — so a player priced above his
-    projection's tier is never drawn into a single one of four thousand
-    candidates. Austin Hooper at $1,600 for 1.11 was in none of them, which is
-    why the coverage passes above found nothing to pick and reported him short.
-
-    So do what you would do by hand: take the roster where swapping costs least
-    and make the one change. Legality is absolute — salary, six distinct
-    players, both teams present. What it will not do is rob Peter to pay Paul:
-    a swap that drops somebody else below THEIR floor is not a fix.
-    """
-    # Built from the PLAYER pool, not from the candidates. The first version
-    # read the candidates and silently skipped exactly the players this exists
-    # for — someone in no candidate lineup is someone with no entry here.
-    by_id = {}
-    for lu in candidates:
-        for p in lu.players:
-            by_id.setdefault(p.dk_id, p)
-    by_id.update(pool_players or {})
-    used = {}
-    for lu in final:
-        for p in lu.flex:
-            used[p.dk_id] = used.get(p.dk_id, 0) + 1
-
-    for pid, floor in sorted(pool_floors.items(),
-                             key=lambda kv: used.get(kv[0], 0)):
-        want = by_id.get(pid)
-        if want is None:
-            continue
-        while used.get(pid, 0) < floor:
-            best = None                       # (proj lost, lineup, outgoing)
-            for lu in final:
-                if pid in (p.dk_id for p in lu.players):
-                    continue
-                room = SALARY_CAP - lu.salary
-                for out in lu.flex:
-                    if want.salary - out.salary > room:
-                        continue
-                    # Do not starve another floor to feed this one.
-                    ofloor = pool_floors.get(out.dk_id, 0)
-                    if ofloor and used.get(out.dk_id, 0) <= ofloor:
-                        continue
-                    # DK needs both teams on a showdown roster.
-                    rest = [p for p in lu.players if p.dk_id != out.dk_id]
-                    if len({p.team for p in rest + [want] if p.team}) < 2:
-                        continue
-                    cost = out.proj - want.proj
-                    if best is None or cost < best[0]:
-                        best = (cost, lu, out)
-            if best is None:
-                break                          # nothing legal — reported upstream
-            _, lu, out = best
-            lu.flex[lu.flex.index(out)] = want
-            used[out.dk_id] = used.get(out.dk_id, 0) - 1
-            used[pid] = used.get(pid, 0) + 1
+    return chosen[:n]
 
 
 def vendor_arm(field_entries, n, *, captain_cap=None,
