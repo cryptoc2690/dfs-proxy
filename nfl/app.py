@@ -1075,6 +1075,16 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
     # --split 0 means what it reads as, and it used to raise here.
     floors = floors_total = None
     core_ids = [p.dk_id for p in players if p.core and p.proj > 0]
+    # Showdown pool coverage: every player the sharp typed is guaranteed
+    # E.POOL_FLOOR flex spots. Needs a TYPED pool — with none the "pool" is the
+    # whole DK board, which on ATL@GB was 28 live players plus 26 bodies at $200
+    # projecting zero, and guaranteeing those two lineups each is nonsense.
+    # Taking someone out of the pool is the control, and it already exists.
+    pool_short = []
+    pool_floors = ({p.dk_id: E.POOL_FLOOR for p in players
+                    if p.in_pool and p.proj > 0}
+                   if fmt == "showdown" and pool_names else None)
+    pool_players = {p.dk_id: p for p in players if p.in_pool and p.proj > 0}
     shape_targets = E.SPLIT_TARGETS
     if fmt == "classic":
         shape_targets = _stack_targets(o.get("stackTargets"))
@@ -1155,7 +1165,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                         f"least {per} of {n_mine} lineups.")
         if fmt == "showdown":
             chosen += E.select(cands, n_mine, split_targets=shape_targets,
-                               core_floors=floors, kdst_cap=read["kdst_cap"], **caps)
+                               core_floors=floors, kdst_cap=read["kdst_cap"],
+                               pool_floors=pool_floors, pool_players=pool_players, short=pool_short, **caps)
         else:
             chosen += C.select(cands, n_mine, stack_targets=shape_targets,
                                core_floors=floors, **caps)
@@ -1170,7 +1181,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
             shape_kw = ({"split_targets": shape_targets} if fmt == "showdown"
                         else {"stack_targets": shape_targets})
             chosen += M.select(cands, n_vendor, core_floors=floors_total,
-                               prior=chosen, **shape_kw, **caps)
+                               prior=chosen, pool_floors=pool_floors,
+                               pool_players=pool_players, short=pool_short, **shape_kw, **caps)
             if len(chosen) < n:
                 say("warn", f"Only {len(chosen)} distinct lineups could be built "
                             f"for {n} entries.")
@@ -1223,7 +1235,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                 shape_kw = ({"split_targets": shape_targets} if fmt == "showdown"
                             else {"stack_targets": shape_targets})
                 chosen += M.select(cands, n_vendor, core_floors=floors_total,
-                                   prior=chosen, **shape_kw, **caps)
+                                   prior=chosen, pool_floors=pool_floors,
+                                   pool_players=pool_players, short=pool_short, **shape_kw, **caps)
 
     # Top up from our own candidates if either arm came up short — a vendor pool
     # thinned by the pool filter or by missing captain IDs can leave entries
@@ -1234,9 +1247,35 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                     else {"stack_targets": shape_targets})
         need = n - len(chosen)
         chosen += M.select(cands, need, core_floors=floors_total, prior=chosen,
+                           pool_floors=pool_floors, pool_players=pool_players, short=pool_short,
                            **shape_kw, **caps)
         say("info", f"Topped up {need} entries from our own builder to cover "
                     f"all {n}.")
+
+    # Pool coverage, checked once against what actually shipped. Silent when it
+    # works, which is the normal case and the screen is busy enough — you only
+    # hear about it when a name you typed could not be covered.
+    if pool_floors and chosen:
+        got = {}
+        for lu in chosen:
+            for p in lu.flex:
+                got[p.dk_id] = got.get(p.dk_id, 0) + 1
+        nm = {p.dk_id: p.name for p in players}
+        missed = sorted(((nm.get(i, i), got.get(i, 0), f)
+                         for i, f in pool_floors.items() if got.get(i, 0) < f),
+                        key=lambda t: t[1])
+        clamped = sorted(nm.get(i, i) for k, i, _w, _c in pool_short
+                         if k == "clamped")
+        if clamped:
+            say("warn", "Your cap is lower than the pool floor for "
+                        + ", ".join(clamped)
+                        + " — the cap wins, so they run below the floor.")
+        if missed:
+            say("warn", f"{len(missed)} pool player(s) could not reach "
+                        f"{E.POOL_FLOOR} lineups: "
+                        + ", ".join(f"{a} {b} of {c}" for a, b, c in missed[:8])
+                        + (" …" if len(missed) > 8 else "")
+                        + ". The board could not field them legally.")
 
     # The caps are enforced per arm, so the number that matters — what lands in
     # the uploaded file across both arms and the top-up — is checked HERE, once,
