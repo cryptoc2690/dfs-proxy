@@ -1248,7 +1248,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
             and o.get("lottery", "on") != "off"):
         take, leftover = E.lottery_targets(
             chosen, {p.dk_id: p for p in players if p.in_pool and p.proj > 0})
-        got, stuck, tickets = [], [], []
+        got, stuck, tickets, tcache = [], [], [], {}
         seen = {lu.key() for lu in chosen}
         for want in take:
             # Built by the ORDINARY builder with one player seeded, the way a
@@ -1259,10 +1259,13 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
             # into a finished roster and then greedily spent the salary he
             # freed, which honoured none of those rules and invented a spend
             # requirement showdown does not have.
-            tc = E.build_candidates(players, 600, teams=teams,
-                                    cpt_pool=cpt_pool or None, force=want,
-                                    **common)
-            tc = [lu for lu in tc
+            if want.dk_id not in tcache:
+                tcache[want.dk_id] = E.build_candidates(
+                    players, 600, teams=teams, cpt_pool=cpt_pool or None,
+                    force=want, **common)
+            # `seen` grows as tickets are taken, so a player given a second
+            # ticket gets a DIFFERENT roster rather than the same one twice.
+            tc = [lu for lu in tcache[want.dk_id]
                   if want.dk_id in lu.ids() and lu.key() not in seen]
             if not tc:
                 stuck.append(want.name)
@@ -1282,7 +1285,16 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
             seen.add(best.key())
             tickets.append(best)
             got.append(want)
-        show = lambda ps: ", ".join(f"{q.name} ${q.salary:,}" for q in ps)
+        def show(ps):
+            seen_n, out_n = {}, []
+            for q in ps:                 # a repeat reads as "x2", not twice
+                if q.name not in seen_n:
+                    seen_n[q.name] = len(out_n)
+                    out_n.append([q, 1])
+                else:
+                    out_n[seen_n[q.name]][1] += 1
+            return ", ".join(f"{q.name} ${q.salary:,}"
+                             + (f" x{c}" if c > 1 else "") for q, c in out_n)
         if tickets:                      # spend our arm's weakest on them
             chosen = chosen[:len(chosen) - len(tickets)] + tickets
             # WHO GOT ONE is the line that matters. These are the players the

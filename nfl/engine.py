@@ -958,7 +958,16 @@ def lottery_targets(final, pool_players, k=LOTTERY_TICKETS):
     if not missed:
         return [], []                  # everyone already has a lineup
     missed.sort(key=lambda p: (-p.salary, -p.proj, p.name))
-    return missed[:k], missed[k:]
+    if len(missed) >= k:
+        return missed[:k], missed[k:]
+    # Fewer missed than tickets: all k are still spent. The lineups are reserved
+    # for this, and handing one back to the normal build wastes it on a roster
+    # the other 145 already cover. So cycle — the most expensive missed player
+    # gets a second ticket before the cheapest gets its first repeat. Each
+    # ticket still carries exactly ONE punt; the repeats are different lineups
+    # around the same player, which is what you want anyway, since a single
+    # roster is one way for that player to be right and five are five.
+    return [missed[i % len(missed)] for i in range(k)], []
 
 
 def select(lineups, n, *, captain_cap=None,
