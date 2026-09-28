@@ -226,6 +226,39 @@ GAP_MIN_CEILING = 0.70     # top 30% of the position on simulated upside
 GAP_MIN_LEVERAGE = 0.20    # ceiling rank must beat ownership rank by this much
 GAP_MIN_POS = 5            # below this, rank against the whole board instead
 GAP_SHOW = 12              # listed in full up to here, then a count
+STACK_GAP_SHOW = 5         # orphaned teams listed before it becomes a count
+
+
+def _stack_gaps(players, min_proj):
+    """-> {team: (pooled pass-catchers, best QBs available)} for teams whose
+    receivers are on the sheet but whose quarterback is not.
+
+    The main-slate builder constructs every lineup AROUND a quarterback and
+    stacks him with his own pass-catchers. So a receiver whose QB is not in the
+    pool can only ever reach a roster as unstacked filler — he will be rare, and
+    never in the correlated shape that actually wins. The sheet looks fine; the
+    player is simply unbuildable in the shape he is there for.
+
+    This is the mirror of the check that already runs on a SUGGESTED quarterback
+    with no receiver on the sheet, which came from Josh Allen reaching 0 of
+    4,000 candidates as the only Buffalo name on a 61-player sheet. Same failure,
+    other direction, and this direction is the common one — a sharp lists the
+    pass-catchers he likes far more often than he lists the quarterbacks.
+    """
+    pooled = [p for p in players
+              if (p.in_pool or p.core) and p.proj >= min_proj and p.team]
+    have_qb = {p.team for p in pooled if p.is_qb}
+    orphan = {}
+    for p in pooled:
+        if p.pos in ("WR", "TE") and p.team not in have_qb:
+            orphan.setdefault(p.team, []).append(p)
+    out = {}
+    for team, ps in orphan.items():
+        qbs = sorted((q for q in players
+                      if q.is_qb and q.team == team and q.proj >= min_proj),
+                     key=lambda q: -q.proj)
+        out[team] = (sorted(ps, key=lambda q: -q.proj), qbs[:2])
+    return out
 
 
 def _pool_gaps_note(players, mat, sims, min_proj):
@@ -673,14 +706,10 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
     players, rep = read_projections(proj_text or "")
     if rep.get("error"):
         return {"error": f"Projections file: {rep['error']}"}
-    say("info", f"Projections: {rep['players']} players read. Columns matched — "
-                + ", ".join(f"{k} from “{v}”" for k, v in rep["matched"].items()))
-    if rep["unmatched"]:
-        say("info", "Not present, so skipped: " + ", ".join(rep["unmatched"]))
-    if rep.get("duplicate_rows"):
-        say("warn", f"{len(rep['duplicate_rows'])} duplicate row(s) in the "
-                    f"projections file, kept once each: "
-                    + ", ".join(rep["duplicate_rows"][:6]))
+    # The column map, the skipped columns and the de-duplicated rows were three
+    # notes at the top of every build. They are startup diagnostics — they matter
+    # once against a new file format and never again — so they fold into the one
+    # tick at the end. A parse that actually fails still errors out above.
     # A column that matched by prefix or substring rather than by name is a
     # guess, and a guess about which column is the projection is the kind of
     # thing that has silently poisoned a whole build before. Say it.
@@ -719,8 +748,6 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
             fmt = "showdown" if len(teams) <= 2 else "classic"
             why = f"the projections cover {len(teams)} teams"
     M = E if fmt == "showdown" else C
-    say("info", f"Reading this as a {'SHOWDOWN' if fmt == 'showdown' else 'MAIN SLATE (classic)'} "
-                f"build — {why}.")
     if fmt == "showdown" and len(teams) != 2:
         say("warn", f"Expected exactly two teams for a showdown, found {teams}.")
     if fmt == "classic" and len(teams) < 4:
@@ -809,20 +836,24 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
     if fmt == "showdown":
         cpt_own = sum(p.cpt_own for p in players)
         ok_own = 450 <= flex_own <= 650 and 550 <= flex_own + cpt_own <= 650
-        say("good" if ok_own else "warn",
-            f"Ownership: {flex_own:.0f}% across the five flex slots + {cpt_own:.0f}% "
-            f"captain = {flex_own + cpt_own:.0f}% over six slots."
-            + ("" if ok_own else " Expected about 500 + 100. Check which ownership "
-                                 "column was read — they are different quantities."))
+        if not ok_own:
+            say("warn",
+                f"Ownership: {flex_own:.0f}% across the five flex slots + "
+                f"{cpt_own:.0f}% captain = {flex_own + cpt_own:.0f}% over six "
+                f"slots. Expected about 500 + 100. Check which ownership column "
+                f"was read — they are different quantities.")
     else:
         # Classic has one ownership column and nine roster slots, so it must sum
         # to 900. Anything else means the wrong column was matched, and every
         # leverage and duplication figure downstream would be quietly wrong.
+        # Silent when it sums to ~900, loud when it does not: a wrong ownership
+        # column makes every leverage and duplication figure downstream wrong,
+        # so the failure has to shout. The pass does not.
         ok_own = 800 <= flex_own <= 1000
-        say("good" if ok_own else "warn",
-            f"Ownership: {flex_own:.0f}% across nine roster slots."
-            + ("" if ok_own else " Expected about 900. Check which ownership "
-                                 "column was read."))
+        if not ok_own:
+            say("warn", f"Ownership: {flex_own:.0f}% across nine roster slots. "
+                        f"Expected about 900. Check which ownership column was "
+                        f"read.")
 
     sims = _i(o.get("sims"), 4000)
     seed = _i(o.get("seed"), 0)
@@ -905,23 +936,12 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
     dupe_scale = max(1.0, expect / modelled) if (modelled and expect) else 1.0
 
     if bar:
-        srt = sorted(bar)
-        say("info", f"Score to beat, from {sampled:,} sampled opponents: "
-                    f"{srt[len(srt) // 2]:.0f} median.")
-        say("info", f"Vendor pool models {modelled:,.0f} opponent entries in "
-                    f"{len(idx):,} distinct lineups.")
         if expect:
             say("info", f"Scaling duplication ×{dupe_scale:.2f} for a "
                         f"{expect:,}-entry field"
                         + (f" ({fill_pct:.0f}% of {field_cap:,})"
                            if field_cap and fill_pct < 100 else "")
                         + ".")
-        elif modelled:
-            say("warn", f"No contest size given, so duplication is measured "
-                        f"against the {modelled:,.0f} opponents the vendor "
-                        f"models. A real contest is bigger, so the numbers "
-                        f"below understate it — put the contest's max entries "
-                        f"in the settings.")
     else:
         say("warn", "No vendor lineup file, so there is no opponent field: "
                     "lineups are ranked on simulated score alone, with no win "
@@ -981,14 +1001,39 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                             f"${cheapest:,} — over the ${SALARY_CAP:,} cap. "
                             f"Treating it as a shortlist.")
     if pool_names and off_pool is not None:
-        say("info", "Pool is a build constraint: "
-                    + ("every player must come from it."
-                       if not off_pool else
-                       f"up to {off_pool} off-pool player(s) per lineup.")
-                    + (" The DST seat is exempt — the builder takes whichever "
-                       "defence fits the salary left." if fmt == "classic" else ""))
+        pass   # restates your own maxOffPool setting; the exposure table shows it
 
     if pool_names:
+        # Everything the SHEET is missing, in one place: plays with upside it
+        # does not list, and pass-catchers it lists whose quarterback it does
+        # not. Both are "add this to the pool"; they just fail differently.
+        if fmt == "classic":
+            orphans = _stack_gaps(players, _f(o.get("minProj"), M.MIN_PROJ))
+            if orphans:
+                # Ranked by the best pass-catcher stranded, and capped — this
+                # note exists to shorten the page, not to add a wall to it. The
+                # tail is counted rather than listed; a sheet with fifteen
+                # orphaned teams has a bigger problem than any one line can fix.
+                rank = sorted(orphans.items(),
+                              key=lambda kv: -max(q.proj for q in kv[1][0]))
+                bits, extra = [], max(0, len(rank) - STACK_GAP_SHOW)
+                for team, (recs, qbs) in rank[:STACK_GAP_SHOW]:
+                    who = ", ".join(q.name.strip() for q in recs[:3])
+                    if len(recs) > 3:
+                        who += f" +{len(recs) - 3}"
+                    fix = (" — add " + " or ".join(f"{q.name.strip()} (${q.salary:,})"
+                                                   for q in qbs)) if qbs else ""
+                    bits.append(f"{team}: {who}{fix}")
+                say("good", f"Stack gaps — {len(orphans)} team"
+                            + ("" if len(orphans) == 1 else "s")
+                            + " with pass-catchers on your sheet and no "
+                              "quarterback, so they can only land as unstacked "
+                              "filler"
+                            + (f" (top {STACK_GAP_SHOW})" if extra else "")
+                            + ": " + "; ".join(bits)
+                            + (f"; and {extra} more team"
+                               + ("" if extra == 1 else "s") if extra else "")
+                            + ".")
         gaps = _pool_gaps_note(players, mat, sims, _f(o.get("minProj"), M.MIN_PROJ))
         if gaps:
             shown = gaps[:GAP_SHOW]
@@ -1151,15 +1196,14 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
             # toward the floor for ALL n, which is what the final check tests.
             floors_total = {cid: max(1, -(-n // (len(core_ids) + 1)))
                             for cid in core_ids}
-            say("info", f"Each of your {len(core_ids)} core(s) is guaranteed at "
-                        f"least {per} of {n_mine} lineups.")
+            # The promise is not worth a line — the realised count at the end
+            # says whether it was kept, which is the part you can act on.
         if fmt == "showdown":
             chosen += E.select(cands, n_mine, split_targets=shape_targets,
                                core_floors=floors, kdst_cap=read["kdst_cap"], **caps)
         else:
             chosen += C.select(cands, n_mine, stack_targets=shape_targets,
                                core_floors=floors, **caps)
-        say("info", f"Built {len(chosen)} lineups from {len(cands):,} candidates.")
 
 
     if n_vendor:
@@ -1409,7 +1453,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                     f"one exactly. That should not happen — do not upload until "
                     f"it is looked at.")
     else:
-        say("good", f"All {len(chosen)} entries are distinct rosters.")
+        pass                       # folded into the one tick at the end
 
     # Where these entries sit against the actual opponents, on the two axes the
     # brief says decide a main slate. Ownership is the least-trusted finding in
@@ -1429,33 +1473,18 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
         if f_own:
             mine_own = sum(lu.own_sum for lu in chosen) / len(chosen)
             pct = 100.0 * sum(1 for v in f_own if v < mine_own) / len(f_own)
-            say("info" if 10 <= pct <= 90 else "warn",
+            # Silent in the normal band. Outside it you are making a large bet on
+        # one direction and that is worth interrupting for.
+        if not 10 <= pct <= 90:
+            say("warn",
                 f"Ownership: your lineups average {mine_own:.0f}% against the "
                 f"field's {f_own[len(f_own) // 2]:.0f}% median, which is higher "
-                f"than {pct:.0f}% of the field."
-                + ("" if 10 <= pct <= 90 else
-                   " That is a large bet on one direction; the ownership lean "
-                   "setting is what moves it."))
-    # Who the builder reached for outside the sheet, by name. Allowing "1 off
-    # pool per lineup" is a decision you cannot check without this: the setting
-    # says how many, never who, and the answer is spread across 150 rows.
-    if pool_names:
-        added = {}
-        for lu in chosen:
-            for p in lu.players:
-                if _off_sheet(p, fmt):
-                    added[p.name.strip()] = added.get(p.name.strip(), 0) + 1
-        if added:
-            top = sorted(added.items(), key=lambda kv: -kv[1])
-            say("info", f"Off-sheet additions: {sum(added.values())} roster slots "
-                        f"across {len(chosen)} lineups, {len(added)} different "
-                        f"players"
-                        + (" (the DST seat is exempt and not counted)"
-                           if fmt == "classic" else "")
-                        + ". Most used: "
-                        + "; ".join(f"{k} in {v}" for k, v in top[:10])
-                        + (f"; and {len(top) - 10} more" if len(top) > 10 else "")
-                        + ". They are marked in the lineup and exposure tables.")
+                f"than {pct:.0f}% of the field. That is a large bet on one "
+                f"direction; the ownership lean setting is what moves it.")
+    # "Off-sheet additions" — who the builder reached for outside the sheet —
+    # lived here and is gone. It described what the build DID, which the
+    # exposure table already shows by name. What is worth a line before the
+    # build is what the sheet is MISSING, and that is the pool-gaps note.
 
     field_sides = _field_sides(field, fmt) if field else None
     if field_sides:
@@ -1588,6 +1617,22 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
         say("warn", "No DK entries file, so there is no uploadable CSV — that "
                     "export is the only source of your Entry IDs and DK's "
                     "per-slot player IDs.")
+
+    # One tick for everything that silently worked. Six notes used to say this
+    # between them — the column map, the skipped columns, the de-duplicated
+    # rows, the format, the ownership sum and "all entries are distinct". None
+    # of them is actionable when it passes, and each failure still shouts on its
+    # own line above. So: pass quietly, fail loudly.
+    distinct = len({lu.key() for lu in chosen})
+    dupes = len(chosen) - distinct
+    dup_rows = len(rep.get("duplicate_rows") or [])
+    say("good" if not dupes else "warn",
+        ("✓ " if not dupes else "")
+        + f"{'Showdown' if fmt == 'showdown' else 'Main'} · "
+        + f"{rep['players']} players read"
+        + (f" ({dup_rows} duplicate row(s) merged)" if dup_rows else "")
+        + f" · {len(chosen)} lineups, "
+        + (f"all distinct" if not dupes else f"{dupes} REPEATED"))
 
     _log(chosen, meta)
 
