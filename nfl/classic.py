@@ -344,7 +344,8 @@ def dst_matchup(players):
 
 def build_candidates(players, n, *, rng=None, stack_targets=None,
                      bring_back_share=BRING_BACK_SHARE, max_off_pool=None,
-                     min_proj=MIN_PROJ, max_leftover=MAX_LEFTOVER):
+                     min_proj=MIN_PROJ, max_leftover=MAX_LEFTOVER,
+                     force=None):
     """Randomised construction built AROUND the QB stack.
 
     The QB is chosen first because he decides the lineup's whole correlation
@@ -372,6 +373,16 @@ def build_candidates(players, n, *, rng=None, stack_targets=None,
                 or off < max_off_pool)
 
     qbs = [p for p in pool if p.is_qb and allowed(p, 0)]
+    # A forced player is seeded like a core: dropped in, then the ordinary
+    # construction finishes the roster under every ordinary rule — the QB
+    # stack, the bring-back policy, position limits, salary, the pool. A forced
+    # QB simply becomes the only QB considered, so his own stack still builds
+    # around him.
+    if force is not None:
+        if force.is_qb:
+            qbs = [force]
+        elif force not in pool:
+            pool = pool + [force]
     if not qbs:
         return []
     depths = list(stack_targets.items())
@@ -404,6 +415,17 @@ def build_candidates(players, n, *, rng=None, stack_targets=None,
         picked, used = [qb], {qb.dk_id}
         salary = qb.salary
         off = 0 if (qb.in_pool or qb.core) else 1
+        if force is not None and force.dk_id not in used:
+            trial = picked + [force]
+            if (_counts(trial).get(force.pos, 0) > MAX_POS.get(force.pos, 0)
+                    or not _completable(trial)
+                    or salary + force.salary
+                    > SALARY_CAP - 3000 * (ROSTER_SIZE - len(trial))):
+                continue
+            picked, salary = trial, salary + force.salary
+            used.add(force.dk_id)
+            if not (force.in_pool or force.core or pool_exempt(force)):
+                off += 1
 
         # Stack partners: pass-catchers on the QB's own team.
         # A CORE quarterback licences his own pass-catchers past the pool

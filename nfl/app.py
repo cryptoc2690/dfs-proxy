@@ -1240,41 +1240,35 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
 
     # Lottery tickets. Runs LAST, once both arms and the top-up are in, because
     # "nobody used him" is a question about the whole entered set rather than
-    # about one arm. Showdown only, and only on a full max-entry set — below
-    # 150 the entries are too few to spare five, and the pool is what the user
-    # typed, so taking someone off the sheet is the control.
-    if (fmt == "showdown" and pool_names and n_mine and cands
-            and len(chosen) >= E.LOTTERY_MIN_N
-            and o.get("lottery", "on") != "off"):
+    # about one arm. BOTH formats — a main slate has far more places for a
+    # pooled player to vanish than a 30-man showdown board, so if anything it
+    # needs this more. Only on a full max-entry set: below 150 the entries are
+    # too few to spare five, and the pool is what the user typed, so taking
+    # someone off the sheet is the control.
+    if (pool_names and n_mine and cands and o.get("lottery", "on") != "off"
+            and len(chosen) >= E.LOTTERY_MIN_N):
         take, leftover = E.lottery_targets(
             chosen, {p.dk_id: p for p in players if p.in_pool and p.proj > 0})
         got, stuck, tickets, tcache = [], [], [], {}
         seen = {lu.key() for lu in chosen}
-        # The block goes on the side the FIELD is light on. Everywhere else the
-        # tool is deliberately neutral (SIDE_CAP 0.50), which lands at 50/50
-        # while the field sits at 62/38 — overweight the light side by accident
-        # of neutrality rather than on purpose. These five are on purpose.
-        light = E.light_side(field) if field else None
         for want in take:
             # Built by the ORDINARY builder with one player seeded, the way a
-            # core is seeded. Every normal rule still applies — split shape,
-            # team counts, the pool, the captain pool, the salary rail — so a
-            # ticket is a normal lineup that happens to contain him, not a
-            # special case with its own physics. An earlier version swapped him
-            # into a finished roster and then greedily spent the salary he
-            # freed, which honoured none of those rules and invented a spend
-            # requirement showdown does not have.
+            # core is seeded. Every normal rule still applies — the QB stack
+            # and bring-back policy on a main slate, the split shape and
+            # captain pool on showdown, position limits, the salary rail, the
+            # pool. A ticket is a normal lineup that happens to contain him,
+            # not a special case with its own physics.
             if want.dk_id not in tcache:
-                # Lopsided shapes only. A 3-3 has no side, so pinning the
-                # major side does nothing to it — and 3-3 is the shape the
-                # field builds MOST (34.5% here), so it is the opposite of a
-                # leverage play. The other 145 keep the normal shape mix.
-                tcache[want.dk_id] = E.build_candidates(
-                    players, 600, teams=teams, cpt_pool=cpt_pool or None,
-                    force=want, major_side=light,
-                    split_targets=({k: v for k, v in E.SPLIT_TARGETS.items()
-                                    if k != "3-3"} if light else None),
-                    **common)
+                tcache[want.dk_id] = (
+                    E.build_candidates(players, 600, teams=teams,
+                                       cpt_pool=cpt_pool or None, force=want,
+                                       **common)
+                    if fmt == "showdown" else
+                    C.build_candidates(
+                        players, 600, stack_targets=shape_targets,
+                        bring_back_share=_share(o.get("bringBack"),
+                                                C.BRING_BACK_SHARE),
+                        force=want, **common))
             # `seen` grows as tickets are taken, so a player given a second
             # ticket gets a DIFFERENT roster rather than the same one twice.
             tc = [lu for lu in tcache[want.dk_id]
@@ -1282,10 +1276,11 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
             if not tc:
                 stuck.append(want.name)
                 continue
-            M.rank(tc, mat, bar, sims, idx,
-                   own_lean=_f(o.get("ownLean"), M.OWN_LEAN),
-                   dupe_scale=dupe_scale, field_n=modelled) if bar else None
-            if not bar:
+            if bar:
+                M.rank(tc, mat, bar, sims, idx,
+                       own_lean=_f(o.get("ownLean"), M.OWN_LEAN),
+                       dupe_scale=dupe_scale, field_n=modelled)
+            else:
                 for lu in tc:
                     sc = M.score_lineup(lu, mat, sims)
                     d = M.estimated_dupes(lu, idx, scale=dupe_scale,
@@ -1297,6 +1292,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
             seen.add(best.key())
             tickets.append(best)
             got.append(want)
+
         def show(ps):
             seen_n, out_n = {}, []
             for q in ps:                 # a repeat reads as "x2", not twice
@@ -1307,18 +1303,16 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                     out_n[seen_n[q.name]][1] += 1
             return ", ".join(f"{q.name} ${q.salary:,}"
                              + (f" x{c}" if c > 1 else "") for q, c in out_n)
+
         if tickets:                      # spend our arm's weakest on them
             chosen = chosen[:len(chosen) - len(tickets)] + tickets
             # WHO GOT ONE is the line that matters. These are the players the
-            # other 145 entries never touched, so this is the first and only
+            # rest of the set never touched, so this is the first and only
             # place they appear. If one of them is somebody you looked at and
             # passed on, the fix is to take him off the pool — which is why the
             # queue behind them is on the same line.
             msg = (f"Lottery: {len(tickets)} lineup(s), one punt each, went to "
                    + show(got) + ".")
-            if light:
-                msg += (f" Built {light}-heavy — that is the side the field is "
-                        "lighter on.")
             msg += ((" Next in line if you drop one: " + show(leftover) + ".")
                     if leftover else
                     " Nobody else was missed, so dropping one just hands the "

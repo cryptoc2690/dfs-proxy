@@ -1,13 +1,7 @@
-"""Do the lottery tickets reach the missed players, on the field's light side?
+"""Does the pool floor actually reach Hooper on the slate that missed him?
 
-ATL @ GB, 150 entries. The tool returned 0 of 900 roster spots for Austin Hooper
-and the winning lineup was a 4-2 ATL that had him. Build with the tickets off
-and on, then check: coverage, cost, ONE punt per ticket, that every ticket
-obeys the ordinary rules, that all five sit LOPSIDED on the side the field is
-light on, and legality on the output.
-
-The pool carries three extra dead names on purpose, so the more-missed-than-
-tickets path runs and the queue behind the tickets is seen.
+ATL @ GB, 150 entries. Before this change the tool returned 0 of 900 slots for
+Austin Hooper and the winning lineup had him. Run both ways and compare.
 """
 import sys, collections
 from pathlib import Path as _Path
@@ -133,18 +127,11 @@ for lu in new_r["lineups"][-5:]:
 print(f"shapes seen: {sorted(shapes)}  (5-1 / 4-2 / 3-3 are the legal ones)")
 
 
-# The tickets must sit on the side the FIELD is light on (ATL here: the field
-# went GB 61.9% / ATL 38.1% among lopsided lineups, and the winner was 4-2 ATL).
-import sys as _s; pass
-import engine as _E, sources as _S
-from dk import normalize_name as _nn
-_players, *_ = _S.read_projections(PROJ)
-_by = {_nn(p.name): p for p in _players}   # read_field keys on the NORMALISED name
-_field, _ = _S.read_field(FIELD, by_id={p.dk_id: p for p in _players}, by_name=_by)
-print(f"\nfield's light side: {_E.light_side(_field)}")
+# Side is NOT pinned any more — a ticket is just the best lineup holding its
+# player. Report where they landed; do not require a side.
 sides = []
 for lu in new_r["lineups"][-5:]:
     tm = _c.Counter(pl["team"] for pl in lu["players"])
-    big, n = max(tm.items(), key=lambda kv: kv[1])
-    sides.append(f"{big}{n}")
-print(f"ticket sides: {sides}")
+    big, nn = max(tm.items(), key=lambda kv: kv[1])
+    sides.append(f"{big}{nn}")
+print(f"\nticket sides (unpinned): {sides}")
