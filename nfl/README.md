@@ -250,6 +250,18 @@ whichever game it was. Showdown logs the captain, the team split and the major
 team; a main slate logs the QB, the stack depth and the bring-back count. Those
 are what let a later review test the *mechanism* rather than just the outcome.
 
+Since the week-4 check-in each row also carries what that review had to
+reconstruct by hand: `code` (the commit, `+dirty` if edited), `lottery` (true on
+a ticket, whose `source` stays `mine`), and in `settings` the per-player caps
+you typed, max leftover, max overlap, whether the lottery was on, and on
+showdown the slate read (`both_qb`, `throwing`, `kdst_cap`). The first row of
+each build carries the pre-lineup notes.
+
+Lottery tickets replace **our arm's** lowest-scoring lineups (one holding a core
+goes last). Until 2026-10-05 they replaced the last five rows of the set, which
+were the vendor arm's, so builds before then ran 85/65 rather than the split
+you set.
+
 This file is the point of the whole exercise right now. There is no NFL results
 history, so every setting in this tool is a hypothesis. The log is what lets a
 later review join these entries to real standings and find out which ones were

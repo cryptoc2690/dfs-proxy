@@ -58,6 +58,27 @@ LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 PORT = int(os.environ.get("PORT", "8010"))
 
 
+def _code_version():
+    """The commit this build ran on, '+dirty' if the files differ from it.
+
+    The week-4 check-in had to date every build against the commit log by hand
+    to know which rules it ran under. One string per row settles that.
+    """
+    import subprocess
+    here = os.path.dirname(os.path.abspath(__file__))
+    try:
+        sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=here,
+                             capture_output=True, text=True, timeout=5).stdout.strip()
+        dirty = subprocess.run(["git", "status", "--porcelain", "--", "."], cwd=here,
+                               capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return (sha + ("+dirty" if dirty else "")) if sha else None
+
+
+_CODE_VERSION = _code_version()
+
+
 def _read(path):
     """Read a dropped file. Standings arrive zipped from DK often enough that
     unzipping by hand was a step people skipped, so a .zip with one CSV in it
@@ -607,14 +628,18 @@ def _log(lineups, meta):
         os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
         ts = datetime.now().astimezone().isoformat(timespec="seconds")
         ids = meta.get("entry_ids") or []
+        lotto = meta.get("lottery_keys") or set()
         with open(LOG_PATH, "a", encoding="utf-8") as fh:
             for i, lu in enumerate(lineups):
                 ps = _roster(lu, fmt)
                 row = {
                     "ts": ts, "slate": meta.get("slate"), "format": fmt,
+                    "code": meta.get("code"),
                     "contest_id": meta.get("contest_id"),
                     "entry_id": ids[i] if i < len(ids) else None,
-                    "source": lu.source,
+                    # A ticket is built by our builder, so its source stays
+                    # "mine"; this flag is what lets a review take it out.
+                    "source": lu.source, "lottery": lu.key() in lotto,
                     "players": [{"name": p.name, "id": p.dk_id, "pos": p.pos,
                                  "team": p.team, "salary": p.salary,
                                  "proj": p.proj, "own": p.ownership,
@@ -645,6 +670,10 @@ def _log(lineups, meta):
                                 "stack": lu.stack_depth(),
                                 "bring_back": lu.bring_back(),
                                 "shape": lu.stack_label()})
+                if i == 0:
+                    # The notes are per build, not per entry: the first row
+                    # carries them so 150 rows do not repeat the same text.
+                    row["notes"] = [dict(n) for n in meta.get("notes") or []]
                 fh.write(json.dumps(row) + "\n")
     except Exception as exc:                     # never let logging break a build
         print(f"  ! log write failed: {exc}", file=sys.stderr)
@@ -1289,6 +1318,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
     # needs this more. Only on a full max-entry set: below 150 the entries are
     # too few to spare five, and the pool is what the user typed, so taking
     # someone off the sheet is the control.
+    lotto_keys = set()                   # which entries are tickets, for the log
     if (pool_names and n_mine and cands and o.get("lottery", "on") != "off"
             and len(chosen) >= E.LOTTERY_MIN_N):
         take, leftover = E.lottery_targets(
@@ -1349,7 +1379,21 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                              + (f" x{c}" if c > 1 else "") for q, c in out_n)
 
         if tickets:                      # spend our arm's weakest on them
-            chosen = chosen[:len(chosen) - len(tickets)] + tickets
+            # OUR arm's weakest, by its own score. This used to be the last k
+            # rows of the set, and the vendor arm sits after ours, so every
+            # ticket replaced a vendor lineup (the week-4 check-in caught it
+            # from the 80/70 arm counts). A lineup holding a core goes last, so
+            # a ticket cannot cost a core its floor; vendor rows only if our
+            # arm is somehow shorter than the ticket count.
+            ours = sorted((i for i, lu in enumerate(chosen) if lu.source == "mine"),
+                          key=lambda i: (any(p.core for p in chosen[i].players),
+                                         chosen[i].metrics.get("score", 0.0)))
+            drop = set(ours[:len(tickets)])
+            if len(drop) < len(tickets):
+                rest = [i for i in range(len(chosen)) if i not in drop]
+                drop |= set(rest[len(rest) - (len(tickets) - len(drop)):])
+            chosen = [lu for i, lu in enumerate(chosen) if i not in drop] + tickets
+            lotto_keys = {lu.key() for lu in tickets}
             # WHO GOT ONE is the line that matters. These are the players the
             # rest of the set never touched, so this is the first and only
             # place they appear. If one of them is somebody you looked at and
@@ -1538,11 +1582,21 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                 "playerCap": _share(o.get("playerCap"), M.PLAYER_CAP),
                 "minProj": _f(o.get("minProj"), M.MIN_PROJ),
                 "maxOffPool": off_pool,
-                "cores": sorted(core_names), "pool": sorted(pool_names)}
+                "cores": sorted(core_names), "pool": sorted(pool_names),
+                # The week-4 check-in could not test these because they were
+                # never written down: the caps you typed, the rails, the read.
+                "playerCaps": {p.name: pcaps[p.dk_id]
+                               for p in players if p.dk_id in (pcaps or {})},
+                "maxLeftover": _i(o.get("maxLeftover"), M.MAX_LEFTOVER),
+                "maxOverlap": M.MAX_OVERLAP,
+                "lottery": o.get("lottery", "on") != "off"}
     if fmt == "showdown":
         settings.update({"captainCap": caps["captain_cap"],
                          "sideCap": caps["side_cap"],
-                         "splitTargets": shape_targets})
+                         "splitTargets": shape_targets,
+                         "slateRead": {"both_qb": round(read["both_qb"], 2),
+                                       "throwing": round(read["throwing"], 3),
+                                       "kdst_cap": read["kdst_cap"]}})
     else:
         settings.update({"qbCap": caps["qb_cap"], "dstCap": caps["dst_cap"],
                          "stackTargets": {str(k): v for k, v in shape_targets.items()},
@@ -1550,6 +1604,9 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
     meta = {
         "slate": datetime.now().astimezone().date().isoformat(),
         "format": fmt,
+        "code": _CODE_VERSION,
+        "lottery_keys": lotto_keys,
+        "notes": notes,
         "settings": settings,
         "contest_state": {"field_cap": field_cap or None,
                           "fill_pct": fill_pct,
