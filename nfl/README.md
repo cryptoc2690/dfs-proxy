@@ -156,7 +156,13 @@ broken.
 ### How a lineup is ranked, and why that changed
 
 A lineup's score is how often it clears **the field's 99th-percentile score**
-in the same simulated world, divided by its expected duplicates. It used to be
+in the same simulated world, divided by its expected duplicates. **On showdown
+that division is now off** (`DUPE_EXP = 0`, 2026-10-08): retested on 13
+showdowns against real standings, no penalty beat the old 0.25 by $5.0 per slate
+with each build's best lineup removed (CI +1.3..+8.9, 13 of 13 leave-one-out
+folds), and every harder penalty lost. The duplicate count is still estimated,
+now ×2.9 higher to match the real field, and shown on screen, but it no longer
+moves a showdown lineup. Main slates still divide by it. It used to be
 "how often it beats the field's single best score", and that was too coarse a
 target on a main slate: most candidates cleared it in zero simulations, the
 rest in a handful, and the order among them was noise — change the random

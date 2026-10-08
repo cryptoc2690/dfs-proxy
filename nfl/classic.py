@@ -151,6 +151,7 @@ FIELD_COVERAGE = 1.0
 # rows, against 212 for Top 10% — so most of its ordering was ties broken by
 # whatever the sort happened to do.
 VENDOR_SIGNAL = "top10"
+VENDOR_DUPE_B = 0.062     # real opponents per (1 + Dupes) x scale, vendor arm
 
 # The score to beat. Ranking on "beat the field's single BEST score" was too
 # coarse a target. Measured on the real main slate with 3,000 fixed candidates:
@@ -838,7 +839,10 @@ def vendor_arm(field_entries, n, *, dupe_scale=1.0, **kw):
         if len(ps) != ROSTER_SIZE or not _legal_final(ps) or not dst_ok(ps):
             continue
         lu = Lineup(ps, source="vendor")
-        d = (1.0 + (e.get("dupes") or 0.0)) * dupe_scale   # every copy is an opponent
+        # Display only: this arm ranks on Top 10% alone. Refit 2026-10-08 on 415
+        # entered vendor rows, real = 0.062 x (1 + Dupes) x scale; the bare
+        # product showed 10-63 opponents against 0.3-4.3 real.
+        d = VENDOR_DUPE_B * (1.0 + (e.get("dupes") or 0.0)) * dupe_scale
         signal = e.get(VENDOR_SIGNAL, 0.0) or 0.0
         lu.metrics = {"win": e.get("win", 0.0), "top10": e.get("top10", 0.0),
                       "dupes": round(d, 2), "score": signal}

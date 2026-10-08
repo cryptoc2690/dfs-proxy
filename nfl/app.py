@@ -1210,11 +1210,13 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                    own_lean=_f(o.get("ownLean"), M.OWN_LEAN),
                    dupe_scale=dupe_scale, **dupe_kw)
         else:
+            # No vendor field, so no bar: rank on the mean, charged for
+            # duplication at the format's own exponent (0 on showdown, 1 on main).
             for lu in cands:
                 sc = M.score_lineup(lu, mat, sims)
                 d = M.estimated_dupes(lu, idx, scale=dupe_scale, **dupe_kw)
                 lu.metrics = {"mean": round(sum(sc) / sims, 2), "dupes": round(d, 2)}
-                lu.metrics["score"] = lu.metrics["mean"] / (1 + d)
+                lu.metrics["score"] = lu.metrics["mean"] / (1 + d) ** getattr(M, "DUPE_EXP", 1.0)
             cands.sort(key=lambda l: -l.metrics["score"])
         # Every core the sharp set is guaranteed a share of the entries, so a
         # conviction pick cannot be squeezed out by the tool's own preferences.
@@ -1361,7 +1363,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                                           field_n=modelled)
                     lu.metrics = {"mean": round(sum(sc) / sims, 2),
                                   "dupes": round(d, 2)}
-                    lu.metrics["score"] = lu.metrics["mean"] / (1 + d)
+                    lu.metrics["score"] = lu.metrics["mean"] / (1 + d) ** getattr(M, "DUPE_EXP", 1.0)
             best = max(tc, key=lambda l: l.metrics.get("score", 0.0))
             seen.add(best.key())
             tickets.append(best)

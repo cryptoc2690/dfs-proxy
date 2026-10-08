@@ -363,8 +363,16 @@ def win_rate(scores, bar, sims):
 # by about 1.2-1.3 x scale opponents, not 0.76 x scale, because the field
 # reaches rosters the vendor never generated. A is the floor every roster
 # carries, B is what each modelled copy is worth.
-DUPE_A = 0.45            # intercept, in units of scale
-DUPE_B = 0.67            # slope per (1 + Dupes)
+#
+# REFIT 2026-10-08, 13 showdowns, and now DISPLAY ONLY (DUPE_EXP is 0 below).
+# On the 1,930 rosters actually entered, real opponents ran 2.9x what this line
+# showed (folds 2.81-3.31, 12 of 13 inside 2.81-2.91); the ordering was already
+# right. A flat x2.9 on the old 0.45 / 0.67 brings the screen within +-30% of the
+# real count on 11 of 13 slates, against 1 of 13 before. A selected-roster refit
+# (A 9.5, B 1.14) was stabler in its folds but ran 3-4x high on week-1 slates.
+DUPE_A = 1.31            # intercept, in units of scale (0.45 x 2.9)
+DUPE_B = 1.94            # slope per (1 + Dupes) (0.67 x 2.9)
+DUPE_OUT = 2.9           # same correction on the out-of-pool ownership estimate
 
 # How hard duplication is charged: score = signal / (1 + d) ** DUPE_EXP.
 #
@@ -381,7 +389,28 @@ DUPE_B = 0.67            # slope per (1 + Dupes)
 # in money ($556 vs $561 for no penalty at all) while halving the duplication
 # the portfolio carries — the same expected return with less of the portfolio
 # riding on one roster.
-DUPE_EXP = 0.25
+#
+# NOW 0. Retested 2026-10-08 on 13 showdowns (9-9 to 10-5), 3 seeds, scored on
+# the real standings and each contest's own ladder:
+#
+#   exponent   cashes   top-1%    $     $ without each build's best lineup
+#   0          522      50.0     900    620
+#   0.25       500      35.3     898    555
+#   0.5        467      28.3     750    489
+#   1.0        440      20.7     657    458
+#
+# Exponent 0 is +$5.0 per slate on dollars ex-best lineup (90% CI +1.3..+8.9),
+# better on 9 slates and worse on 3, and leave-one-slate-out picked it on 13 of
+# 13 folds under every criterion. With the best lineup left in it is a wash: one
+# $214 lineup on 9-28 is the whole of 0.25's dollar total advantage.
+#
+# What it costs: our lineups sit on rosters held by 120 real opponents on average
+# against 81, and 11-73% of a set on rosters with 100+ copies. The three October
+# slates are the three where 0 lost. Recheck at week 10.
+#
+# Raising the level of DUPE_A/DUPE_B (above) cannot change this: with d in the
+# tens, a flat multiplier is a constant factor on every score.
+DUPE_EXP = 0.0
 
 # Which vendor column the re-ranked arm sorts on.
 #
@@ -539,7 +568,7 @@ def estimated_dupes(lu, idx, scale=1.0, field_n=0.0):
     for pl in lu.flex:
         p *= max(pl.ownership, 0.1) / 100.0
     p *= max(lu.cpt.cpt_own or lu.cpt.ownership / 3.0, 0.1) / 100.0
-    return p * (field_n if field_n > 0 else 50_000.0) * scale
+    return p * (field_n if field_n > 0 else 50_000.0) * scale * DUPE_OUT
 
 
 # --- construction --------------------------------------------------------
