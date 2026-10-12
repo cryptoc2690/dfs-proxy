@@ -681,6 +681,7 @@ def _log(lineups, meta):
         ts = datetime.now().astimezone().isoformat(timespec="seconds")
         ids = meta.get("entry_ids") or []
         lotto = meta.get("lottery_keys") or set()
+        fees = meta.get("entry_fees") or []
         with open(LOG_PATH, "a", encoding="utf-8") as fh:
             for i, lu in enumerate(lineups):
                 ps = _roster(lu, fmt)
@@ -689,6 +690,7 @@ def _log(lineups, meta):
                     "code": meta.get("code"),
                     "contest_id": meta.get("contest_id"),
                     "entry_id": ids[i] if i < len(ids) else None,
+                    "fee": fees[i] if i < len(fees) else None,
                     # A ticket is built by our builder, so its source stays
                     # "mine"; this flag is what lets a review take it out.
                     "source": lu.source, "lottery": lu.key() in lotto,
@@ -726,9 +728,36 @@ def _log(lineups, meta):
                     # The notes are per build, not per entry: the first row
                     # carries them so 150 rows do not repeat the same text.
                     row["notes"] = [dict(n) for n in meta.get("notes") or []]
+                    row["contests"] = meta.get("contests") or []
+                    row["build"] = _build_summary(lineups, fmt)
                 fh.write(json.dumps(row) + "\n")
     except Exception as exc:                     # never let logging break a build
         print(f"  ! log write failed: {exc}", file=sys.stderr)
+
+
+def _build_summary(lineups, fmt):
+    """The realised shape of the whole set, for the log's first row. -> dict
+
+    The per-entry rows already carry each lineup's shape; this is the total the
+    week-10 review asked for, so a build can be read without re-adding it.
+    """
+    out = {"n": len(lineups)}
+    if not lineups:
+        return out
+    if fmt == "showdown":
+        mix = {}
+        for lu in lineups:
+            mix[lu.split_label()] = mix.get(lu.split_label(), 0) + 1
+        sal = sorted(lu.cpt.salary for lu in lineups)
+        out.update({"split_mix": mix, "captain_salary_min": sal[0],
+                    "captain_salary_median": sal[len(sal) // 2]})
+    else:
+        mix = {}
+        for lu in lineups:
+            mix[lu.stack_label()] = mix.get(lu.stack_label(), 0) + 1
+        out.update({"stack_mix": mix,
+                    "bring_back": sum(1 for lu in lineups if lu.bring_back())})
+    return out
 
 
 def _off_sheet(p, fmt):
@@ -1763,6 +1792,17 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                 "maxOverlap": M.MAX_OVERLAP,
                 "lottery": o.get("lottery", "on") != "off",
                 "valueAdds": [p.name for p in value_adds],
+                # Asked for by the 2026-10-12 midway review, so week 10 can tell
+                # builds apart without dating them against the commit log. Name
+                # the field file with its type and percent-to-first (e.g.
+                # "..._low_10.csv") and this records which one was used.
+                "fileNames": {k: str(v)[:120] for k, v in
+                              (o.get("fileNames") or {}).items() if v},
+                "vendorSignal": M.VENDOR_SIGNAL,
+                "sim": {k: getattr(E, k) for k in
+                        ("GAME_SD", "TEAM_SD", "PASS_SD", "RUSH_SD",
+                         "SUB_SD_RB", "SUB_SD_REC", "DST_OPP", "DST_OPP_PASS")},
+                "captainSalaryFloor": None,     # no rail yet (theory T1)
                 "ownedAdds": [p.name for p in owned_adds],
                 "qbFloor": {p.name: qb_floors[p.dk_id]
                             for p in players if p.dk_id in qb_floors}}
@@ -1844,8 +1884,10 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                               f"none over the cap.")
                 meta["entry_ids"] = [e["entry_id"] for e in ents]
                 meta["contest_id"] = ents[0]["contest_id"]
-                meta["contests"] = [{"id": cid, "name": name, "entries": len(es)}
+                meta["contests"] = [{"id": cid, "name": name, "entries": len(es),
+                                     "fee": es[0].get("fee") if es else None}
                                     for cid, name, es in contests]
+                meta["entry_fees"] = [e.get("fee") for e in ents]
     else:
         say("warn", "No DK entries file, so there is no uploadable CSV — that "
                     "export is the only source of your Entry IDs and DK's "

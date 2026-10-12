@@ -300,6 +300,7 @@ INDEX_HTML = r"""<!doctype html>
 <script>
 const $ = s => document.querySelector(s);
 const files = {proj:null, field:null, dk:null, linestar:null};
+const names = {};   // the dropped files' names, logged with the build
 let result = null, roster = [], fmt = 'showdown', fmtFromDk = false;
 
 // Showdown and classic are different games, not two sizes of one, so the page
@@ -364,7 +365,7 @@ function slot(key, el){
         });
         const d = await res.json();
         if(d.ok){
-          files[key] = text;
+          files[key] = text; names[key] = f.name;
           mark('loaded', '✓ ' + f.name + ' — ' + d.msg);
           if(d.format) setFmt(d.format, key === 'dk');
           if(key === 'linestar')
@@ -375,7 +376,7 @@ function slot(key, el){
           mark('bad', '✗ ' + f.name + ' — ' + d.msg);
         }
       } catch(err){
-        files[key] = text;               // server unreachable: keep it anyway
+        files[key] = text; names[key] = f.name;   // server unreachable: keep it anyway
         mark('loaded', '✓ ' + f.name);
       }
     };
@@ -604,7 +605,8 @@ $('#go').addEventListener('click', async () => {
           fieldCap: num('#cap',0), fillPct: num('#fillpct',100),
           maxOffPool: $('#offpool').value,
           pool: [...sel.pool].join('\n'), cores: [...sel.core].join('\n'),
-          capPlayers: $('#capplayers').value
+          capPlayers: $('#capplayers').value,
+          fileNames: names
         }
       })
     });
