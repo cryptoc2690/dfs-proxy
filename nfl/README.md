@@ -272,6 +272,19 @@ by the most (Allen, Bowers, Winston); a 4% floor cost nothing measurable
 (+$16/slate with each build's best lineup removed, CI −3..+37). QBs only: the
 forced QB brings his receivers. The note names each floored QB and his count.
 
+**Value adds (main slate).** Five cheap plays off the sheet are added to the
+pool on every main-slate build: $4,000 or less, projected 4+, the best five by
+points per $1,000 (option `valueAdds`, on by default; cap one at 0 to drop him).
+Measured 2026-10-12 on 7 main contests: +5.3 cashes per contest (CI +1.1..+9.6),
+dollars +$15 (CI −6.5..+36), top-1% −0.1. They get no lottery ticket and no QB
+floor, which stay with the sheet's own players.
+
+**Pool-gaps note (main slate).** Lists the five most-owned plays not on the
+sheet, plus any QB off it projected 16+. The old rule (upside rank beating
+ownership rank) flagged 0 of the 34 unpooled players who reached the top 1% at
+2× their ownership on those 7 contests; this list caught 7 at 20% precision. It
+is advice only. Showdown keeps the old rule.
+
 Lottery tickets replace **our arm's** lowest-scoring lineups (one holding a core
 or a floored QB goes last). Until 2026-10-05 they replaced the last five rows of the set, which
 were the vendor arm's, so builds before then ran 85/65 rather than the split

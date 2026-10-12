@@ -249,6 +249,11 @@ GAP_MIN_POS = 5            # below this, rank against the whole board instead
 GAP_SHOW = 12              # listed in full up to here, then a count
 STACK_GAP_SHOW = 5         # orphaned teams listed before it becomes a count
 QB_FLOOR = 0.04            # share of our arm for a pooled QB the build left at 0
+GAP_TOP_OWNED = 5          # pool-gaps note: the most-owned plays off the sheet
+GAP_QB_PROJ = 16.0         # ...plus any QB off the sheet projected this high
+VALUE_ADD_N = 5            # cheap value plays added to a main-slate pool
+VALUE_ADD_MAX_SAL = 4000
+VALUE_ADD_MIN_PROJ = 4.0
 
 
 def _stack_gaps(players, min_proj):
@@ -349,6 +354,50 @@ def _pool_gaps_note(players, mat, sims, min_proj):
             and pct[p.dk_id][0] - pct[p.dk_id][1] >= GAP_MIN_LEVERAGE]
     gaps.sort(key=lambda p: -(pct[p.dk_id][0] - pct[p.dk_id][1]))
     return [(p, p90[p.dk_id], pct[p.dk_id]) for p in gaps]
+
+
+def _pool_gaps_owned(players, min_proj, skip=()):
+    """The most-owned plays the sheet does not list, plus any QB off it
+    projected 16+. -> [Player]   (main slate)
+
+    This replaced the upside-vs-ownership leverage test on the main slate. On 7
+    main contests (2026-10-12) 34 unpooled players reached the top 1% at 2x
+    their ownership or more; the leverage test had flagged 0 of them. They were
+    not hidden gems, they were the market's own mid-priced plays the sheet
+    skipped: among unpooled players, projected ownership of 3%+ hit 13.4% of
+    the time against 2.7% below it, and it separates within projection, so it
+    is not the projection again. The five most-owned caught 7 of the 34 at 20%
+    precision; QBs projected 16-18 that the sheet left off were one of them in
+    5 of 7 contests (Young, Love, Stroud, Darnold, Dak).
+
+    Advisory only. Whether auto-adding this list pays (+$34/slate) was fitted on
+    the same slates it was scored on, so it is a note until it holds out of
+    sample.
+    """
+    off = [p for p in players
+           if not p.in_pool and not p.core and not p.is_dst
+           and p.dk_id not in skip and p.salary > 0 and p.proj >= min_proj]
+    top = sorted(off, key=lambda p: (-p.ownership, -p.proj))[:GAP_TOP_OWNED]
+    qbs = sorted((p for p in off if p.is_qb and p.proj >= GAP_QB_PROJ
+                  and p not in top), key=lambda p: -p.proj)
+    return top + qbs
+
+
+def _value_adds(players, min_proj):
+    """Cheap value plays to add to a main-slate pool. -> [Player]
+
+    Off the sheet, $4,000 or less, projected 4+, the best five by projection
+    per $1,000. Measured 2026-10-12 on 7 main contests, rebuilt on real
+    standings: +5.3 cashes per contest (90% CI +1.1..+9.6), better on 5 of 7,
+    leave-one-slate-out chose it on 7 of 7; dollars +$15 per contest (CI
+    -6.5..+36), top-1% -0.1. They land in ~20% of lineups, mostly cheap TEs.
+    """
+    cand = [p for p in players
+            if not p.in_pool and not p.core and not p.is_dst
+            and 0 < p.salary <= VALUE_ADD_MAX_SAL
+            and p.proj >= max(VALUE_ADD_MIN_PROJ, min_proj)]
+    cand.sort(key=lambda p: (-p.proj / p.salary, p.name))
+    return cand[:VALUE_ADD_N]
 
 
 def _stack_targets_valid(raw):
@@ -1033,6 +1082,12 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
     if pool_names and off_pool is not None:
         pass   # restates your own maxOffPool setting; the exposure table shows it
 
+    value_adds = []
+    if (fmt == "classic" and pool_names
+            and o.get("valueAdds", "on") != "off"):
+        value_adds = _value_adds(players, _f(o.get("minProj"), M.MIN_PROJ))
+    value_ids = {p.dk_id for p in value_adds}
+
     if pool_names:
         # Everything the SHEET is missing, in one place: plays with upside it
         # does not list, and pass-catchers it lists whose quarterback it does
@@ -1064,7 +1119,49 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                             + (f"; and {extra} more team"
                                + ("" if extra == 1 else "s") if extra else "")
                             + ".")
-        gaps = _pool_gaps_note(players, mat, sims, _f(o.get("minProj"), M.MIN_PROJ))
+        if fmt == "classic":
+            owned = _pool_gaps_owned(players, _f(o.get("minProj"), M.MIN_PROJ),
+                                     skip=value_ids)
+            if owned:
+                top = [p for p in owned if p in owned[:GAP_TOP_OWNED]]
+                qbs = owned[len(top):]
+                say("good", "Pool gaps — the most-owned plays NOT on your sheet: "
+                            + "; ".join(f"{p.name.strip()} ({p.pos}, "
+                                        f"{p.ownership:.1f}% owned, "
+                                        f"{p.proj:.1f} proj, ${p.salary:,})"
+                                        for p in top)
+                            + ((". QBs off the sheet projected "
+                                f"{GAP_QB_PROJ:.0f}+: "
+                                + "; ".join(f"{p.name.strip()} ({p.proj:.1f} "
+                                            f"proj, {p.ownership:.1f}% owned, "
+                                            f"${p.salary:,})" for p in qbs))
+                               if qbs else "")
+                            + ". These are the field's mid-priced plays the "
+                              "sheet skipped, which is where the catchable "
+                              "top-1% misses have been. Adding one makes him "
+                              "legal; a QB you add gets the QB floor if the "
+                              "build would leave him out.")
+                # A QB with no pass-catcher on the sheet cannot be stacked, so
+                # name the partners alongside him rather than after the build.
+                for q in owned:
+                    if not q.is_qb:
+                        continue
+                    mates = [r for r in players
+                             if r.team == q.team and r.pos in ("WR", "TE")
+                             and r.proj >= _f(o.get("minProj"), M.MIN_PROJ)]
+                    if any(r.in_pool or r.core for r in mates):
+                        continue
+                    best = sorted(mates, key=lambda r: -r.proj)[:3]
+                    if best:
+                        say("info", f"If you add {q.name.strip()}, add a "
+                                    f"{q.team} pass-catcher too or he cannot be "
+                                    f"stacked: " + ", ".join(
+                                        f"{r.name.strip()} ({r.proj:.0f} proj, "
+                                        f"${r.salary:,})" for r in best) + ".")
+            gaps = []
+        else:
+            gaps = _pool_gaps_note(players, mat, sims,
+                                   _f(o.get("minProj"), M.MIN_PROJ))
         if gaps:
             shown = gaps[:GAP_SHOW]
             say("good", f"Pool gaps — {len(gaps)} play"
@@ -1112,10 +1209,17 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
             say("info", "No pool gaps. On a ~30 player showdown board ownership "
                         "tracks upside closely, so there is rarely anything both "
                         "strong and unowned — expect this line most nights.")
-        else:
-            say("info", "No pool gaps: nothing off your sheet has real upside "
-                        "for its position at ownership that lags it. The list "
-                        "is empty, not truncated.")
+
+    if value_adds:
+        for p in value_adds:
+            p.in_pool = True
+        say("info", "Value adds: " + ", ".join(
+                f"{p.name.strip()} ({p.pos}, ${p.salary:,}, {p.proj:.1f} proj)"
+                for p in value_adds)
+            + f" — the {len(value_adds)} best points-per-$1,000 plays at "
+              f"${VALUE_ADD_MAX_SAL:,} or less off your sheet, added to the pool "
+              f"(+5 cashes a contest on 7 main contests). Cap one at 0 to drop "
+              f"him. They do not get lottery tickets or a QB floor.")
 
     read = {"kdst_cap": None, "both_qb": 0.0, "throwing": 0.0}
     if fmt == "showdown":
@@ -1266,7 +1370,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                 used = {i for lu in chosen for i in lu.ids()}
                 zero = [p for p in players
                         if p.is_qb and (p.in_pool or p.core) and p.proj > 0
-                        and p.dk_id not in used]
+                        and p.dk_id not in used and p.dk_id not in value_ids]
                 k = max(1, round(QB_FLOOR * n_mine))
                 extra, unbuilt = [], []
                 for q in zero:
@@ -1393,7 +1497,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
     if (pool_names and n_mine and cands and o.get("lottery", "on") != "off"
             and len(chosen) >= E.LOTTERY_MIN_N):
         take, leftover = E.lottery_targets(
-            chosen, {p.dk_id: p for p in players if p.in_pool and p.proj > 0})
+            chosen, {p.dk_id: p for p in players
+                     if p.in_pool and p.proj > 0 and p.dk_id not in value_ids})
         got, stuck, tickets, tcache = [], [], [], {}
         seen = {lu.key() for lu in chosen}
         for want in take:
@@ -1651,6 +1756,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                 "maxLeftover": _i(o.get("maxLeftover"), M.MAX_LEFTOVER),
                 "maxOverlap": M.MAX_OVERLAP,
                 "lottery": o.get("lottery", "on") != "off",
+                "valueAdds": [p.name for p in value_adds],
                 "qbFloor": {p.name: qb_floors[p.dk_id]
                             for p in players if p.dk_id in qb_floors}}
     if fmt == "showdown":
