@@ -263,8 +263,17 @@ you typed, max leftover, max overlap, whether the lottery was on, and on
 showdown the slate read (`both_qb`, `throwing`, `kdst_cap`). The first row of
 each build carries the pre-lineup notes.
 
+**QB floor (main slate, 150+ entries).** A QB on your sheet that the build
+leaves in zero lineups gets 4% of our arm (`QB_FLOOR`; 3 of 80, 6 of 150), each
+lineup built around him by the ordinary builder, so he comes stacked with his
+own pass-catchers. Added 2026-10-12: 7 of 11 names added on the tool's own
+advice had come back at 0 of 150, including the three that beat their ownership
+by the most (Allen, Bowers, Winston); a 4% floor cost nothing measurable
+(+$16/slate with each build's best lineup removed, CI −3..+37). QBs only: the
+forced QB brings his receivers. The note names each floored QB and his count.
+
 Lottery tickets replace **our arm's** lowest-scoring lineups (one holding a core
-goes last). Until 2026-10-05 they replaced the last five rows of the set, which
+or a floored QB goes last). Until 2026-10-05 they replaced the last five rows of the set, which
 were the vendor arm's, so builds before then ran 85/65 rather than the split
 you set.
 

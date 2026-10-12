@@ -248,6 +248,7 @@ GAP_MIN_LEVERAGE = 0.20    # ceiling rank must beat ownership rank by this much
 GAP_MIN_POS = 5            # below this, rank against the whole board instead
 GAP_SHOW = 12              # listed in full up to here, then a count
 STACK_GAP_SHOW = 5         # orphaned teams listed before it becomes a count
+QB_FLOOR = 0.04            # share of our arm for a pooled QB the build left at 0
 
 
 def _stack_gaps(players, min_proj):
@@ -1178,6 +1179,21 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
         caps.update(qb_cap=_share(o.get("qbCap"), C.QB_CAP),
                     dst_cap=_share(o.get("dstCap"), C.DST_CAP))
 
+    def rank_forced(lus):
+        """Score lineups built around a forced player on the build's objective."""
+        if bar:
+            M.rank(lus, mat, bar, sims, idx,
+                   own_lean=_f(o.get("ownLean"), M.OWN_LEAN),
+                   dupe_scale=dupe_scale, field_n=modelled)
+            return
+        for lu in lus:
+            sc = M.score_lineup(lu, mat, sims)
+            d = M.estimated_dupes(lu, idx, scale=dupe_scale, field_n=modelled)
+            lu.metrics = {"mean": round(sum(sc) / sims, 2), "dupes": round(d, 2)}
+            lu.metrics["score"] = (lu.metrics["mean"]
+                                   / (1 + d) ** getattr(M, "DUPE_EXP", 1.0))
+
+    qb_floors = {}                       # dk_id -> lineups promised, main slate
     if n_mine:
         rng = __import__("random").Random(seed)
         common = dict(rng=rng, max_off_pool=off_pool,
@@ -1235,6 +1251,59 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
         else:
             chosen += C.select(cands, n_mine, stack_targets=shape_targets,
                                core_floors=floors, **caps)
+            # QB floor. A QB on your sheet that the ranking left at zero gets
+            # QB_FLOOR of our arm, each lineup built around him by the ordinary
+            # builder, so he is stacked with his own pass-catchers like any
+            # other QB. Measured 2026-10-12 on 7 main contests: 7 of 11 names
+            # added on the tool's own advice came back at 0 of 150, and the
+            # three that beat their ownership by a mile were all at zero
+            # (Allen 38.7, Bowers 30.6, Winston 29.7). A 4% floor cost nothing
+            # measurable: +$16/slate with each build's best lineup removed
+            # (CI -3..+37), cashes +0.3. QBs only, by design: forcing the QB
+            # brings his receivers with him. Full max-entry sets only, the
+            # same line the lottery draws; it was tested at 150.
+            if pool_names and n >= E.LOTTERY_MIN_N:
+                used = {i for lu in chosen for i in lu.ids()}
+                zero = [p for p in players
+                        if p.is_qb and (p.in_pool or p.core) and p.proj > 0
+                        and p.dk_id not in used]
+                k = max(1, round(QB_FLOOR * n_mine))
+                extra, unbuilt = [], []
+                for q in zero:
+                    tc = [lu for lu in C.build_candidates(
+                              players, 300, stack_targets=shape_targets,
+                              bring_back_share=_share(o.get("bringBack"),
+                                                      C.BRING_BACK_SHARE),
+                              force=q, **common)
+                          if q.dk_id in lu.ids()]
+                    if not tc:
+                        unbuilt.append(q.name)
+                        continue
+                    rank_forced(tc)
+                    extra += tc
+                    qb_floors[q.dk_id] = k
+                if qb_floors:
+                    # Re-select the whole arm with the floors in force, so the
+                    # floored lineups come in under the same caps, overlap and
+                    # stack quotas, and push out the weakest rather than the
+                    # last rows.
+                    chosen = C.select(
+                        sorted(cands + extra,
+                               key=lambda l: -l.metrics.get("score", 0.0)),
+                        n_mine, stack_targets=shape_targets,
+                        core_floors={**(floors or {}), **qb_floors}, **caps)
+                    got_n = {q: sum(1 for lu in chosen if q in lu.ids())
+                             for q in qb_floors}
+                    say("info", "QB floor: " + ", ".join(
+                        f"{p.name} {got_n[p.dk_id]}" for p in players
+                        if p.dk_id in qb_floors)
+                        + f" of our {n_mine}. These QBs on your sheet were in "
+                          f"no lineup, so each is built in with his own "
+                          f"pass-catchers.")
+                if unbuilt:
+                    say("warn", "QB floor: no legal stacked lineup could be "
+                                "built around " + ", ".join(unbuilt)
+                                + " from your pool, so they stay at 0.")
 
 
     if n_vendor:
@@ -1352,18 +1421,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
             if not tc:
                 stuck.append(want.name)
                 continue
-            if bar:
-                M.rank(tc, mat, bar, sims, idx,
-                       own_lean=_f(o.get("ownLean"), M.OWN_LEAN),
-                       dupe_scale=dupe_scale, field_n=modelled)
-            else:
-                for lu in tc:
-                    sc = M.score_lineup(lu, mat, sims)
-                    d = M.estimated_dupes(lu, idx, scale=dupe_scale,
-                                          field_n=modelled)
-                    lu.metrics = {"mean": round(sum(sc) / sims, 2),
-                                  "dupes": round(d, 2)}
-                    lu.metrics["score"] = lu.metrics["mean"] / (1 + d) ** getattr(M, "DUPE_EXP", 1.0)
+            rank_forced(tc)
             best = max(tc, key=lambda l: l.metrics.get("score", 0.0))
             seen.add(best.key())
             tickets.append(best)
@@ -1388,7 +1446,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
             # a ticket cannot cost a core its floor; vendor rows only if our
             # arm is somehow shorter than the ticket count.
             ours = sorted((i for i, lu in enumerate(chosen) if lu.source == "mine"),
-                          key=lambda i: (any(p.core for p in chosen[i].players),
+                          key=lambda i: (any(p.core or p.dk_id in qb_floors
+                                             for p in chosen[i].players),
                                          chosen[i].metrics.get("score", 0.0)))
             drop = set(ours[:len(tickets)])
             if len(drop) < len(tickets):
@@ -1591,7 +1650,9 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                                for p in players if p.dk_id in (pcaps or {})},
                 "maxLeftover": _i(o.get("maxLeftover"), M.MAX_LEFTOVER),
                 "maxOverlap": M.MAX_OVERLAP,
-                "lottery": o.get("lottery", "on") != "off"}
+                "lottery": o.get("lottery", "on") != "off",
+                "qbFloor": {p.name: qb_floors[p.dk_id]
+                            for p in players if p.dk_id in qb_floors}}
     if fmt == "showdown":
         settings.update({"captainCap": caps["captain_cap"],
                          "sideCap": caps["side_cap"],
