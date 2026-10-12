@@ -1021,7 +1021,8 @@ def lottery_targets(final, pool_players, k=LOTTERY_TICKETS):
 
 def select(lineups, n, *, captain_cap=None,
            player_cap=None, player_caps=None, max_overlap=None, side_cap=None,
-           split_targets=None, core_floors=None, prior=None, kdst_cap=None):
+           split_targets=None, core_floors=None, prior=None, kdst_cap=None,
+           captain_caps=None):
     """Pick the final N under coverage rules rather than diversification ones.
 
     150 showdown entries are worth roughly two independent bets — mean pairwise
@@ -1140,6 +1141,12 @@ def select(lineups, n, *, captain_cap=None,
     lineups = unique
     total = n + len(prior)
     cap_ct = max(1, round(captain_cap * total))
+    # Per-player CAPTAIN caps, typed as "CPT <name> <pct>". They override the
+    # board-wide captain cap for that one player, in either direction, and
+    # count only the captain seat: a player capped at 10% as captain can still
+    # fill flex seats up to his own player cap.
+    cpt_lim = {i: max(0, int(round(v * total)))
+               for i, v in (captain_caps or {}).items()}
     ply_ct = max(1, round(player_cap * total))
     # Per-player caps, in lineup counts. These are your instruction about ONE
     # player, so they override the global cap in both directions: a tighter one
@@ -1183,7 +1190,7 @@ def select(lineups, n, *, captain_cap=None,
             ply_used[p.dk_id] = ply_used.get(p.dk_id, 0) + 1
 
     def ok(lu, overlap, honour_side=True):
-        if cpt_ct.get(lu.cpt.dk_id, 0) >= cap_ct:
+        if cpt_ct.get(lu.cpt.dk_id, 0) >= cpt_lim.get(lu.cpt.dk_id, cap_ct):
             return False
         side = lu.major_side()
         if honour_side and side_cap and side_cap < 1.0 and side:
@@ -1290,7 +1297,8 @@ def select(lineups, n, *, captain_cap=None,
                 return
             if id(lu) in taken:
                 continue
-            if honour_cpt and cpt_ct.get(lu.cpt.dk_id, 0) >= cap_ct:
+            if honour_cpt and (cpt_ct.get(lu.cpt.dk_id, 0)
+                               >= cpt_lim.get(lu.cpt.dk_id, cap_ct)):
                 continue
             if slack is not None and any(
                     ply_used.get(i, 0) >= player_caps[i] + slack
@@ -1313,7 +1321,8 @@ def select(lineups, n, *, captain_cap=None,
 
 def vendor_arm(field_entries, n, *, captain_cap=None,
                player_cap=None, player_caps=None, max_overlap=None, side_cap=None,
-               dupe_scale=1.0, core_floors=None, prior=None, kdst_cap=None):
+               dupe_scale=1.0, core_floors=None, prior=None, kdst_cap=None,
+               captain_caps=None):
     """Their pool, re-ranked on Win% / (1 + Dupes) and put through the same caps.
 
     This is the control arm for the A/B comparison, and on its own it is a
@@ -1344,6 +1353,6 @@ def vendor_arm(field_entries, n, *, captain_cap=None,
     # which ranks on beating the field rather than resembling it — came out
     # 32-32 without being told to.
     return select(cands, n, captain_cap=captain_cap, player_cap=player_cap,
-                  player_caps=player_caps,
+                  player_caps=player_caps, captain_caps=captain_caps,
                   max_overlap=max_overlap, side_cap=side_cap,
                   core_floors=core_floors, prior=prior, kdst_cap=kdst_cap)

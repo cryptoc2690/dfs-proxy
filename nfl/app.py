@@ -125,19 +125,23 @@ _CAP_LINE = re.compile(r"^(.*?)[\s,:=]+(\d{1,3}(?:\.\d+)?)\s*%?$")
 
 
 def _player_caps(text, players):
-    """-> ({dk_id: share 0-1}, [lines that matched no one], [lines misread])
+    """-> ({dk_id: share}, {dk_id: captain share}, [unmatched], [misread])
+
+    A line starting "CPT " caps that player in the captain seat only (showdown),
+    e.g. "CPT Bijan Robinson 15"; any other line caps him in every seat.
 
     A cap is your instruction about one player, so an unmatched name is
     reported rather than dropped: silently ignoring "Gore 10" and then building
     60 Gore lineups is the failure this control exists to prevent.
     """
     by_name = {normalize_name(p.name): p for p in players}
-    caps, missing, bad = {}, [], []
+    caps, cpt_caps, missing, bad = {}, {}, [], []
     for raw in re.split(r"[\r\n;]+", text or ""):
         line = raw.strip()
         if not line:
             continue
-        m = _CAP_LINE.match(line)
+        is_cpt = bool(re.match(r"(?i)cpt\b", line))
+        m = _CAP_LINE.match(re.sub(r"(?i)^cpt\b[\s:]*", "", line))
         if not m:
             bad.append(line)
             continue
@@ -150,8 +154,8 @@ def _player_caps(text, players):
         if p is None:
             missing.append(line)
             continue
-        caps[p.dk_id] = min(1.0, max(0.0, pct / 100.0))
-    return caps, missing, bad
+        (cpt_caps if is_cpt else caps)[p.dk_id] = min(1.0, max(0.0, pct / 100.0))
+    return caps, cpt_caps, missing, bad
 
 
 def _pool_gaps(players, min_proj):
@@ -440,7 +444,7 @@ def _attach_dk_ids(players, dk):
     return hit, miss, no_cpt
 
 
-def _exposure(chosen, fmt):
+def _exposure(chosen, fmt, players=(), field_cpt=None):
     """Who and what you actually ended up on. -> {"players": [...], "teams": [...]}
 
     Exposure is reported against the field's projected ownership rather than on
@@ -451,7 +455,11 @@ def _exposure(chosen, fmt):
 
     Showdown counts a captain as exposure to the player, not to a separate
     thing: he is the same body, and splitting him in two would understate how
-    concentrated the set really is. The captain share is carried alongside.
+    concentrated the set really is. The captain share is carried alongside,
+    next to the field's: the vendor's projected captain ownership, or, when the
+    projections file has none, the captain share of the vendor's field lineups.
+    On showdown the table also lists anyone the field is on (5%+ overall or as
+    captain) that you are not, so a faded chalk captain is visible at 0%.
     """
     n = len(chosen) or 1
     ply, teams, cpt = {}, {}, {}
@@ -467,6 +475,22 @@ def _exposure(chosen, fmt):
             teams.setdefault(t, {"team": t, "slots": 0, "lineups": 0})["lineups"] += 1
         if fmt == "showdown" and lu.cpt is not None:
             cpt[lu.cpt.dk_id] = cpt.get(lu.cpt.dk_id, 0) + 1
+    by_id = {p.dk_id: p for p in players}
+    has_cpt_own = any((p.cpt_own or 0) > 0 for p in players)
+
+    def field_cpt_of(k):
+        p = by_id.get(k)
+        if has_cpt_own:
+            return round(p.cpt_own, 1) if p else 0.0
+        return round((field_cpt or {}).get(k, 0.0), 1)
+
+    if fmt == "showdown":
+        for p in players:
+            if p.dk_id not in ply and (p.ownership >= 5.0
+                                       or field_cpt_of(p.dk_id) >= 5.0):
+                ply[p.dk_id] = {"name": p.name, "pos": p.pos, "team": p.team,
+                                "n": 0, "own": p.ownership, "core": p.core,
+                                "off": _off_sheet(p, fmt)}
     out = []
     for k, r in ply.items():
         pct = 100.0 * r["n"] / n
@@ -477,7 +501,9 @@ def _exposure(chosen, fmt):
                     # The leverage number: how far above or below the field you
                     # are on this player, in points of ownership.
                     "edge": round(pct - r["own"], 1),
-                    "cpt": cpt.get(k, 0)})
+                    "cpt": cpt.get(k, 0),
+                    "cptPct": round(100.0 * cpt.get(k, 0) / n, 1),
+                    "cptOwn": field_cpt_of(k) if fmt == "showdown" else None})
     out.sort(key=lambda r: -r["n"])
     tm = []
     for t, r in teams.items():
@@ -485,6 +511,19 @@ def _exposure(chosen, fmt):
                    "pct": round(100.0 * r["lineups"] / n, 1), "slots": r["slots"]})
     tm.sort(key=lambda r: -r["lineups"])
     return {"players": out, "teams": tm}
+
+
+def _field_cpt_share(field):
+    """{dk_id: % of the vendor's field captaining him}, weighted by Dupes."""
+    tot, cnt = 0.0, {}
+    for e in field or []:
+        c = e.get("cpt")
+        if c is None:
+            continue
+        w = 1.0 + (e.get("dupes") or 0.0)
+        cnt[c.dk_id] = cnt.get(c.dk_id, 0.0) + w
+        tot += w
+    return {k: 100.0 * v / tot for k, v in cnt.items()} if tot else {}
 
 
 def _logged_side(ps):
@@ -1297,7 +1336,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
             say("warn", "The stack-shape boxes did not add up to anything usable, "
                         "so the default 45/55 is in force.")
     caps = dict(player_cap=_share(o.get("playerCap"), M.PLAYER_CAP))
-    pcaps, cap_missing, cap_bad = _player_caps(o.get("capPlayers"), players)
+    pcaps, cpt_caps, cap_missing, cap_bad = _player_caps(o.get("capPlayers"),
+                                                         players)
     if pcaps:
         caps["player_caps"] = pcaps
         shown = ", ".join(
@@ -1314,6 +1354,16 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
     if fmt == "showdown":
         caps.update(captain_cap=_share(o.get("captainCap"), E.CAPTAIN_CAP),
                     side_cap=_share(o.get("sideCap"), E.SIDE_CAP))
+        if cpt_caps:
+            caps["captain_caps"] = cpt_caps
+            say("info", "Captain caps in force — " + ", ".join(
+                f"{p.name} {round(cpt_caps[p.dk_id] * 100)}% as CPT "
+                f"({max(0, int(round(cpt_caps[p.dk_id] * n)))} of {n})"
+                for p in players if p.dk_id in cpt_caps) + ".")
+    elif cpt_caps:
+        say("warn", "CPT caps only apply to showdown; on a main slate drop the "
+                    "CPT and the line caps the player: " + ", ".join(
+                        p.name for p in players if p.dk_id in cpt_caps))
     else:
         caps.update(qb_cap=_share(o.get("qbCap"), C.QB_CAP),
                     dst_cap=_share(o.get("dstCap"), C.DST_CAP))
@@ -1634,6 +1684,20 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                             f"{p.name} {got} of {len(chosen)} against {want}"
                             for p, got, want in sorted(over, key=lambda x: -x[1])))
 
+    if fmt == "showdown" and cpt_caps and chosen:
+        real = {}
+        for lu in chosen:
+            real[lu.cpt.dk_id] = real.get(lu.cpt.dk_id, 0) + 1
+        over = [(p, real.get(p.dk_id, 0), int(round(cpt_caps[p.dk_id] * len(chosen))))
+                for p in players if p.dk_id in cpt_caps
+                and real.get(p.dk_id, 0) > int(round(cpt_caps[p.dk_id] * len(chosen)))]
+        if over:
+            say("warn", "These captains ran over their CPT cap: " + ", ".join(
+                f"{p.name} {got} of {len(chosen)} against {want}"
+                for p, got, want in over)
+                + ". The lottery tickets are built after the caps and can add a "
+                  "few; everything else holds the cap.")
+
     if not chosen:
         return {"error": "No lineups produced.", "notes": notes}
     if len(chosen) < n:
@@ -1792,6 +1856,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                 "maxOverlap": M.MAX_OVERLAP,
                 "lottery": o.get("lottery", "on") != "off",
                 "valueAdds": [p.name for p in value_adds],
+                "captainCaps": {p.name: cpt_caps[p.dk_id]
+                                for p in players if p.dk_id in cpt_caps},
                 # Asked for by the 2026-10-12 midway review, so week 10 can tell
                 # builds apart without dating them against the commit log. Name
                 # the field file with its type and percent-to-first (e.g.
@@ -1941,7 +2007,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
             "dupeAvg": round(sum(lu.metrics.get("dupes", 0) for lu in chosen)
                              / len(chosen), 2),
         },
-        "exposure": _exposure(chosen, fmt),
+        "exposure": _exposure(chosen, fmt, players, _field_cpt_share(field)
+                              if fmt == "showdown" else None),
         "lineups": [_lineup_payload(lu, fmt) for lu in chosen],
         "dkCsv": dk_csv,
         "logPath": LOG_PATH,

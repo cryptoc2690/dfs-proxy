@@ -259,12 +259,14 @@ INDEX_HTML = r"""<!doctype html>
     <div>
       <label>Cap individual players <span id="capwho" class="muted">— none set</span></label>
       <textarea id="capplayers" rows="4" spellcheck="false"
-                placeholder="Frank Gore Jr. 10&#10;Josh Allen 40"></textarea>
+                placeholder="Frank Gore Jr. 10&#10;Josh Allen 40&#10;CPT Bijan Robinson 15"></textarea>
       <div class="picknote">One player and one percentage per line. Your number
         is the final word on that player — it overrides the board-wide exposure
         cap, and on a main slate the quarterback and defence caps too. Leave a
         player out and nothing changes for him. The build says which caps it
-        applied and warns about any name it could not find.</div>
+        applied and warns about any name it could not find. Showdown: start a
+        line with CPT to cap him as captain only (CPT Bijan Robinson 15); he can
+        still fill flex seats.</div>
     </div>
   </div>
 </details>
@@ -697,7 +699,8 @@ function exposureHtml(e, n, sd){
   h += '<div><div class="exptitle">Players — yours vs the field</div>'
      + '<div class="tblwrap"><table><thead><tr><th>player</th><th>pos</th>'
      + '<th>team</th><th class="num">yours</th><th class="num">field</th>'
-     + '<th class="num">edge</th>'+(sd?'<th class="num">as CPT</th>':'')
+     + '<th class="num">edge</th>'
+     + (sd?'<th class="num">CPT yours</th><th class="num">CPT field</th>':'')
      + '</tr></thead><tbody>';
   e.players.forEach(p => {
     const cls = p.edge >= 10 ? 'up' : (p.edge <= -10 ? 'down' : '');
@@ -709,7 +712,8 @@ function exposureHtml(e, n, sd){
       + '<td class="num">'+p.pct.toFixed(0)+'%</td>'
       + '<td class="num">'+p.own.toFixed(0)+'%</td>'
       + '<td class="num '+cls+'">'+(p.edge>0?'+':'')+p.edge.toFixed(0)+'</td>'
-      + (sd?'<td class="num">'+(p.cpt||'')+'</td>':'')
+      + (sd?'<td class="num">'+(p.cpt ? p.cptPct.toFixed(0)+'%' : '0%')+'</td>'
+           + '<td class="num">'+(p.cptOwn!=null ? p.cptOwn.toFixed(0)+'%' : '')+'</td>':'')
       + '</tr>';
   });
   h += '</tbody></table></div></div></div></details>';

@@ -272,6 +272,15 @@ by the most (Allen, Bowers, Winston); a 4% floor cost nothing measurable
 (+$16/slate with each build's best lineup removed, CI −3..+37). QBs only: the
 forced QB brings his receivers. The note names each floored QB and his count.
 
+**Captain caps (showdown).** In the per-player cap box, a line starting with
+`CPT` caps that player in the captain seat only: `CPT Bijan Robinson 15` holds him
+to 15% of entries as captain while he can still fill flex seats up to his own
+player cap. It overrides the board-wide captain cap (28%) in either direction.
+The exposure table shows your captain share next to the field's (the vendor's
+projected CPT ownership, or the captain share of their field lineups when the
+projections carry none), and lists any player the field is on at 5%+ overall
+or as captain that you are not, at 0%.
+
 **Pool additions (main slate).** Two lists of players off the sheet go into the
 ordinary pool on every main-slate build, where either arm can use them like any
 name you typed. Neither gets dedicated lineups, a lottery ticket or the QB
