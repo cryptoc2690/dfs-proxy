@@ -272,6 +272,18 @@ by the most (Allen, Bowers, Winston); a 4% floor cost nothing measurable
 (+$16/slate with each build's best lineup removed, CI −3..+37). QBs only: the
 forced QB brings his receivers. The note names each floored QB and his count.
 
+**Tier leverage (main slate, on by default).** Inside a salary tier (same
+position, within $800 of the tier's top salary, 1%+ projected ownership), the
+chalk member and his tier-mates projected within 10% of him are treated as
+near-equal. If the build holds the chalk above his share of that group's field
+ownership, he is capped at it and the excess goes to the mates held under
+theirs; the group's total exposure is unchanged. Floored mates get lineups built
+around them by the ordinary builder. A note lists every move as before→after.
+Option `tierLeverage` (`off` to disable). Measured 2026-10-19 (T18): neutral on
+150-entry sets (−$18.7/slate, CI −48..+9), positive on 20-max contests
+(+$39/contest, CI −10..+83). Wider versions (whole salary tier, 1/ownership,
+QB/RB only) all lost money and stay off. Week 10 re-tests it.
+
 **Captain caps (showdown).** In the per-player cap box, a line starting with
 `CPT` caps that player in the captain seat only: `CPT Bijan Robinson 15` holds him
 to 15% of entries as captain while he can still fill flex seats up to his own

@@ -258,6 +258,9 @@ GAP_QB_PROJ = 16.0         # ...plus any QB off the sheet projected this high
 VALUE_ADD_N = 5            # cheap value plays added to a main-slate pool
 VALUE_ADD_MAX_SAL = 4000
 VALUE_ADD_MIN_PROJ = 4.0
+TIER_BAND = 800            # tier leverage: salary band of a tier, same position
+TIER_MATCH = 0.10          # ...tier-mates within this share of the chalk's projection
+TIER_MIN_OWN = 1.0         # ...players under this projected ownership are not in a tier
 
 
 def _stack_gaps(players, min_proj):
@@ -387,6 +390,84 @@ def _pool_gaps_owned(players, min_proj, skip=()):
     qbs = sorted((p for p in off if p.is_qb and p.proj >= GAP_QB_PROJ
                   and p not in top), key=lambda p: -p.proj)
     return top + qbs
+
+
+def _tier_leverage(players, chosen, n, user_caps=None):
+    """Projection-matched tier leverage (main slate). -> (caps, floors, moves)
+
+    Inside a salary tier (same position, within TIER_BAND of the tier's top
+    salary, projected ownership TIER_MIN_OWN+), take the chalk member and his
+    tier-mates projected within TIER_MATCH of him. If the build holds the chalk
+    above his share of the group's field ownership, cap him at that share and
+    give the excess to the mates the build holds under their share, in
+    proportion to how far under they are. The group's total exposure does not
+    change; only who carries it.
+
+    Measured 2026-10-19 on 6 main slates (theory T18): the build sits 7-8
+    points chalkier than the field inside every tier while the top 1% and top
+    0.1% lean slightly away; among tier-mates projected within 10% of each
+    other the chalk member did not hit more often (he hit less). Moving
+    exposure across a whole salary tier lost money; this narrow version was
+    neutral on 150-entry sets (-$18.7/slate, CI -48..+9) and positive on the
+    20-max contests (+$39/contest, CI -10..+83; top-0.1% +0.58). On 10-18 it is
+    the Bijan-vs-Walker case: 1.8x the field on one, 0.25x on the other.
+
+    caps and floors are lineup counts out of n; moves is [(player, before,
+    target)] for the note.
+    """
+    user_caps = user_caps or {}
+    cnt = {}
+    for lu in chosen:
+        for i in lu.ids():
+            cnt[i] = cnt.get(i, 0) + 1
+    caps, floors, moves = {}, {}, []
+    for pos in ("QB", "RB", "WR", "TE"):
+        grp = sorted((p for p in players
+                      if p.pos == pos and p.proj > 0 and p.salary > 0
+                      and p.ownership >= TIER_MIN_OWN and (p.in_pool or p.core)),
+                     key=lambda p: -p.salary)
+        while grp:
+            top = grp[0].salary
+            tier = [p for p in grp if p.salary >= top - TIER_BAND]
+            grp = grp[len(tier):]
+            chalk = max(tier, key=lambda p: (p.ownership, p.proj))
+            mates = [p for p in tier if p is not chalk
+                     and abs(p.proj - chalk.proj) <= TIER_MATCH * chalk.proj]
+            if not mates:
+                continue
+            g = [chalk] + mates
+            tot = sum(cnt.get(p.dk_id, 0) for p in g)
+            own = sum(p.ownership for p in g)
+            if tot == 0 or own <= 0:
+                continue
+            cap = int(round(chalk.ownership / own * tot))
+            excess = cnt.get(chalk.dk_id, 0) - cap
+            if excess <= 0:
+                continue
+            deficit = {p.dk_id: max(0.0, p.ownership / own * tot
+                                    - cnt.get(p.dk_id, 0)) for p in mates}
+            room = {p.dk_id: max(0, int(user_caps.get(p.dk_id, 1.0) * n)
+                                 - cnt.get(p.dk_id, 0)) for p in mates}
+            want = sum(min(deficit[i], room[i]) for i in deficit)
+            if want < 1:
+                continue
+            give = min(excess, int(round(want)))
+            share = {i: min(deficit[i], room[i]) / want * give for i in deficit}
+            alloc = {i: int(v) for i, v in share.items()}
+            for i in sorted(share, key=lambda i: -(share[i] - alloc[i])):
+                if sum(alloc.values()) >= give:
+                    break
+                alloc[i] += 1
+            moved = sum(alloc.values())
+            if moved <= 0:
+                continue
+            caps[chalk.dk_id] = cnt.get(chalk.dk_id, 0) - moved
+            moves.append((chalk, cnt.get(chalk.dk_id, 0), caps[chalk.dk_id]))
+            for p in mates:
+                if alloc.get(p.dk_id):
+                    floors[p.dk_id] = cnt.get(p.dk_id, 0) + alloc[p.dk_id]
+                    moves.append((p, cnt.get(p.dk_id, 0), floors[p.dk_id]))
+    return caps, floors, moves
 
 
 def _value_adds(players, min_proj):
@@ -1383,6 +1464,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                                    / (1 + d) ** getattr(M, "DUPE_EXP", 1.0))
 
     qb_floors = {}                       # dk_id -> lineups promised, main slate
+    mine_pool, v_rows, tier_moves = None, None, []
     if n_mine:
         rng = __import__("random").Random(seed)
         common = dict(rng=rng, max_off_pool=off_pool,
@@ -1440,6 +1522,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
         else:
             chosen += C.select(cands, n_mine, stack_targets=shape_targets,
                                core_floors=floors, **caps)
+            mine_pool = cands
             # QB floor. A QB on your sheet that the ranking left at zero gets
             # QB_FLOOR of our arm, each lineup built around him by the ordinary
             # builder, so he is stacked with his own pass-catchers like any
@@ -1476,10 +1559,10 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                     # floored lineups come in under the same caps, overlap and
                     # stack quotas, and push out the weakest rather than the
                     # last rows.
+                    mine_pool = sorted(cands + extra,
+                                       key=lambda l: -l.metrics.get("score", 0.0))
                     chosen = C.select(
-                        sorted(cands + extra,
-                               key=lambda l: -l.metrics.get("score", 0.0)),
-                        n_mine, stack_targets=shape_targets,
+                        mine_pool, n_mine, stack_targets=shape_targets,
                         core_floors={**(floors or {}), **qb_floors}, **caps)
                     got_n = {q: sum(1 for lu in chosen if q in lu.ids())
                              for q in qb_floors}
@@ -1549,6 +1632,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                                        core_floors=floors_total, prior=chosen,
                                        **caps)
             elif vfield:
+                v_rows = vfield
                 chosen += C.vendor_arm(vfield, n_vendor, dupe_scale=dupe_scale,
                                        core_floors=floors_total, prior=chosen,
                                        **caps)
@@ -1570,6 +1654,65 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                            **shape_kw, **caps)
         say("info", f"Topped up {need} entries from our own builder to cover "
                     f"all {n}.")
+
+    # Tier leverage (main slate, on by default). Reads the finished set, then
+    # re-runs the same selections with the chalk capped and his projection-
+    # matched tier-mates floored, so the group's total exposure is unchanged.
+    if (fmt == "classic" and mine_pool and chosen
+            and o.get("tierLeverage", "on") != "off"):
+        t_caps, t_floors, tier_moves = _tier_leverage(players, chosen, n, pcaps)
+        if t_floors:
+            pc = dict(caps.get("player_caps") or {})
+            for i, c in t_caps.items():
+                pc[i] = min(pc.get(i, 1.0), c / n)
+            caps2 = {**caps, "player_caps": pc}
+            fl_mine = {**(floors or {}), **qb_floors,
+                       **{i: max(1, round(v * n_mine / n))
+                          for i, v in t_floors.items()}}
+            fl_all = {**(floors_total or {}), **t_floors}
+            # A floored mate needs lineups built around him to choose from, the
+            # way the QB floor and the lottery get theirs: the ordinary builder
+            # with him seeded, so every normal rule still applies.
+            by_id = {p.dk_id: p for p in players}
+            extra_t = []
+            for i in t_floors:
+                tc = [lu for lu in C.build_candidates(
+                          players, 300, stack_targets=shape_targets,
+                          bring_back_share=_share(o.get("bringBack"),
+                                                  C.BRING_BACK_SHARE),
+                          force=by_id[i], **common)
+                      if i in lu.ids()]
+                if tc:
+                    rank_forced(tc)
+                    extra_t += tc
+            pool2 = sorted(mine_pool + extra_t,
+                           key=lambda l: -l.metrics.get("score", 0.0))
+            redo = C.select(pool2, n_mine, stack_targets=shape_targets,
+                            core_floors=fl_mine, **caps2)
+            if n_vendor:
+                redo += (C.vendor_arm(v_rows, n_vendor, dupe_scale=dupe_scale,
+                                      core_floors=fl_all, prior=redo, **caps2)
+                         if v_rows else
+                         M.select(pool2, n_vendor, core_floors=fl_all, prior=redo,
+                                  stack_targets=shape_targets, **caps2))
+            if len(redo) < n:
+                redo += M.select(pool2, n - len(redo), core_floors=fl_all,
+                                 prior=redo, stack_targets=shape_targets, **caps2)
+            if len(redo) >= len(chosen):
+                chosen = redo
+                after = {}
+                for lu in chosen:
+                    for i in lu.ids():
+                        after[i] = after.get(i, 0) + 1
+                say("info", "Tier leverage: " + "; ".join(
+                    f"{p.name.strip()} {was}→{after.get(p.dk_id, 0)} "
+                    f"({p.ownership:.0f}% owned)" for p, was, _t in tier_moves)
+                    + f" of {len(chosen)}. Near-equal tier-mates (same position, "
+                      f"within ${TIER_BAND} and {TIER_MATCH:.0%} projection): the "
+                      f"chalk's excess over his field share goes to the "
+                      f"under-owned mate. Turn off with tierLeverage=off.")
+            else:
+                tier_moves = []
 
     # Lottery tickets. Runs LAST, once both arms and the top-up are in, because
     # "nobody used him" is a question about the whole entered set rather than
@@ -1856,6 +1999,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                 "maxOverlap": M.MAX_OVERLAP,
                 "lottery": o.get("lottery", "on") != "off",
                 "valueAdds": [p.name for p in value_adds],
+                "tierLeverage": o.get("tierLeverage", "on") != "off",
+                "tierMoves": [[p.name, was, tgt] for p, was, tgt in tier_moves],
                 "captainCaps": {p.name: cpt_caps[p.dk_id]
                                 for p in players if p.dk_id in cpt_caps},
                 # Asked for by the 2026-10-12 midway review, so week 10 can tell
