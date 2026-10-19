@@ -261,6 +261,9 @@ VALUE_ADD_MIN_PROJ = 4.0
 TIER_BAND = 800            # tier leverage: salary band of a tier, same position
 TIER_MATCH = 0.10          # ...tier-mates within this share of the chalk's projection
 TIER_MIN_OWN = 1.0         # ...players under this projected ownership are not in a tier
+TIER_MIN_SALARY = 5000     # ...nor players under this salary: the near-equal evidence
+                           # came from the real-player tiers (streamer RB tiers
+                           # start at $5,800); cheap tiers are mostly punts
 
 
 def _stack_gaps(players, min_proj):
@@ -423,7 +426,8 @@ def _tier_leverage(players, chosen, n, user_caps=None):
     caps, floors, moves = {}, {}, []
     for pos in ("QB", "RB", "WR", "TE"):
         grp = sorted((p for p in players
-                      if p.pos == pos and p.proj > 0 and p.salary > 0
+                      if p.pos == pos and p.proj > 0
+                      and p.salary >= TIER_MIN_SALARY
                       and p.ownership >= TIER_MIN_OWN and (p.in_pool or p.core)),
                      key=lambda p: -p.salary)
         while grp:
@@ -1708,9 +1712,10 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                     f"{p.name.strip()} {was}→{after.get(p.dk_id, 0)} "
                     f"({p.ownership:.0f}% owned)" for p, was, _t in tier_moves)
                     + f" of {len(chosen)}. Near-equal tier-mates (same position, "
-                      f"within ${TIER_BAND} and {TIER_MATCH:.0%} projection): the "
-                      f"chalk's excess over his field share goes to the "
-                      f"under-owned mate. Turn off with tierLeverage=off.")
+                      f"${TIER_MIN_SALARY:,}+, within ${TIER_BAND} and "
+                      f"{TIER_MATCH:.0%} projection): the chalk's excess over his "
+                      f"field share goes to the under-owned mate. Turn off with "
+                      f"tierLeverage=off.")
             else:
                 tier_moves = []
 

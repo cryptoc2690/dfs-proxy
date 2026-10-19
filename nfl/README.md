@@ -273,7 +273,8 @@ by the most (Allen, Bowers, Winston); a 4% floor cost nothing measurable
 forced QB brings his receivers. The note names each floored QB and his count.
 
 **Tier leverage (main slate, on by default).** Inside a salary tier (same
-position, within $800 of the tier's top salary, 1%+ projected ownership), the
+position, $5,000 and up, within $800 of the tier's top salary, 1%+ projected
+ownership), the
 chalk member and his tier-mates projected within 10% of him are treated as
 near-equal. If the build holds the chalk above his share of that group's field
 ownership, he is capped at it and the excess goes to the mates held under
