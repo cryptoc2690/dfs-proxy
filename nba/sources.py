@@ -223,7 +223,33 @@ def read_projections(text):
         players.append(p)
     return players, {"matched": cols, "unmatched": missing, "loose": loose,
                      "players": len(players), "duplicate_rows": dupes,
-                     "bad_proj": bad_proj, "unknown_pos": unknown_pos}
+                     "bad_proj": bad_proj, "unknown_pos": unknown_pos,
+                     "headers": list(rows[0].keys())}
+
+
+# ETR's export, read for what it is so it can be refused in slot 1 by name.
+# Oct 20, 2026: ETR's file ("DK NBA DFS Projections.csv") went into the
+# projections slot in place of Stokastic's ("DK_NBA_Main_Pre_Contest_
+# Projections.csv"). The build ran — no Std Dev, so every spread was the
+# stand-in, and ETR's ownership against Stokastic's field — and said so only as
+# one note among twenty. A wrong file is not a note, it is a stop.
+_ETR_SIGNATURE = {"fpts", "projown", "dkslateid", "dkname"}
+
+
+def stokastic_problem(rep):
+    """-> "" if this reads as Stokastic's projections export, else why not."""
+    norm = {_norm_header(h) for h in rep.get("headers") or []}
+    if len(norm & _ETR_SIGNATURE) >= 3:
+        return ("this is ETR's projections file (FPTS, ProjOwn, DKSlateID), not "
+                "Stokastic's")
+    if "sd" not in (rep.get("matched") or {}):
+        return ("it has no Std Dev column, so it is not Stokastic's projections "
+                "export")
+    loose = [k for k, _h in rep.get("loose") or [] if k in ("proj", "own", "salary")]
+    if loose:
+        return ("its " + ", ".join(loose) + " column(s) could only be matched by "
+                "guessing")
+    return ""
 
 
 # --- 2. Stokastic lineups export = the simulated FIELD --------------------
@@ -569,7 +595,40 @@ def read_linestar(text):
                  "is_results": scored >= 5, "matched": cols, "loose": loose}
 
 
-# --- 6. The sharp's sheet -------------------------------------------------
+ETR_COLUMNS = {
+    "name": ["dkname", "player", "name"], "proj": ["fpts", "projection"],
+    "own": ["projown", "ownership"], "ceil": ["ceiling"], "dk_id": ["dkslateid"],
+}
+
+
+def read_etr(text):
+    """ETR's export, LOGGED ONLY. -> ({dk id or norm name: {...}}, report)
+
+    Keyed by DK id where the file carries one (DKSlateID is DK's player id), so
+    ETR's spellings ("DeAaron Fox", "Ron Holland II") cannot break the join.
+    """
+    rows = list(csv.DictReader(io.StringIO((text or "").lstrip("\ufeff"))))
+    if not rows:
+        return {}, {"error": "empty file"}
+    cols, _m, _l = _match_columns(rows[0].keys(), ETR_COLUMNS)
+    if not {"name", "proj", "own"} <= set(cols):
+        return {}, {"error": "no player / FPTS / ProjOwn columns — not an ETR export"}
+    out = {}
+    for r in rows:
+        name = (r.get(cols["name"]) or "").strip()
+        if not name:
+            continue
+        rec = {"name": name, "proj": _f(r.get(cols["proj"])),
+               "own": _f(r.get(cols["own"])),
+               "ceil": _f(r.get(cols["ceil"])) if "ceil" in cols else None}
+        pid = (r.get(cols["dk_id"]) or "").strip() if "dk_id" in cols else ""
+        if pid:
+            out[pid] = rec
+        out[normalize_name(name)] = rec
+    return out, {"players": len(rows)}
+
+
+# --- 7. The sharp's sheet -------------------------------------------------
 SHARP_SKIP = {"pg", "sg", "sf", "pf", "c", "g", "f", "util", "cpt", "pos",
               "position", "team", "salary", "sal", "name", "player", "core",
               "opp", "opponent", "proj", "projection", "own", "ownership",

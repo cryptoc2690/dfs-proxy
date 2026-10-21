@@ -143,7 +143,9 @@ INDEX_HTML = r"""<!doctype html>
     <span class="fstate">needed to upload — drop or click</span></div>
   <div class="fslot" id="s_ls"><b>4 · LineStar <span style="opacity:.6">(optional)</span></b>
     <span class="fstate">Vegas + a second projection, logged only</span></div>
-  <div class="fslot" id="s_st"><b>5 · DK contest standings <span style="opacity:.6">(after)</span></b>
+  <div class="fslot" id="s_etr"><b>5 · ETR <span style="opacity:.6">(optional)</span></b>
+    <span class="fstate">projection + ownership, logged only</span></div>
+  <div class="fslot" id="s_st"><b>6 · DK contest standings <span style="opacity:.6">(after)</span></b>
     <span class="fstate">grade last night's build — drop or click</span></div>
 </div>
 
@@ -232,6 +234,13 @@ INDEX_HTML = r"""<!doctype html>
         cap (which is off by default: heavy exposure is reported, not capped). Leave a
         player out and nothing changes for him. The build says which caps it
         applied and warns about any name it could not find.</div>
+      <label style="margin-top:14px">Minimum lineups for a player</label>
+      <textarea id="floorplayers" rows="2" spellcheck="false"
+                placeholder="Andre Drummond 2"></textarea>
+      <div class="picknote">One player and a NUMBER of lineups per line. Gets a
+        game-script play into a lineup or two without making him a core; he is
+        added to the pool if he is not on it. The build says if a minimum could
+        not be met.</div>
     </div>
   </div>
 </details>
@@ -263,7 +272,9 @@ INDEX_HTML = r"""<!doctype html>
     <p>4, LineStar, is optional: its Vegas lines, its projection and its
       starting status are logged beside Stokastic's and not used. It also warns
       if LineStar has someone at 0 whom Stokastic still projects.</p>
-    <p>5 is for the morning after: drop DK's contest standings and grade the
+    <p>5, ETR, is optional and logged only — never slot 1. Slot 1 refuses any
+      file that is not Stokastic's projections export.</p>
+    <p>6 is for the morning after: drop DK's contest standings and grade the
       build you logged against the real field.</p>
   </div>
   <div id="out"></div>
@@ -271,7 +282,8 @@ INDEX_HTML = r"""<!doctype html>
 
 <script>
 const $ = s => document.querySelector(s);
-const files = {proj:null, field:null, dk:null, linestar:null, standings:null};
+const files = {proj:null, field:null, dk:null, linestar:null, etr:null, standings:null};
+const fileNames = {};
 let result = null, roster = [], fmt = 'showdown', fmtFromDk = false;
 
 // Showdown and classic are different games, not two sizes of one, so the page
@@ -329,7 +341,7 @@ function slot(key, el){
         });
         const d = await res.json();
         if(d.ok){
-          files[key] = text;
+          files[key] = text; fileNames[key] = f.name;
           mark('loaded', '✓ ' + f.name + ' — ' + d.msg);
           if(d.format) setFmt(d.format, key === 'dk');
           if(key === 'standings') $('#graderow').style.display = '';
@@ -365,6 +377,7 @@ slot('proj', $('#s_proj'));
 slot('field', $('#s_field'));
 slot('dk', $('#s_dk'));
 slot('linestar', $('#s_ls'));
+slot('etr', $('#s_etr'));
 slot('standings', $('#s_st'));
 
 // ---- type-ahead pickers, enabled once the slate is known ----
@@ -547,6 +560,7 @@ $('#go').addEventListener('click', async () => {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
         proj: files.proj, field: files.field, dk: files.dk, linestar: files.linestar,
+        etr: files.etr,
         options: {
           n: num('#n',150), split: num('#split',75),
           // Deliberately NOT sending the format. The server works it out from
@@ -555,6 +569,8 @@ $('#go').addEventListener('click', async () => {
           ownLean: num('#lean',0)/100,
           minProj: num('#minproj', 2),
           remove: $('#remove').value,
+          floorPlayers: $('#floorplayers').value,
+          fileNames: fileNames,
           fieldCap: num('#cap',0), fillPct: num('#fillpct',100),
           maxOffPool: $('#offpool').value,
           pool: [...sel.pool].join('\n'), cores: [...sel.core].join('\n'),

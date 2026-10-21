@@ -36,8 +36,8 @@ import engine as E
 from dk import (CLASSIC_SIZE, CLASSIC_SLOTS, SALARY_CAP, SD_ROSTER_SIZE,
                 ShowdownLineup, normalize_name, positions_of, slots_for)
 from gui import INDEX_HTML
-from sources import (read_dk_entries, read_field, read_linestar, read_projections,
-                     read_sharp,
+from sources import (read_dk_entries, read_etr, read_field, read_linestar,
+                     read_projections, read_sharp, stokastic_problem,
                      read_standings, payout_ladder, _roster_key)
 
 LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -109,6 +109,47 @@ def _player_caps(text, players):
             continue
         caps[p.dk_id] = min(1.0, max(0.0, float(m.group(2)) / 100.0))
     return caps, missing, bad
+
+
+_FLOOR_LINE = re.compile(r"^(.*?)[\s,:=]+(\d{1,3})$")
+
+
+def _player_floors(text, players):
+    """-> ({dk_id: lineups}, [unmatched lines], [unreadable lines])
+
+    "Andre Drummond 2" = at least two lineups. A COUNT, not a percentage: the
+    point is a game-script play in a lineup or two without making him a core
+    (Oct 20: Drummond, named by the sharp, was pool-eligible in 2-3% of the
+    candidates and the score-first selector picked none). Unmatched names are
+    reported, never dropped.
+    """
+    by_name = {normalize_name(p.name): p for p in players}
+    out, missing, bad = {}, [], []
+    for raw in re.split(r"[\r\n;]+", text or ""):
+        line = raw.strip()
+        if not line:
+            continue
+        m = _FLOOR_LINE.match(line)
+        if not m:
+            bad.append(line)
+            continue
+        key = normalize_name(m.group(1).strip())
+        p = by_name.get(key)
+        if p is None and key:
+            hits = [v for k, v in by_name.items() if k.startswith(key)]
+            p = hits[0] if len(hits) == 1 else None
+        if p is None:
+            missing.append(line)
+            continue
+        out[p.dk_id] = int(m.group(2))
+    return out, missing, bad
+
+
+def _fingerprint(text):
+    """Short content hash, logged per build so a wrong file is visible later."""
+    import hashlib
+    return hashlib.sha1((text or "").encode("utf-8", "replace")).hexdigest()[:12] \
+        if (text or "").strip() else None
 
 
 # ---------------- late scratch: the WNBA removal ----------------
@@ -562,6 +603,7 @@ def _log(lineups, rosters, meta):
                                  "cpt_own": p.cpt_own if fmt == "showdown" else None,
                                  "minutes": p.minutes, "starting": p.starting,
                                  "ls_proj": p.ls_proj, "ls_status": p.ls_status,
+                                 "etr_proj": p.etr_proj, "etr_own": p.etr_own,
                                  "core": p.core, "pool": p.in_pool}
                                 for s, p in zip(meta.get("slots") or [], ps)],
                     "salary": lu.salary, "leftover": SALARY_CAP - lu.salary,
@@ -571,6 +613,7 @@ def _log(lineups, rosters, meta):
                     "projection": meta.get("projection", {}),
                     "contest_state": meta.get("contest_state", {}),
                     "removed": meta.get("removed", []),
+                    "files": meta.get("files", {}),
                 }
                 if fmt == "showdown":
                     row.update({"captain": lu.cpt.name, "captain_id": lu.cpt.dk_id,
@@ -590,7 +633,8 @@ def _log(lineups, rosters, meta):
 
 
 # ---------------- the build ----------------
-def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=""):
+def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text="",
+              etr_text=""):
     """The whole build. Returns plain dicts, so the CLI and the page share it."""
     o = options or {}
     notes = []
@@ -601,6 +645,20 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
     players, rep = read_projections(proj_text or "")
     if rep.get("error"):
         return {"error": f"Projections file: {rep['error']}"}
+    # The projections slot takes Stokastic's export and nothing else. On Oct 20
+    # ETR's file ran in its place, unnoticed, because the only signal was a
+    # note. A wrong file stops the build.
+    why_not = stokastic_problem(rep)
+    if why_not and not o.get("allowNonStokastic"):
+        return {"error": f"Not building: the projections file in slot 1 is not "
+                         f"Stokastic's — {why_not}. Drop Stokastic's projections "
+                         f"export (DK_NBA_…_Pre_Contest_Projections.csv) there.",
+                "notes": notes}
+    names = o.get("fileNames") or {}
+    files = {k: {"name": names.get(k), "sha1": _fingerprint(t)}
+             for k, t in (("proj", proj_text), ("field", field_text), ("dk", dk_text),
+                          ("linestar", linestar_text), ("etr", etr_text))
+             if (t or "").strip()}
     say("info", f"Projections: {rep['players']} players. Columns — "
                 + ", ".join(f"{k} from “{v}”" for k, v in rep["matched"].items()))
     if rep.get("loose"):
@@ -713,6 +771,23 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                             "projects them: " + ", ".join(
                                 f"{p.name} ({p.proj:.1f})" for p in zeroed[:10])
                             + ". If one is a real scratch, put him in Late scratch.")
+
+    # ETR, if given: projection and ownership LOGGED beside Stokastic's, never
+    # used. Joined by DK id where both sides carry one, so ETR's spellings
+    # ("DeAaron Fox") cannot break it.
+    if (etr_text or "").strip():
+        etr, erep = read_etr(etr_text)
+        if erep.get("error"):
+            say("warn", f"ETR file: {erep['error']}")
+        else:
+            got = 0
+            for p in players:
+                rec = etr.get(p.dk_id) or etr.get(normalize_name(p.name))
+                if rec:
+                    p.etr_proj, p.etr_own = rec["proj"], rec["own"]
+                    got += 1
+            say("info", f"ETR: projection and ownership for {got} players logged "
+                        f"beside Stokastic's. Not used in the build.")
 
     # Pool and cores. Marked before removal, so a removed core is a known name.
     pool_names = read_sharp(o.get("pool") or "")
@@ -867,6 +942,25 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
     if cap_bad:
         say("warn", "These cap lines need a name and a percentage — ignored: "
                     + "; ".join(cap_bad))
+    pfloors, floor_missing, floor_bad = _player_floors(o.get("floorPlayers"), players)
+    if floor_missing:
+        say("warn", "No player on this slate matches these minimums, so they are NOT "
+                    "in force: " + "; ".join(floor_missing))
+    if floor_bad:
+        say("warn", "These minimum lines need a name and a number of lineups, e.g. "
+                    "\"Andre Drummond 2\" — ignored: " + "; ".join(floor_bad))
+    for p in players:
+        if p.dk_id in pfloors:
+            if p.proj <= 0:
+                say("warn", f"{p.name} has a minimum but is projected 0 (out or "
+                            f"removed), so the minimum is dropped.")
+                pfloors.pop(p.dk_id)
+                continue
+            p.in_pool = True      # your instruction licenses him past the pool
+            p.boost = True        # and weights construction so the floor is reachable
+    if pfloors:
+        say("info", "Minimum lineups in force — " + ", ".join(
+            f"{p.name} {pfloors[p.dk_id]}" for p in players if p.dk_id in pfloors))
     if fmt == "showdown":
         caps["captain_cap"] = _share(o.get("captainCap"), E.CAPTAIN_CAP)
     max_leftover = _i(o.get("maxLeftover"),
@@ -880,6 +974,15 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
         if core_ids and n_mine else None
     floors_total = {cid: max(1, -(-n // (len(core_ids) + 1))) for cid in core_ids} \
         if core_ids else None
+    # Typed minimums ride the same machinery as the core floors, in lineup
+    # counts, filled first in our own arm and held across both arms.
+    if pfloors:
+        floors = dict(floors or {})
+        floors_total = dict(floors_total or {})
+        for pid, k in pfloors.items():
+            floors[pid] = max(floors.get(pid, 0), min(k, n_mine)) if n_mine else 0
+            floors_total[pid] = max(floors_total.get(pid, 0), min(k, n))
+        floors = {k: v for k, v in floors.items() if v > 0} or None
 
     def build(off, leftover):
         rng = __import__("random").Random(seed)
@@ -954,6 +1057,21 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
             say("warn", "The board could not fill the set under your caps, so these ran "
                         "over: " + ", ".join(f"{p.name} {g} of {len(chosen)} against {w}"
                                              for p, g, w in over))
+    if pfloors:
+        short = []
+        for p in players:
+            if p.dk_id in pfloors:
+                got = sum(1 for lu in chosen if p.dk_id in lu.ids())
+                want = min(pfloors[p.dk_id], len(chosen))
+                if got < want:
+                    short.append(f"{p.name} is in {got}, not {want}")
+        say("warn" if short else "good",
+            ("A minimum could not be met — " + "; ".join(short)
+             + ". Usually the salary cap or his projection is below the floor "
+               "for a roster spot.") if short else
+            "Every minimum you typed is met: " + ", ".join(
+                f"{p.name} in {sum(1 for lu in chosen if p.dk_id in lu.ids())}"
+                for p in players if p.dk_id in pfloors) + ".")
     coach = _coach(players, chosen, mat, sims, removed, pool_names, off_pool,
                    floors_total)
     if core_ids:
@@ -997,8 +1115,11 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                 "playerCap": caps["player_cap"], "captainCap": caps.get("captain_cap"),
                 "minProj": min_proj, "maxLeftover": max_leftover,
                 "maxOffPool": off_pool, "cores": sorted(core_names),
-                "pool": sorted(pool_names), "capPlayers": o.get("capPlayers") or ""}
+                "pool": sorted(pool_names), "capPlayers": o.get("capPlayers") or "",
+                "floorPlayers": {p.name: pfloors[p.dk_id] for p in players
+                                 if p.dk_id in pfloors}}
     meta = {"slate": datetime.now().astimezone().date().isoformat(), "games": games,
+            "files": files,
             "format": fmt, "slots": slots, "settings": settings,
             "removed": [r["name"] for r in removed],
             "projection": {"source": "stokastic", "columns": rep["matched"],
@@ -1250,13 +1371,17 @@ def _describe(kind, text):
             players, rep = read_projections(text)
             if rep.get("error"):
                 return {"ok": False, "msg": f"not a projections export ({rep['error']})"}
+            why_not = stokastic_problem(rep)
+            if why_not:
+                return {"ok": False, "msg": f"NOT Stokastic's projections — {why_not}"}
             live = [p for p in players if p.proj > 0]
             teams = sorted({p.team for p in live if p.team})
             if not live:
                 return {"ok": False, "msg": "no projected players in that file"}
             return {"ok": True, "format": "showdown" if len(teams) <= 2 else "classic",
-                    "msg": f"{len(live)} players, " + (" @ ".join(teams) if len(teams) <= 2
-                                                       else f"{len(teams) // 2} games")}
+                    "msg": f"Stokastic ✓ (Std Dev) — {len(live)} players, "
+                           + (" @ ".join(teams) if len(teams) <= 2
+                              else f"{len(teams) // 2} games")}
         if kind == "field":
             _e, rep = read_field(text)
             if rep.get("error"):
@@ -1284,6 +1409,11 @@ def _describe(kind, text):
                                             "with the DK standings instead"}
             return {"ok": True, "msg": f"{rep['players']} players, Vegas for "
                                        f"{len(rep['teams'])} teams (logged only)"}
+        if kind == "etr":
+            _e, rep = read_etr(text)
+            if rep.get("error"):
+                return {"ok": False, "msg": f"not an ETR export ({rep['error']})"}
+            return {"ok": True, "msg": f"ETR — {rep['players']} players (logged only)"}
         if kind == "standings":
             rows, rep = read_standings(text)
             if rep.get("error"):
@@ -1344,7 +1474,8 @@ class Handler(BaseHTTPRequestHandler):
                                                             "projections CSV first."}))
             result = run_build(p.get("proj") or "", p.get("field") or "",
                                p.get("dk") or "", p.get("options") or {},
-                               linestar_text=p.get("linestar") or "")
+                               linestar_text=p.get("linestar") or "",
+                               etr_text=p.get("etr") or "")
             self._send(400 if result.get("error") else 200, json.dumps(result))
         except Exception as exc:                             # noqa: BLE001
             self._send(500, json.dumps({"error": str(exc)}))
@@ -1385,6 +1516,8 @@ def main(argv=None):
     ap.add_argument("--cores", help="sharp's cores file")
     ap.add_argument("--remove", help="late scratches, comma-separated names")
     ap.add_argument("--caps", help="per-player caps, 'Name 20; Name 40'")
+    ap.add_argument("--floors", help="minimum lineups per player, 'Name 2; Name 3'")
+    ap.add_argument("--etr", help="ETR projections export — logged only")
     ap.add_argument("--n", type=int, default=150)
     ap.add_argument("--split", type=int, default=None,
                     help="entries from OUR builder; the rest come from Stokastic's "
@@ -1441,12 +1574,16 @@ def main(argv=None):
         return serve()
     res = run_build(_read(a.proj), _read(a.field), _read(a.dk), {
         "pool": _read(a.pool), "cores": _read(a.cores), "remove": a.remove or "",
-        "capPlayers": a.caps or "", "n": a.n, "split": a.split, "sims": a.sims,
+        "capPlayers": a.caps or "", "floorPlayers": a.floors or "",
+        "fileNames": {k: os.path.basename(v) for k, v in (
+            ("proj", a.proj), ("field", a.field), ("dk", a.dk),
+            ("linestar", a.linestar), ("etr", a.etr)) if v},
+        "n": a.n, "split": a.split, "sims": a.sims,
         "seed": a.seed, "format": a.format, "ownLean": a.own_lean,
         "playerCap": a.player_cap, "captainCap": a.captain_cap,
         "maxLeftover": a.max_leftover, "minProj": a.min_proj,
         "maxOffPool": a.max_off_pool, "fieldCap": a.field_cap, "fillPct": a.fill_pct},
-        linestar_text=_read(a.linestar))
+        linestar_text=_read(a.linestar), etr_text=_read(a.etr))
     for note in res.get("notes", []):
         print(f"  [{note['type']}] {note['text']}")
     if res.get("error"):

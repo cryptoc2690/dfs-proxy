@@ -463,6 +463,79 @@ rpost = app.run_build(PROJ5, FIELD5, DK5, {"n": 10, "sims": 200},
 check("LineStar: a post-game file is refused for logging, loudly",
       any("post-game" in n["text"] for n in rpost["notes"]))
 
+print("\n-- the wrong projections file is refused (Oct 20) --")
+
+
+def etr_csv(rows, rename=None):
+    buf = io.StringIO()
+    w = csv.writer(buf, quoting=csv.QUOTE_ALL)
+    w.writerow(["Player", "Pos", "Team", "Opp", "Salary", "FPTS", "Value", "Ceiling",
+                "ProjOwn", "Site", "Slate", "Scenario", "DKSlateID", "DKName"])
+    for x in rows:
+        nm = (rename or {}).get(x["Player"], x["Player"])
+        w.writerow([nm, x["Position"].split("/")[0], x["Team"], x["Opponent"],
+                    f"${x['Salary']:,}", round(x["Projection"] + 0.7, 1), 5.0,
+                    round(x["Projection"] * 1.2, 1), f"{x['Ownership %']}%",
+                    "DK", "MAIN", "Default", x["_id"], nm])
+    return buf.getvalue()
+
+
+ETR5 = etr_csv(R5, rename={"Nikola Jokić": "N. Jokic"})
+re_ = app.run_build(ETR5, FIELD5, DK5, {"n": 10, "sims": 200})
+check("an ETR file in the projections slot stops the build, by name",
+      bool(re_.get("error")) and "ETR's projections file" in re_["error"], re_.get("error", "")[:90])
+check("...and the drop slot says so before any build",
+      app._describe("proj", ETR5)["ok"] is False
+      and "NOT Stokastic" in app._describe("proj", ETR5)["msg"])
+_nosd = proj_csv(R5).replace("Std Dev", "Spread", 1)
+check("a projections file with no Std Dev stops the build",
+      "no Std Dev" in (app.run_build(_nosd, FIELD5, DK5, {"n": 10, "sims": 200}).get("error") or ""))
+_ovr = app.run_build(_nosd, FIELD5, DK5, {"n": 10, "sims": 200, "allowNonStokastic": True})
+check("...unless deliberately overridden, and then it still warns",
+      not _ovr.get("error") and any("No Std Dev" in n["text"] for n in _ovr["notes"]))
+check("Stokastic's own file is accepted and labelled",
+      app._describe("proj", PROJ5)["msg"].startswith("Stokastic ✓"))
+
+print("\n-- minimum lineups for a player --")
+_sheet = [x["Player"] for x in R5 if x["Player"] not in ("DEN Player10", "DEN Player11")]
+rf = build(pool="\n".join(_sheet), maxOffPool="0",
+           floorPlayers="DEN Player10 2\nNobody Here 3\nDEN Player11 two", split=40,
+           fileNames={"proj": "DK_NBA_Main_Pre_Contest_Projections.csv", "dk": "DKEntries.csv"})
+_d10 = sum(1 for l in rf["lineups"] if any(p["name"] == "DEN Player10" for p in l["players"]))
+check("a typed minimum puts an off-sheet player in at least that many lineups",
+      _d10 >= 2, f"{_d10} of 40")
+check("...and not far more (a minimum, not a core)", _d10 <= 8, f"{_d10} of 40")
+check("...and the build confirms it met the minimum",
+      any(n["type"] == "good" and "minimum" in n["text"] and "DEN Player10" in n["text"]
+          for n in rf["notes"]))
+check("an unmatched minimum is named back", any("Nobody Here" in n["text"] for n in rf["notes"]))
+check("a minimum with no number is named back", any("DEN Player11 two" in n["text"]
+                                                      for n in rf["notes"]))
+check("the pool still binds everyone else",
+      all(p["name"] in _sheet or p["name"] == "DEN Player10"
+          for l in rf["lineups"] for p in l["players"]))
+_lf = [json.loads(l) for l in open(app.LOG_PATH, encoding="utf-8")][-1]
+check("the log records which files ran, by name and fingerprint",
+      _lf["files"]["proj"]["name"] == "DK_NBA_Main_Pre_Contest_Projections.csv"
+      and len(_lf["files"]["proj"]["sha1"]) == 12 and _lf["files"]["field"]["sha1"])
+check("the log records the minimums", _lf["settings"]["floorPlayers"] == {"DEN Player10": 2})
+
+print("\n-- ETR slot: logged, never used --")
+rE = app.run_build(PROJ5, FIELD5, DK5, {"n": 40, "sims": 400, "seed": 0, "fieldCap": 47000},
+                   etr_text=ETR5)
+check("ETR: the build is IDENTICAL with and without it",
+      [l["players"] for l in rE["lineups"]] == [l["players"] for l in lus])
+_le = [json.loads(l) for l in open(app.LOG_PATH, encoding="utf-8")][-1]
+_jk = next((p for x in [_le] for p in x["players"] if p["name"] == "Nikola Jokić"), None)
+check("ETR: every player joined (by DK id), even one ETR spells differently",
+      any("for 120 players" in n["text"] for n in rE["notes"]),
+      next((n["text"] for n in rE["notes"] if n["text"].startswith("ETR")), ""))
+check("ETR: projection and ownership are in the log",
+      any(p.get("etr_proj") is not None and p.get("etr_own") is not None
+          for p in _le["players"]))
+check("ETR: the ETR file is accepted in its own slot",
+      app._describe("etr", ETR5)["ok"] and "logged only" in app._describe("etr", ETR5)["msg"])
+
 print("\n-- standings and grading --")
 _log = [json.loads(l) for l in open(app.LOG_PATH, encoding="utf-8")]
 check("the log carries one line per entry", len(_log) > 100, str(len(_log)))

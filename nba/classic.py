@@ -184,8 +184,8 @@ def build_candidates(players, n, *, rng=None, max_off_pool=None,
     by_slot = {s: [p for p in pool if s in p.eligible] for s in CLASSIC_SLOTS}
     if any(not v for v in by_slot.values()):
         return []
-    weight = {p.dk_id: max(p.proj, 0.1) ** FILL_EXP * (CORE_BOOST if p.core else 1.0)
-              for p in pool}
+    weight = {p.dk_id: max(p.proj, 0.1) ** FILL_EXP
+              * (CORE_BOOST if (p.core or p.boost) else 1.0) for p in pool}
     min_sal = min(p.salary for p in pool)
 
     def allowed(p, off):

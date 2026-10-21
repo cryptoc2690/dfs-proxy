@@ -431,7 +431,7 @@ def build_showdown(players, n, *, rng=None, max_off_pool=None, cpt_pool=None,
         tries += 1
         cw = []
         for p in cpt_pool:
-            w = max(p.proj, 0.1) ** 1.4 * (CORE_BOOST if p.core else 1.0)
+            w = max(p.proj, 0.1) ** 1.4 * (CORE_BOOST if (p.core or p.boost) else 1.0)
             if p.cpt_optimal > 0:
                 w *= 1.0 + p.cpt_optimal / 20.0
             if cpt_used.get(p.dk_id, 0) >= cpt_room:
@@ -464,7 +464,7 @@ def build_showdown(players, n, *, rng=None, max_off_pool=None, cpt_pool=None,
                 elig.append(p)
                 spend = min(p.salary / per_slot, 1.6) if per_slot > 0 else 1.0
                 w.append(max(p.proj, 0.1) ** FILL_EXP * (0.35 + spend)
-                         * (CORE_BOOST if p.core else 1.0))
+                         * (CORE_BOOST if (p.core or p.boost) else 1.0))
             if not elig:
                 ok = False
                 break
