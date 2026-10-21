@@ -25,9 +25,13 @@ What is NBA's own here, and unmeasured:
     players fills the open slots; locked players never leave their slot.
   * Classic only. On a showdown every player locks at once.
 
-Default policy is FREE with the bars (the user's call for the start of the
-season, when projections move a lot). The news-only policy is evaluated on every
-run and logged beside it, so each night grades both.
+Default policy is FREE (the user's call for the start of the season, when
+projections move a lot, and again on Oct 21): for every lineup, build the best
+lineup from ALL its open slots on the fresh projections, and swap if it beats
+what is entered by +8 when the lineup holds a player with news, or by +14 when it
+does not. News changes the slate, so the whole lineup is open, not just the news
+player's slot. The narrow news-only policy (the news player plus one spare) is
+evaluated on every run and logged beside it, so each night grades both.
 """
 
 from __future__ import annotations
@@ -483,27 +487,13 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
         scored = sorted(((swap_score(r, aggr), r) for r in rosters.values()),
                         key=lambda t: -t[0])
 
-        def limited(out):
-            """The news player's slot(s) plus at most one spare."""
-            return any(n in news for n in out) and \
-                len([n for n in out if n not in news]) <= 1
-
-        # The best move news licenses on its own: the yardstick every bigger
-        # rebuild is measured against. Without it, a rebuild's gain includes the
-        # whole value of replacing a ruled-out player, and +14 is cleared for free.
-        def incoming_news(inn, out):
-            """A player with news coming IN, for a single slot."""
-            return any(n in news for n in inn) and len(out) <= 1
-
-        best_news = None
-        for sc, r in scored:
-            names = {normalize_name(p.name) for p in r}
-            if names == here:
-                continue
-            if (limited(here - names) or incoming_news(names - here, here - names)) \
-                    and sc - cur_score >= SWAP_NEWS_GAIN:
-                best_news = sc
-                break
+        # News in this lineup reopens the WHOLE lineup at the low bar: the
+        # user's call (Oct 21) — news changes the slate, so the structure built
+        # before it may not be the best one now, and nothing in it is sacred.
+        # Without news, the best lineup from the open slots must beat what is
+        # there by the high bar. Either way it is the best lineup that wins, not
+        # the smallest change.
+        lineup_news = bool(news_here)
 
         def choose(news_only):
             blocked = None
@@ -519,22 +509,11 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
                         continue
                     need = SWAP_NEWS_GAIN
                 else:
-                    # News licenses the news player's slot plus ONE spare (so a
-                    # replacement can be afforded) at the low bar. Every slot
-                    # beyond that is a move nobody said anything about, and it
-                    # clears the no-news bar like any other (WNBA: the edge was
-                    # in replacing the player with news, not in what rode along).
-                    small = limited(out) or incoming_news(inn, out)
-                    forced = small          # "news" = a news-sized move, nothing bigger
-                    if small:
-                        need, base = SWAP_NEWS_GAIN, cur_score
-                    else:
-                        need = float("inf") if winning else SWAP_DISC_GAIN
-                        base = best_news if best_news is not None else cur_score
-                    if sc - base < need:
-                        continue
+                    forced = lineup_news
+                    need = SWAP_NEWS_GAIN if lineup_news else (
+                        float("inf") if winning else SWAP_DISC_GAIN)
                 gain = sc - cur_score
-                if news_only and gain < need:
+                if gain < need:
                     continue
                 sal = sum(p.salary for p in r)
                 if SALARY_CAP - sal > SWAP_MAX_LEFTOVER and gain < SWAP_STRAND_GAIN:

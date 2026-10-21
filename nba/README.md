@@ -106,10 +106,12 @@ The WNBA tool's rules, NBA's files (`nba/lateswap.py` has the reasoning):
 - **News** = a player ruled out (or typed as a late scratch), a projection cut or
   jump of 25% and 5+ points against your build, a starter change, or a benched
   player with a cheaper starter at his position projecting 1.5x.
-- **Bars** (WNBA's x1.4): a news move — the news player plus at most one spare slot —
-  needs **+8** simulated points. Anything without news, or any slot beyond that one
-  spare, needs **+14** on top of the best news move. An off-pool player needs +17 of
-  projection each; stranding $2,000+ needs +17.
+- **Every open slot is open.** For each lineup it builds the best lineup it can from
+  all open slots on the fresh projections — nothing in the lineup is kept for its
+  own sake.
+- **Bars** (WNBA's x1.4): if the lineup holds a player with news, swap when the best
+  lineup beats what is entered by **+8** simulated points; with no news, by **+14**.
+  An off-pool player needs +17 of projection each; stranding $2,000+ needs +17.
 - A lineup projecting top 1% is never moved without news.
 - Ahead in the standings leans to safety, behind leans to ceiling; ownership is
   never faded. A small tiebreak keeps the next game to tip swappable.
@@ -118,8 +120,8 @@ The WNBA tool's rules, NBA's files (`nba/lateswap.py` has the reasoning):
   and the field alike — instead of reading a live score as a final.
 - DK's standings are the final word on who has tipped; an entries file that
   disagrees is left alone and named.
-- Default policy is free-with-bars; the news-only choice is logged beside it on every
-  lineup in `nba/logs/nba_swaps.jsonl`, so each night grades both.
+- The narrow alternative (move only the news player plus one spare) is logged
+  beside every decision in `nba/logs/nba_swaps.jsonl`, so each night grades both.
 
 The page lists every lineup with its live score, minutes left, projected final and
 why it moved or held; untick any swap and the download keeps that entry as entered.

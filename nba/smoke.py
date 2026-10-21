@@ -640,12 +640,12 @@ check("swap: every lineup holding the ruled-out player is moved",
       _holding and all(not s["keep"] and _out_nm in s["out"] for s in _holding),
       f"{sum(1 for s in _holding if not s['keep'])} of {len(_holding)}")
 check("swap: news moves are marked as news", all(s["forced"] for s in _holding if not s["keep"]))
-check("swap: a news move changes the news player plus at most one other slot",
-      all(len([o for o in s["out"] if o != _out_nm]) <= 1
-          for s in s1["swaps"] if not s["keep"] and s["forced"]))
-check("swap: anything bigger is labelled a no-news move (it cleared +14 on top)",
-      all(not s["forced"] for s in s1["swaps"]
-          if not s["keep"] and len([o for o in s["out"] if o != _out_nm]) > 1))
+check("swap: news reopens the whole lineup — moves beat what was entered by +8",
+      all(s["gain"] >= LS.SWAP_NEWS_GAIN for s in s1["swaps"] if not s["keep"] and s["forced"]))
+check("swap: a lineup with no news moves only on +14",
+      all(s["gain"] >= LS.SWAP_DISC_GAIN for s in s1["swaps"] if not s["keep"] and not s["forced"]))
+check("swap: the narrow news-only choice is still logged beside it",
+      any(s["shadow"]["newsRoster"] for s in s1["swaps"] if not s["keep"]))
 _ok_locks = True
 for s in s1["swaps"]:
     before = next(csv.reader([s["rowBefore"]]))[4:]
