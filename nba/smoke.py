@@ -663,12 +663,19 @@ for s in s1["swaps"]:
             or any(sl not in _pool_el[i]["eligible"] for sl, i in zip(CLASSIC_SLOTS, ids))):
         _legal = False
 check("swap: every written row is DK-legal (eligibility, cap, no repeats)", _legal)
+_bar = LS.SWAP_NEWS_GAIN
+LS.SWAP_NEWS_GAIN = 1000.0                   # no ordinary move can clear this
+_s4 = LS.run_late_swap(PROJ5, _mid, _stand, {"remove": _out_nm}, log_path=LS_LOG)
+LS.SWAP_NEWS_GAIN = _bar
+check("swap: a ruled-out player is swapped EVERY time, whatever the bar",
+      not any(_out_nm in s["rowAfter"] for s in _s4["swaps"])
+      and all(not s["keep"] for s in _s4["swaps"] if any(_out_nm in n for n in s["news"])))
 check("swap: the ruled-out player is in no written row",
       not any(_out_nm in s["rowAfter"] for s in s1["swaps"]))
 check("swap: both policies are evaluated on every lineup",
       all("freeGain" in s["shadow"] and "newsGain" in s["shadow"] for s in _rows1))
 _sl = [json.loads(l) for l in open(LS.SWAP_LOG_PATH, encoding="utf-8")]
-check("swap: each run is logged with both policies", len(_sl) == 2 and "shadow" in _sl[-1]["swaps"][0])
+check("swap: each run is logged with both policies", len(_sl) == 3 and "shadow" in _sl[-1]["swaps"][0])
 _core = next(c.split(" (")[0] for c in _entries40[0][4:12]
              if next(x["Team"] for x in R5 if x["Player"] == c.split(" (")[0]) not in _g0
              and c.split(" (")[0] != _out_nm)

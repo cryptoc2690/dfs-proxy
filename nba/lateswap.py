@@ -494,9 +494,24 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
         # there by the high bar. Either way it is the best lineup that wins, not
         # the smallest change.
         lineup_news = bool(news_here)
+        # A player ruled out is a guaranteed 0. He is swapped EVERY time, with no
+        # bar at all (the user, Oct 21: "why would I willingly take a 0?"): the
+        # best lineup without him wins, whatever its gain, salary left or pool.
+        dead_here = {normalize_name(lineup[i].name) for i in news_here
+                     if news[normalize_name(lineup[i].name)] in
+                     ("ruled out", "removed by you (late scratch)")}
 
         def choose(news_only):
             blocked = None
+            if dead_here:
+                alive = [(sc, r) for sc, r in scored
+                         if not ({normalize_name(p.name) for p in r} & dead_here)]
+                for sc, r in alive:                 # best one inside the pool first
+                    inn = {normalize_name(p.name) for p in r} - here
+                    if not pool_names or all(n in pool_names for n in inn):
+                        return r, sc - cur_score, True, None
+                if alive:                           # else the best one at all
+                    return alive[0][1], alive[0][0] - cur_score, True, None
             for sc, r in scored:
                 names = {normalize_name(p.name) for p in r}
                 if names == here:
