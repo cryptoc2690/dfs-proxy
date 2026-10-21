@@ -91,6 +91,7 @@ INDEX_HTML = r"""<!doctype html>
   .exp .tblwrap{max-height:46vh}
   td.num.up{color:#6ee7a0}
   td.num.down{color:#ff9f9f}
+  span.up{color:#6ee7a0;font-weight:650} span.down{color:#ff9f9f;font-weight:650}
   /* Not on the sharp's sheet. Dotted underline rather than a colour swap so it
      reads as an annotation on the name and not as a score. */
   .offsheet{color:var(--accent2);border-bottom:1px dotted var(--accent2)}
@@ -145,7 +146,7 @@ INDEX_HTML = r"""<!doctype html>
     <span class="fstate">Vegas + a second projection, logged only</span></div>
   <div class="fslot" id="s_etr"><b>5 · ETR <span style="opacity:.6">(optional)</span></b>
     <span class="fstate">projection + ownership, logged only</span></div>
-  <div class="fslot" id="s_st"><b>6 · DK contest standings <span style="opacity:.6">(after)</span></b>
+  <div class="fslot" id="s_st"><b>6 · DK contest standings <span style="opacity:.6">(live or final)</span></b>
     <span class="fstate">grade last night's build — drop or click</span></div>
 </div>
 
@@ -249,6 +250,8 @@ INDEX_HTML = r"""<!doctype html>
   <div class="row">
     <button id="go" disabled>Build lineups</button>
     <button id="dl" class="alt" style="display:none">&#11015; Download DK file</button>
+    <button id="ls" class="alt" disabled title="needs a fresh Stokastic pull (1), your current DK entries export (3), and ideally the live standings (6)">&#8635; Late swap</button>
+    <button id="lsdl" class="alt" style="display:none">&#11015; Download late-swap file</button>
     <span id="status" style="color:var(--muted);font-size:13px"></span>
   </div>
   <div class="row" id="graderow" style="display:none">
@@ -274,6 +277,11 @@ INDEX_HTML = r"""<!doctype html>
       if LineStar has someone at 0 whom Stokastic still projects.</p>
     <p>5, ETR, is optional and logged only — never slot 1. Slot 1 refuses any
       file that is not Stokastic's projections export.</p>
+    <p><b>Late swap</b> (mid-slate): put a FRESH Stokastic pull in 1, your CURRENT DK
+      entries export in 3 and the live contest standings in 6, then press Late swap.
+      It moves a lineup on news (+8 simulated points) or without news only when
+      the gain is big (+14), never touches a locked player, and shows each change
+      so you can untick it.</p>
     <p>6 is for the morning after: drop DK's contest standings and grade the
       build you logged against the real field.</p>
   </div>
@@ -325,6 +333,7 @@ function slot(key, el){
     if(cls) el.classList.add(cls);
     state.textContent = msg;
     $('#go').disabled = !files.proj;
+    $('#ls').disabled = !(files.proj && files.dk);
   };
 
   const read = f => {
@@ -779,6 +788,75 @@ function esc(s){
   return String(s).replace(/[&<>"']/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
+
+// ---- late swap ----
+let swapResult = null;
+$('#ls').addEventListener('click', async () => {
+  const b = $('#ls'); b.disabled = true;
+  b.innerHTML = '<span class="spin"></span>Checking every lineup…';
+  $('#welcome').style.display = 'none'; $('#lsdl').style.display = 'none';
+  try {
+    const res = await fetch('/api/lateswap', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({proj: files.proj, dk: files.dk, standings: files.standings,
+        options: {pool: [...sel.pool].join('\n'), cores: [...sel.core].join('\n'),
+                  remove: $('#remove').value}})
+    });
+    swapResult = await res.json();
+    renderSwap(swapResult);
+  } catch(e) {
+    $('#out').innerHTML = '<div class="note warn">'+e.message+'</div>';
+  }
+  b.disabled = false; b.innerHTML = '&#8635; Late swap';
+});
+
+function renderSwap(r){
+  if(r.error){ $('#out').innerHTML = '<div class="note warn"><b>'+esc(r.error)+'</b></div>'; return; }
+  let h = '';
+  (r.notes||[]).forEach(n => { h += '<div class="note '+n.type+'">'+esc(n.text)+'</div>'; });
+  h += '<div class="cards">' + card(r.changed+' of '+r.entries, 'lineups to change')
+     + card(r.mode === 'news' ? 'news only' : 'free + bars', 'policy')
+     + card('+'+r.bars.news+' / +'+r.bars.noNews, 'bar: news / no news')
+     + (r.winLine ? card(r.winLine, 'projected FINAL top-1% line') : '') + '</div>';
+  h += '<div class="picknote" style="margin:6px 0">Untick any swap you do not want; '
+     + 'the download keeps that entry exactly as entered. "Now" is the live score, '
+     + '"left" is player-minutes still on the clock, "final" is the projected finish.</div>';
+  h += '<div class="tblwrap"><table><thead><tr><th>use</th><th>entry</th><th>contest</th>'
+     + '<th class="num">now</th><th class="num">left</th><th class="num">final</th>'
+     + '<th class="num">pct</th><th>change</th><th class="num">gain</th><th>why</th>'
+     + '</tr></thead><tbody>';
+  r.swaps.forEach((s,i) => {
+    const sw = !s.keep && !s.error;
+    const why = s.error ? s.error : (sw ? (s.forced ? 'news: ' : 'no news, cleared the bar')
+              + (s.news||[]).join('; ') : (s.hold || ''));
+    h += '<tr><td>' + (sw ? '<input type="checkbox" class="usesw" data-i="'+i+'" checked>' : '')
+      + '</td><td>'+esc(s.entryId)+'</td><td>'+esc((s.contest||'').slice(0,26))+'</td>'
+      + '<td class="num">'+(s.banked==null?'—':s.banked)+'</td>'
+      + '<td class="num">'+(s.timeLeft==null?'—':s.timeLeft)+'</td>'
+      + '<td class="num">'+(s.projFinal==null?'—':s.projFinal)+'</td>'
+      + '<td class="num">'+(s.pct==null?'—':s.pct.toFixed(1)+'%')+'</td>'
+      + '<td>'+(sw ? '<span class="down">OUT</span> '+esc(s.out.join(', '))
+                    +' &rarr; <span class="up">IN</span> '+esc(s['in'].join(', ')) : 'hold')+'</td>'
+      + '<td class="num">'+(s.gain==null?'':'+'+s.gain)+'</td>'
+      + '<td style="white-space:normal;max-width:320px">'+esc(why)+'</td></tr>';
+  });
+  h += '</tbody></table></div>';
+  $('#out').innerHTML = h;
+  $('#lsdl').style.display = r.dkCsv ? '' : 'none';
+}
+
+$('#lsdl').addEventListener('click', () => {
+  if(!swapResult) return;
+  const use = new Set([...document.querySelectorAll('.usesw')].filter(c => c.checked)
+                      .map(c => +c.dataset.i));
+  const lines = [swapResult.csvHeader];
+  swapResult.swaps.forEach((s,i) => {
+    if(s.rowBefore) lines.push(use.has(i) ? s.rowAfter : s.rowBefore);
+  });
+  const b = new Blob([lines.join('\n') + '\n'], {type:'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(b); a.download = 'DKEntries_NBA_lateswap.csv'; a.click();
+});
 
 $('#dl').addEventListener('click', () => {
   if(!result || !result.dkCsv) return;

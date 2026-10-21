@@ -536,6 +536,157 @@ check("ETR: projection and ownership are in the log",
 check("ETR: the ETR file is accepted in its own slot",
       app._describe("etr", ETR5)["ok"] and "logged only" in app._describe("etr", ETR5)["msg"])
 
+print("\n-- late swap --")
+import lateswap as LS                        # noqa: E402
+LS.SWAP_LOG_PATH = os.path.join(_TMP, "nba_swaps.jsonl")
+_g0 = {x["Team"] for x in R5 if x["_gi"] == 0}           # DEN@OKC is in progress
+_entries40 = [row for row in _up[1:41]]                    # the first build's 150-max rows
+
+
+def dk_midslate(rows, games, entry_rows):
+    """The first build's entries, mid-slate: DEN@OKC tipped (LOCKED, In Progress)."""
+    header = ["Entry ID", "Contest Name", "Contest ID", "Entry Fee"] + list(CLASSIC_SLOTS) + ["", "Instructions"]
+    team_of = {x["_id"]: x["Team"] for x in rows}
+    ents = []
+    for er in entry_rows:
+        cells = []
+        for c in er[4:12]:
+            pid = c.rstrip(")").split("(")[-1]
+            cells.append(c + (" (LOCKED)" if team_of[pid] in _g0 else ""))
+        ents.append(er[:4] + cells + [""])
+    pool = [[x["Position"], f"{x['Player']} ({x['_id']})" + (" (LOCKED)" if x["Team"] in _g0 else ""),
+             x["Player"], x["_id"], _elig(x["Position"]), str(x["Salary"]),
+             "In Progress" if x["Team"] in _g0 else
+             f"{game_key(x, games)} 01/15/2027 {TIP[x['_gi'] % len(TIP)]} ET",
+             x["Team"], "30.0"] for x in rows]
+    out = [header]
+    for i in range(max(len(ents), 8 + len(pool))):
+        row = list(ents[i]) if i < len(ents) else [""] * 13
+        if i == 7:
+            row += ["Position", "Name + ID", "Name", "ID", "Roster Position", "Salary",
+                    "Game Info", "TeamAbbrev", "AvgPointsPerGame"]
+        elif i > 7 and i - 8 < len(pool):
+            row += pool[i - 8]
+        out.append(row)
+    b = io.StringIO()
+    csv.writer(b).writerows(out)
+    return b.getvalue()
+
+
+def stand_midslate(entry_rows, field_rows, stale_id=None):
+    """Live standings: DEN@OKC players revealed with points so far and 12 minutes
+    still to play each; everyone else LOCKED with 48."""
+    name_of = {x["_id"]: x["Player"] for x in R5}
+    team_of = {x["_id"]: x["Team"] for x in R5}
+    so_far = {x["Player"]: round(x["Projection"] * 0.75, 2) for x in R5}
+    out = [["Rank", "EntryId", "EntryName", "TimeRemaining", "Points", "Lineup", "",
+            "Player", "Roster Position", "%Drafted", "FPTS"]]
+    allr = [(er[0], [c.rstrip(")").split("(")[-1].strip() for c in er[4:12]]) for er in entry_rows]
+    id_of = {x["Player"]: x["_id"] for x in R5}
+    allr += [(str(9500000000 + k), [id_of[p.name] for p in fr["flex"]])
+             for k, fr in enumerate(field_rows)]
+    for k, (eid, ids) in enumerate(allr):
+        pts, left, cell, swapped = 0.0, 0, [], [False]
+        for s_, pid in zip(sorted(CLASSIC_SLOTS), ids):
+            if team_of[pid] in _g0:
+                nm = name_of[pid]
+                if eid == stale_id and not swapped[0]:
+                    swapped[0] = True
+                    nm = next(x["Player"] for x in R5 if x["Team"] in _g0 and x["Player"] not in
+                              [name_of[i] for i in ids])
+                pts += so_far[nm]
+                left += 12
+                cell.append(f"{s_} {nm}")
+            else:
+                left += 48
+                cell.append(f"{s_} LOCKED")
+        out.append([k + 1, eid, "u", left, round(pts, 2), " ".join(cell), "", "", "", "", ""])
+    b = io.StringIO()
+    csv.writer(b).writerows(out)
+    return b.getvalue()
+
+
+_mid = dk_midslate(R5, GAMES5, _entries40)
+_dkm = S.read_dk_entries(_mid)
+check("swap: the mid-slate export reads locks from the cells and the pool",
+      sum(1 for v in _dkm["pool"].values() if v["locked"]) == 24
+      and any(c["locked"] for e in _dkm["entries"] for c in e["cells"]))
+_stand = stand_midslate(_entries40, fe[:300])
+LS_LOG = app.LOG_PATH
+s0 = LS.run_late_swap(PROJ5, _mid, _stand, {}, log_path=LS_LOG)
+check("swap: runs", not s0.get("error"), s0.get("error", ""))
+_s150 = [s for s in s0["swaps"] if s["contest"].startswith("NBA $15K")]
+check("swap: nothing changed and nothing moves", s0["changed"] == 0, f"{s0['changed']} changed")
+check("swap: every hold says why", all(s.get("hold") for s in _s150))
+_one = next(s for s in _s150 if s.get("timeLeft"))
+check("swap: projected final counts the clock, not just the score",
+      _one["projFinal"] is not None and _one["projFinal"] > _one["banked"] + 50,
+      f"now {_one['banked']}, left {_one['timeLeft']}, final {_one['projFinal']}")
+check("swap: the projected top-1% line is reported", s0.get("winLine"))
+# a held, unlocked player is ruled out
+_held = {}
+for er in _entries40:
+    for c in er[4:12]:
+        nm = c.split(" (")[0]
+        if next(x["Team"] for x in R5 if x["Player"] == nm) not in _g0:
+            _held[nm] = _held.get(nm, 0) + 1
+_out_nm = max(_held, key=_held.get)
+s1 = LS.run_late_swap(PROJ5, _mid, _stand, {"remove": _out_nm}, log_path=LS_LOG)
+_rows1 = [s for s in s1["swaps"] if s["contest"].startswith("NBA $15K")]
+_holding = [s for s in _rows1 if any(_out_nm in n for n in s["news"])]
+check("swap: news is found when a held player is ruled out",
+      _out_nm.lower() in str(s1["news"]).lower() or normalize_name(_out_nm) in s1["news"])
+check("swap: every lineup holding the ruled-out player is moved",
+      _holding and all(not s["keep"] and _out_nm in s["out"] for s in _holding),
+      f"{sum(1 for s in _holding if not s['keep'])} of {len(_holding)}")
+check("swap: news moves are marked as news", all(s["forced"] for s in _holding if not s["keep"]))
+check("swap: a news move changes the news player plus at most one other slot",
+      all(len([o for o in s["out"] if o != _out_nm]) <= 1
+          for s in s1["swaps"] if not s["keep"] and s["forced"]))
+check("swap: anything bigger is labelled a no-news move (it cleared +14 on top)",
+      all(not s["forced"] for s in s1["swaps"]
+          if not s["keep"] and len([o for o in s["out"] if o != _out_nm]) > 1))
+_ok_locks = True
+for s in s1["swaps"]:
+    before = next(csv.reader([s["rowBefore"]]))[4:]
+    after = next(csv.reader([s["rowAfter"]]))[4:]
+    for b_, a_ in zip(before, after):
+        pid = b_.rstrip(")").split("(")[-1]
+        if next(x["Team"] for x in R5 if x["_id"] == pid) in _g0 and b_ != a_:
+            _ok_locks = False
+check("swap: no locked player ever leaves his slot", _ok_locks)
+_pool_el = {v["dk_id"]: v for v in _dkm["pool"].values()}
+_legal = True
+for s in s1["swaps"]:
+    ids = [c.rstrip(")").split("(")[-1] for c in next(csv.reader([s["rowAfter"]]))[4:]]
+    if (len(set(ids)) != 8 or sum(_pool_el[i]["salary"] for i in ids) > 50000
+            or any(sl not in _pool_el[i]["eligible"] for sl, i in zip(CLASSIC_SLOTS, ids))):
+        _legal = False
+check("swap: every written row is DK-legal (eligibility, cap, no repeats)", _legal)
+check("swap: the ruled-out player is in no written row",
+      not any(_out_nm in s["rowAfter"] for s in s1["swaps"]))
+check("swap: both policies are evaluated on every lineup",
+      all("freeGain" in s["shadow"] and "newsGain" in s["shadow"] for s in _rows1))
+_sl = [json.loads(l) for l in open(LS.SWAP_LOG_PATH, encoding="utf-8")]
+check("swap: each run is logged with both policies", len(_sl) == 2 and "shadow" in _sl[-1]["swaps"][0])
+_core = next(c.split(" (")[0] for c in _entries40[0][4:12]
+             if next(x["Team"] for x in R5 if x["Player"] == c.split(" (")[0]) not in _g0
+             and c.split(" (")[0] != _out_nm)
+s2 = LS.run_late_swap(PROJ5, _mid, _stand, {"remove": _out_nm, "cores": _core}, log_path=LS_LOG)
+check("swap: a core with no news is never swapped out",
+      not any(_core in s["out"] for s in s2["swaps"] if not s["keep"]))
+_stale_id = _entries40[3][0]
+s3 = LS.run_late_swap(PROJ5, _mid, stand_midslate(_entries40, fe[:300], stale_id=_stale_id), {},
+                      log_path=LS_LOG)
+check("swap: an entries file DK contradicts is left alone and named",
+      any(s["entryId"] == _stale_id and "out of date" in (s.get("hold") or "") for s in s3["swaps"]))
+check("swap: an ETR file is refused here too",
+      "not Stokastic's" in (LS.run_late_swap(ETR5, _mid, _stand, {}, log_path=LS_LOG).get("error") or ""))
+check("swap: a showdown file is refused (everything locks at once)",
+      "classic only" in (LS.run_late_swap(PROJ5, DK_SD, "", {}, log_path=LS_LOG).get("error") or ""))
+check("swap: bars pinned at WNBA x1.4 (8 news / 14 no news / 17 off pool)",
+      (LS.SWAP_NEWS_GAIN, LS.SWAP_DISC_GAIN, LS.SWAP_OFF_POOL_GAIN) == (8.0, 14.0, 17.0))
+
 print("\n-- standings and grading --")
 _log = [json.loads(l) for l in open(app.LOG_PATH, encoding="utf-8")]
 check("the log carries one line per entry", len(_log) > 100, str(len(_log)))

@@ -399,21 +399,39 @@ def read_dk_entries(text):
                     break
                 slots.append(c.strip().upper())
         elif (r[0] or "").strip().isdigit() and len(r) > 5:
+            # The roster as DK holds it, slot by slot, with its own per-player
+            # lock marker: "Paul Reed (44451391) (LOCKED)". Late swap reads it.
+            width = len(slots) or len(CLASSIC_SLOTS)
+            cells = []
+            for c in r[4:4 + width]:
+                c = (c or "").strip()
+                nm, pid = _name_and_id(c)
+                cells.append({"name": nm, "dk_id": pid,
+                              "locked": bool(re.search(r"\(LOCKED\)\s*$", c, re.I))}
+                             if c else None)
             entries.append({
                 "entry_id": r[0].strip(),
                 "contest": (r[1] or "").strip(),
                 "contest_id": (r[2] or "").strip(),
                 "fee": (r[3] or "").strip(),
+                "cells": cells,
             })
         if pi is not None and len(r) > pi + 6 and (r[pi + 2] or "").strip().isdigit():
             name = (r[pi + 1] or "").strip()
             key = normalize_name(name)
             roster_pos = (r[pi + 3] or "").strip().upper()
             game, start = _dk_start(r[pi + 5])
+            # Once a game tips DK replaces its Game Info with "In Progress" or
+            # "Final" and marks the Name + ID cell " (LOCKED)" — read off a real
+            # NBA export, Oct 20 2026. Either one means the player is locked.
+            in_play = "@" not in (r[pi + 5] or "")
             rec = pool.setdefault(key, {
                 "name": name, "dk_id": "", "cpt_dk_id": "", "pos": "",
-                "eligible": set(), "salary": 0, "game": game, "start": start,
-                "team": (r[pi + 6] or "").strip().upper()})
+                "eligible": set(), "salary": 0, "game": None if in_play else game,
+                "start": start, "team": (r[pi + 6] or "").strip().upper(),
+                "locked": False})
+            rec["locked"] = rec["locked"] or in_play or bool(
+                re.search(r"\(LOCKED\)\s*$", r[pi] or "", re.I))
             rec["pos"] = (r[pi - 1] or "").strip().upper() if pi >= 1 else ""
             if roster_pos == "CPT":
                 rec["cpt_dk_id"] = (r[pi + 2] or "").strip()
@@ -489,6 +507,7 @@ def read_standings(text):
                 unreadable += 1
                 rows.append({"entry_id": (r.get("EntryId") or "").strip(),
                              "rank": rank, "points": _f(r.get("Points")),
+                             "time_left": _f(r.get("TimeRemaining")),
                              "names": [], "labels": [], "readable": False})
                 continue
             labels, names = got
@@ -498,6 +517,10 @@ def read_standings(text):
                 names = [names[i]] + names[:i] + names[i + 1:]
             rows.append({"entry_id": (r.get("EntryId") or "").strip(),
                          "rank": rank, "points": _f(r.get("Points")),
+                         # Player-minutes still to play on this roster. A locked
+                         # player whose game is in progress is NOT finished, so
+                         # a live score alone understates where an entry ends.
+                         "time_left": _f(r.get("TimeRemaining")),
                          "names": [normalize_name(_name_and_id(n)[0]) for n in names],
                          "labels": labels,
                          "readable": "LOCKED" not in names})

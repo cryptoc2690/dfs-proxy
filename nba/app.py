@@ -1445,7 +1445,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, json.dumps({"error": "not found"}))
 
     def do_POST(self):
-        if self.path not in ("/api/build", "/api/players", "/api/check", "/api/grade"):
+        if self.path not in ("/api/build", "/api/players", "/api/check", "/api/grade",
+                             "/api/lateswap"):
             return self._send(404, json.dumps({"error": "not found"}))
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -1466,6 +1467,11 @@ class Handler(BaseHTTPRequestHandler):
                                     p.get("paidFrom"), p.get("paidTo"))
                 g = grade(p.get("standings") or "", p.get("slate"), lad)
                 return self._send(400 if g.get("error") else 200, json.dumps(g))
+            if self.path == "/api/lateswap":
+                import lateswap
+                r = lateswap.run_late_swap(p.get("proj") or "", p.get("dk") or "",
+                                           p.get("standings") or "", p.get("options") or {})
+                return self._send(400 if r.get("error") else 200, json.dumps(r))
             if self.path == "/api/check":
                 return self._send(200, json.dumps(
                     _describe(p.get("kind") or "", p.get("text") or "")))
@@ -1505,6 +1511,10 @@ def main(argv=None):
     ap.add_argument("--dk", help="DK entries export (needed for an upload file)")
     ap.add_argument("--linestar", help="LineStar export — Vegas, projection and "
                                        "starting status, logged only")
+    ap.add_argument("--lateswap", action="store_true",
+                    help="mid-slate: --proj (fresh Stokastic), --dk (current entries "
+                         "export), --standings (current contest standings)")
+    ap.add_argument("--standings", help="current DK contest standings, for --lateswap")
     ap.add_argument("--grade", help="DK contest standings (.csv or .zip): score the "
                                     "logged build against it")
     ap.add_argument("--grade-slate", help="which logged slate to grade (YYYY-MM-DD)")
@@ -1568,6 +1578,26 @@ def main(argv=None):
             print(f"    {p['name'][:22]:<23}{p['exposure']:>5.0f}%  "
                   f"{p['proj']!s:>6} → {p['actual']!s:<6} {p['own_proj']!s:>5}% → "
                   f"{p['own_real']!s}%")
+        return 0
+
+    if a.lateswap:
+        import lateswap
+        r = lateswap.run_late_swap(_read(a.proj), _read(a.dk), _read(a.standings),
+                                   {"pool": _read(a.pool), "cores": _read(a.cores),
+                                    "remove": a.remove or ""})
+        if r.get("error"):
+            print(f"ERROR: {r['error']}")
+            return 2
+        for n in r["notes"]:
+            print(f"  [{n['type']}] {n['text']}")
+        for s in r["swaps"]:
+            if not s.get("keep"):
+                print(f"  {s['entryId']}  +{s['gain']}  OUT {', '.join(s['out'])}  "
+                      f"IN {', '.join(s['in'])}" + ("  (news)" if s.get("forced") else ""))
+        out = a.out if a.out != "nba_upload.csv" else "nba_lateswap.csv"
+        with open(out, "w", encoding="utf-8") as fh:
+            fh.write(r["dkCsv"])
+        print(f"\n  wrote {out}  ({r['changed']} of {r['entries']} changed)")
         return 0
 
     if not a.proj:
