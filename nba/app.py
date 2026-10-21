@@ -152,6 +152,43 @@ def _fingerprint(text):
         if (text or "").strip() else None
 
 
+
+def _old_slate(players, log_path=None):
+    """The date of an EARLIER day whose logged build had exactly these games.
+
+    Oct 21: Stokastic's Data Hub still served Oct 20's slate that morning. The
+    file passed every check — it IS Stokastic's — and tonight's pool was pasted
+    into a picker holding yesterday's players, matched nobody, and said so only
+    at the bottom of the page. Nothing in the file says which day it is for, so
+    the log does: the same set of games on two different days does not happen
+    on a multi-game slate. One game can (a back-to-back), so showdown is left
+    alone. -> "YYYY-MM-DD" or None.
+    """
+    games = sorted({p.game for p in players if p.proj > 0 and "@" in (p.game or "")})
+    if len(games) < 2:
+        return None
+    today = datetime.now().astimezone().date().isoformat()
+    hit = None
+    try:
+        with open(log_path or LOG_PATH, encoding="utf-8") as fh:
+            for line in fh:
+                if '"games"' not in line:
+                    continue
+                r = json.loads(line)
+                day = r.get("slate") or ""
+                if day and day < today and sorted(r.get("games") or []) == games:
+                    hit = max(hit or day, day)
+    except (OSError, ValueError):
+        return None
+    return hit
+
+
+def _old_slate_msg(day, players):
+    games = sorted({p.game for p in players if p.proj > 0 and "@" in (p.game or "")})
+    return (f"OLD SLATE — this file has the same games you built on {day} "
+            f"({', '.join(games)}), not tonight's. Download tonight's projections "
+            f"from Stokastic and drop that file here.")
+
 # ---------------- late scratch: the WNBA removal ----------------
 # A player ruled out after the projections were pulled (the Stephon Castle case:
 # out five minutes before lock, and Stokastic could not update in time). Done
@@ -681,6 +718,10 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
         return {"error": f"Not building: the projections file in slot 1 is not "
                          f"Stokastic's — {why_not}. Drop Stokastic's projections "
                          f"export (DK_NBA_…_Pre_Contest_Projections.csv) there.",
+                "notes": notes}
+    old_day = None if o.get("allowOldSlate") else _old_slate(players)
+    if old_day:
+        return {"error": "Not building: " + _old_slate_msg(old_day, players),
                 "notes": notes}
     names = o.get("fileNames") or {}
     files = {k: {"name": names.get(k), "sha1": _fingerprint(t)}
@@ -1422,10 +1463,18 @@ def _describe(kind, text):
             teams = sorted({p.team for p in live if p.team})
             if not live:
                 return {"ok": False, "msg": "no projected players in that file"}
+            old_day = _old_slate(players)
+            if old_day:
+                return {"ok": False, "msg": _old_slate_msg(old_day, players)}
+            # Name the games, not just count them: "11 games" looked the same
+            # whichever night's file it was.
             return {"ok": True, "format": "showdown" if len(teams) <= 2 else "classic",
+                    "teams": teams,
                     "msg": f"Stokastic ✓ (Std Dev) — {len(live)} players, "
                            + (" @ ".join(teams) if len(teams) <= 2
-                              else f"{len(teams) // 2} games")}
+                              else f"{len(teams) // 2} games: "
+                                   + ", ".join(sorted({p.game for p in live
+                                                       if "@" in (p.game or "")})))}
         if kind == "field":
             _e, rep = read_field(text)
             if rep.get("error"):
@@ -1441,6 +1490,7 @@ def _describe(kind, text):
                                             f"enter the contest on DK first"}
             sd = dk["slots"][0] == "CPT"
             return {"ok": True, "format": "showdown" if sd else "classic",
+                    "teams": sorted({r["team"] for r in dk["pool"].values() if r.get("team")}),
                     "msg": f"{len(dk['entries'])} entries, {len(dk['pool'])} players "
                            f"({'showdown' if sd else 'classic'}), "
                            f"{len(_contests(dk['entries']))} contest(s)"}
@@ -1479,6 +1529,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
+        # Never a cached page or answer: a restarted tool must serve its new code.
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)
 

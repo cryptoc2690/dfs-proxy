@@ -804,6 +804,29 @@ check("grade: the player table has projected vs actual and real ownership",
       g.get("players") and all(p["actual"] is not None and p["own_real"] is not None
                                for p in g["players"]))
 
+# ---- an old night's projections are refused (Oct 21: the morning Data Hub
+# file still held Oct 20's games and passed under a green tick) ----
+from dk import Player as _P
+_olog = os.path.join(_TMP, "old_slate.jsonl")
+with open(_olog, "w", encoding="utf-8") as _fh:
+    _fh.write(json.dumps({"slate": "2000-01-01", "games": ["AAA@BBB", "CCC@DDD"]}) + "\n")
+_mk = lambda t, o: _P(name=t + "1", dk_id="1", pos="PG", team=t, opponent=o, salary=5000, proj=20,
+                       ownership=10)
+_oldp = [_mk("AAA", "BBB"), _mk("BBB", "AAA"), _mk("CCC", "DDD"), _mk("DDD", "CCC")]
+check("old slate: the same games as an earlier day's build are named as that day",
+      app._old_slate(_oldp, _olog) == "2000-01-01", str(app._old_slate(_oldp, _olog)))
+check("old slate: a different set of games passes",
+      app._old_slate(_oldp[:2] + [_mk("EEE", "FFF"), _mk("FFF", "EEE")], _olog) is None)
+check("old slate: one game (showdown) is never called old — back-to-backs repeat",
+      app._old_slate(_oldp[:2], _olog) is None)
+_LP, app.LOG_PATH = app.LOG_PATH, _olog
+_d = app._describe("proj", "Player,Salary,Position,Team,Opponent,Projection,Ownership %,Std Dev\n"
+                   + "".join(f"{t}1,5000,PG,{t},{o},20,10,8\n" for t, o in
+                             (("AAA", "BBB"), ("BBB", "AAA"), ("CCC", "DDD"), ("DDD", "CCC"))))
+app.LOG_PATH = _LP
+check("old slate: slot 1 refuses the file and says which day it is from",
+      not _d.get("ok") and "2000-01-01" in _d.get("msg", ""), str(_d))
+
 # The summary and exit MUST stay last — appending a new section after them
 # silently skips it and the suite still reports a clean pass.
 print(f"\n{'=' * 56}\n  {ok} passed, {fail} failed\n{'=' * 56}")

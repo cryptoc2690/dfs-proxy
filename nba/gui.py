@@ -104,6 +104,7 @@ INDEX_HTML = r"""<!doctype html>
   #welcome{color:var(--muted);font-size:14px;line-height:1.7;max-width:760px}
   .fslot.bad b{color:#e08080}
   .fslot.bad .fstate{color:#e08080}
+  .pastewarn{color:#e08080;font-weight:600}
 
   /* ---- type-ahead picker ---- */
   .pick{position:relative}
@@ -299,6 +300,15 @@ const $ = s => document.querySelector(s);
 const files = {proj:null, field:null, dk:null, linestar:null, etr:null, standings:null};
 const fileNames = {};
 let result = null, roster = [], fmt = 'showdown', fmtFromDk = false;
+// Which teams each file covers, and the slots themselves, so the projections
+// and the DK entries can be checked against each other: on Oct 21 the morning's
+// Data Hub file (Oct 20's games) sat in slot 1 under a green tick.
+const slates = {}, slotUi = {};
+let slateBad = false;
+function buttons(){
+  $('#go').disabled = !files.proj || slateBad;
+  $('#ls').disabled = !(files.proj && files.dk) || slateBad;
+}
 
 // Showdown and classic are different games, not two sizes of one, so the page
 // has to say which it is reading. The DK entries export is authoritative — its
@@ -338,9 +348,9 @@ function slot(key, el){
     el.classList.remove('loaded','req','bad');
     if(cls) el.classList.add(cls);
     state.textContent = msg;
-    $('#go').disabled = !files.proj;
-    $('#ls').disabled = !(files.proj && files.dk);
+    buttons();
   };
+  slotUi[key] = {mark, ok: ''};
 
   const read = f => {
     if(!f){ return; }
@@ -357,13 +367,20 @@ function slot(key, el){
         const d = await res.json();
         if(d.ok){
           files[key] = text; fileNames[key] = f.name;
-          mark('loaded', '✓ ' + f.name + ' — ' + d.msg);
+          slates[key] = d.teams || null;
+          slotUi[key].ok = '✓ ' + f.name + ' — ' + d.msg;
+          mark('loaded', slotUi[key].ok);
           if(d.format) setFmt(d.format, key === 'dk');
           if(key === 'standings') $('#graderow').style.display = '';
           if(key === 'proj') loadRoster(text);
+          crossCheck();
         } else {
-          files[key] = null;
+          files[key] = null; slates[key] = null;
+          // A refused projections file must not leave the LAST file's players
+          // in the pickers — that is how a pasted pool matched nobody.
+          if(key === 'proj') clearRoster();
           mark('bad', '✗ ' + f.name + ' — ' + d.msg);
+          crossCheck();
         }
       } catch(err){
         files[key] = text;               // server unreachable: keep it anyway
@@ -395,6 +412,32 @@ slot('linestar', $('#s_ls'));
 slot('etr', $('#s_etr'));
 slot('standings', $('#s_st'));
 
+// Projections and DK entries must be the same night. Either can be the stale
+// one, so both slots say it and the build waits until one is replaced.
+function crossCheck(){
+  const a = slates.proj, b = slates.dk;
+  const miss = (a && b) ? b.filter(t => !a.includes(t)) : [];
+  slateBad = !!(a && b) && miss.length > 0.2 * b.length;
+  ['proj','dk'].forEach(k => {
+    if(!files[k]) return;
+    if(slateBad) slotUi[k].mark('bad', '✗ DIFFERENT SLATES — the projections are for '
+        + a.join(', ') + '; the DK entries are for ' + b.join(', ')
+        + '. One of them is the wrong night: replace it.');
+    else slotUi[k].mark('loaded', slotUi[k].ok);
+  });
+  buttons();
+}
+
+function clearRoster(){
+  roster = [];
+  $('#slate').textContent = '';
+  ['poolin','corein'].forEach(id => {
+    const el = $('#'+id);
+    el.disabled = true;
+    el.placeholder = 'drop tonight\'s Stokastic projections first';
+  });
+}
+
 // ---- type-ahead pickers, enabled once the slate is known ----
 const sel = {pool:new Set(), core:new Set()};
 
@@ -407,6 +450,12 @@ async function loadRoster(text){
     const d = await res.json();
     if(d.error) return;
     roster = d.players || [];
+    // Names picked off an earlier file that is not on this one go: a chip for
+    // a player who is not on the slate would only be skipped at build time.
+    ['pool','core'].forEach(k => [...sel[k]].forEach(n => {
+      if(!roster.some(p => p.name === n)) sel[k].delete(n);
+    }));
+    if(pickers.pool){ pickers.pool.draw(); pickers.core.draw(); }
     if(d.format) setFmt(d.format, false);
     $('#slate').textContent = slateLabel(d.teams||[]);
     ['poolin','corein'].forEach(id => {
@@ -509,8 +558,20 @@ function picker(kind, inputId, menuId, chipsId){
     });
     input.value = ''; close(); draw();
     if(kind === 'core') pickers.pool.draw();
-    $('#status').textContent = 'Added ' + hit.length + ' to ' + kind
+    const said = 'Added ' + hit.length + ' to ' + kind
       + (miss.length ? ' — no match for: ' + miss.join(', ') : '');
+    $('#status').textContent = said;
+    // Said right under the box, not only at the bottom of the page, where a
+    // whole sheet missing on Oct 21 looked like "nothing happened".
+    chips.parentNode.querySelectorAll('.pastewarn').forEach(x => x.remove());
+    if(miss.length){
+      const warn = document.createElement('div');
+      warn.className = 'picknote pastewarn';
+      warn.textContent = (hit.length < miss.length
+        ? 'Most of these names are not on this projections file — is slot 1 tonight\'s file? '
+        : '') + said;
+      chips.after(warn);
+    }
     return true;
   };
   input.addEventListener('paste', e => {

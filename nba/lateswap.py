@@ -225,6 +225,11 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
     if why_not and not o.get("allowNonStokastic"):
         return {"error": f"Not swapping: the projections file is not Stokastic's — "
                          f"{why_not}. Pull a fresh Stokastic projections export."}
+    import app
+    old_day = None if o.get("allowOldSlate") else app._old_slate(
+        players, log_path or _build_log())
+    if old_day:
+        return {"error": "Not swapping: " + app._old_slate_msg(old_day, players)}
     if not (dk_text or "").strip():
         return {"error": "Drop your CURRENT DK entries export — it is the only file "
                          "that says what is entered and who is locked."}
