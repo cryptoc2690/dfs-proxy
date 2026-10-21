@@ -287,7 +287,34 @@ def _greedy_cover(elig):
     return chosen[:CLASSIC_SIZE]
 
 
-# ---------------- pool gaps (advisory) ----------------
+# ---------------- rounding out the pool (classic) ----------------
+# The sharp's sheet cannot cover everything (Oct 20: Andre Drummond, $4,500, 18.0
+# projected, 1% owned, scored 43 and sat in 6-7 of each contest's top 10 — off
+# the sheet). The user's rule, Oct 21: on every classic build with a pool, add the
+# five best points-per-$1,000 plays off the sheet in two bands, both projected
+# 14+. They become legal, nothing more: the ranking decides whether they are
+# used (Oct 20: Drummond in the pool alone reached 0-1 of 150 lineups). On Oct
+# 20 this rule would have added Drummond. UNMEASURED on NBA — every add is logged
+# and graded; option poolAdds=off turns it off; cap a name at 0 to drop him.
+ADD_N = 5
+ADD_MIN_PROJ = 14.0
+ADD_CHEAP_MAX = 4500
+ADD_MID_MIN, ADD_MID_MAX = 4600, 7500
+
+
+def _pool_adds(players):
+    """-> (cheap adds, mid adds), each the top ADD_N by projection per $1,000."""
+    off = [p for p in players if not p.in_pool and not p.core and not p.removed
+           and p.proj >= ADD_MIN_PROJ and p.salary > 0]
+    val = lambda p: -p.proj / p.salary
+    cheap = sorted((p for p in off if p.salary <= ADD_CHEAP_MAX),
+                   key=lambda p: (val(p), p.name))[:ADD_N]
+    mid = sorted((p for p in off if ADD_MID_MIN <= p.salary <= ADD_MID_MAX),
+                 key=lambda p: (val(p), p.name))[:ADD_N]
+    return cheap, mid
+
+
+# ---------------- pool gaps (advisory; showdown only now) ----------------
 GAP_MIN_CEILING = 0.70     # top 30% of the position on simulated upside
 GAP_MIN_LEVERAGE = 0.20    # ceiling rank must beat ownership rank by this much
 GAP_MIN_POS = 5
@@ -604,7 +631,8 @@ def _log(lineups, rosters, meta):
                                  "minutes": p.minutes, "starting": p.starting,
                                  "ls_proj": p.ls_proj, "ls_status": p.ls_status,
                                  "etr_proj": p.etr_proj, "etr_own": p.etr_own,
-                                 "core": p.core, "pool": p.in_pool}
+                                 "core": p.core, "pool": p.in_pool,
+                                 "added": p.added or None}
                                 for s, p in zip(meta.get("slots") or [], ps)],
                     "salary": lu.salary, "leftover": SALARY_CAP - lu.salary,
                     "proj": lu.proj, "own_sum": lu.own_sum,
@@ -895,6 +923,21 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                     "duplication estimate. That is a much weaker build.")
 
     min_proj = _f(o.get("minProj"), E.MIN_PROJ)
+    adds = {"cheap": [], "mid": []}
+    if pool_names and fmt == "classic" and str(o.get("poolAdds", "on")) != "off":
+        cheap, mid = _pool_adds(players)
+        for tag, lst in (("cheap", cheap), ("mid", mid)):
+            for p in lst:
+                p.in_pool, p.added = True, tag
+            adds[tag] = [p.name for p in lst]
+        if cheap or mid:
+            show = lambda ps: ", ".join(f"{p.name} (${p.salary:,}, {p.proj:.1f} proj, "
+                                        f"{p.proj / p.salary * 1000:.2f}x)" for p in ps)
+            say("info", "Rounded out your pool (best points per $1,000 off your sheet, "
+                        f"projected {ADD_MIN_PROJ:.0f}+)"
+                        + (f" — ${ADD_CHEAP_MAX:,} or less: {show(cheap)}" if cheap else "")
+                        + (f"; ${ADD_MID_MIN:,}-${ADD_MID_MAX:,}: {show(mid)}" if mid else "")
+                        + ". They are legal now, not forced; cap one at 0 to drop him.")
     raw_off = o.get("maxOffPool")
     if not pool_names:
         off_pool = None
@@ -919,7 +962,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
     if pool_names and off_pool is not None:
         say("info", "Pool is a build constraint: " + ("every player must come from it."
                     if not off_pool else f"up to {off_pool} off-pool player(s) per lineup."))
-    if pool_names:
+    if pool_names and fmt == "showdown":
         gaps = _pool_gaps_note(players, mat, sims, min_proj)
         if gaps:
             shown = gaps[:GAP_SHOW]
@@ -1116,6 +1159,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                 "minProj": min_proj, "maxLeftover": max_leftover,
                 "maxOffPool": off_pool, "cores": sorted(core_names),
                 "pool": sorted(pool_names), "capPlayers": o.get("capPlayers") or "",
+                "poolAdds": adds,
                 "floorPlayers": {p.name: pfloors[p.dk_id] for p in players
                                  if p.dk_id in pfloors}}
     meta = {"slate": datetime.now().astimezone().date().isoformat(), "games": games,
@@ -1528,6 +1572,8 @@ def main(argv=None):
     ap.add_argument("--caps", help="per-player caps, 'Name 20; Name 40'")
     ap.add_argument("--floors", help="minimum lineups per player, 'Name 2; Name 3'")
     ap.add_argument("--etr", help="ETR projections export — logged only")
+    ap.add_argument("--no-pool-adds", action="store_true",
+                    help="do not round out the pool automatically")
     ap.add_argument("--n", type=int, default=150)
     ap.add_argument("--split", type=int, default=None,
                     help="entries from OUR builder; the rest come from Stokastic's "
@@ -1605,6 +1651,7 @@ def main(argv=None):
     res = run_build(_read(a.proj), _read(a.field), _read(a.dk), {
         "pool": _read(a.pool), "cores": _read(a.cores), "remove": a.remove or "",
         "capPlayers": a.caps or "", "floorPlayers": a.floors or "",
+        "poolAdds": "off" if a.no_pool_adds else "on",
         "fileNames": {k: os.path.basename(v) for k, v in (
             ("proj", a.proj), ("field", a.field), ("dk", a.dk),
             ("linestar", a.linestar), ("etr", a.etr)) if v},

@@ -196,6 +196,12 @@ INDEX_HTML = r"""<!doctype html>
       <div class="picknote">Paste the whole sheet at once — names separated by
         commas, or one per line. Anything that matches nobody is named back to
         you rather than dropped quietly.</div>
+      <label style="display:flex;gap:8px;align-items:center;margin-top:12px">
+        <input type="checkbox" id="pooladds" checked style="width:auto">
+        Round out the pool automatically</label>
+      <div class="picknote">Adds the 5 best points-per-$1,000 players off your sheet at
+        $4,500 or less, and 5 more from $4,600 to $7,500, all projected 14+. They become
+        legal, not forced. The build names them.</div>
       <label>Players from outside the pool, per lineup</label>
       <select id="offpool">
         <option value="0" selected>0 — build only from the pool</option>
@@ -579,6 +585,7 @@ $('#go').addEventListener('click', async () => {
           minProj: num('#minproj', 2),
           remove: $('#remove').value,
           floorPlayers: $('#floorplayers').value,
+          poolAdds: $('#pooladds').checked ? 'on' : 'off',
           fileNames: fileNames,
           fieldCap: num('#cap',0), fillPct: num('#fillpct',100),
           maxOffPool: $('#offpool').value,

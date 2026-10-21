@@ -329,7 +329,7 @@ check("the WNBA removal constants", (app.REMOVE_SHARE, app.REMOVE_SAME_POS,
 print("\n-- pool, cores, caps, removal --")
 _pool_names = [x["Player"] for x in R5 if not x["Player"][-1].isdigit()
                or int(x["Player"][-1]) % 2 == 0]
-rp = build(pool="\n".join(_pool_names), maxOffPool="0", split=40)
+rp = build(pool="\n".join(_pool_names), maxOffPool="0", split=40, poolAdds="off")
 _in = {normalize_name(n) for n in _pool_names}
 check("pool: every player comes from the sheet at off-pool 0",
       not rp.get("error") and all(normalize_name(p["name"]) in _in
@@ -496,10 +496,42 @@ check("...unless deliberately overridden, and then it still warns",
 check("Stokastic's own file is accepted and labelled",
       app._describe("proj", PROJ5)["msg"].startswith("Stokastic ✓"))
 
+print("\n-- rounding out the pool --")
+ra = build(pool="\n".join(_pool_names), maxOffPool="0", split=40)
+_la = [json.loads(l) for l in open(app.LOG_PATH, encoding="utf-8")][-1]
+_adds = _la["settings"]["poolAdds"]
+_byname = {x["Player"]: x for x in R5}
+check("round-out: up to 5 cheap and 5 mid adds, all off the sheet",
+      0 < len(_adds["cheap"]) <= 5 and 0 < len(_adds["mid"]) <= 5
+      and not (set(_adds["cheap"]) | set(_adds["mid"])) & set(_pool_names), str(_adds))
+check("round-out: cheap band is $4,500 or less, mid $4,600-$7,500, all projected 14+",
+      all(_byname[n]["Salary"] <= 4500 and _byname[n]["Projection"] >= 14 for n in _adds["cheap"])
+      and all(4600 <= _byname[n]["Salary"] <= 7500 and _byname[n]["Projection"] >= 14
+              for n in _adds["mid"]))
+_off = [x for x in R5 if x["Player"] not in _pool_names and x["Projection"] >= 14]
+_best_cheap = sorted((x for x in _off if x["Salary"] <= 4500),
+                     key=lambda x: -x["Projection"] / x["Salary"])[:5]
+check("round-out: they are the best points per $1,000 in the band",
+      set(_adds["cheap"]) == {x["Player"] for x in _best_cheap})
+check("round-out: the build names them", any("Rounded out your pool" in n["text"] for n in ra["notes"]))
+check("round-out: added players may be used, nobody else off the sheet is",
+      all(p["name"] in _pool_names or p["name"] in _adds["cheap"] + _adds["mid"]
+          for l in ra["lineups"] for p in l["players"]))
+check("round-out: each added player is marked in the log",
+      any(p.get("added") in ("cheap", "mid") for p in _la["players"]) or not any(
+          p["name"] in _adds["cheap"] + _adds["mid"] for p in _la["players"]))
+rn = build(pool="\n".join(_pool_names), maxOffPool="0", split=40, poolAdds="off")
+check("round-out: the switch turns it off",
+      not any("Rounded out" in n["text"] for n in rn["notes"]))
+check("round-out: pinned at 5 per band, 14+ projected, $4,500 / $4,600-$7,500",
+      (app.ADD_N, app.ADD_MIN_PROJ, app.ADD_CHEAP_MAX, app.ADD_MID_MIN, app.ADD_MID_MAX)
+      == (5, 14.0, 4500, 4600, 7500))
+
 print("\n-- minimum lineups for a player --")
 _sheet = [x["Player"] for x in R5 if x["Player"] not in ("DEN Player10", "DEN Player11")]
 rf = build(pool="\n".join(_sheet), maxOffPool="0",
            floorPlayers="DEN Player10 2\nNobody Here 3\nDEN Player11 two", split=40,
+           poolAdds="off",
            fileNames={"proj": "DK_NBA_Main_Pre_Contest_Projections.csv", "dk": "DKEntries.csv"})
 _d10 = sum(1 for l in rf["lineups"] if any(p["name"] == "DEN Player10" for p in l["players"]))
 check("a typed minimum puts an off-sheet player in at least that many lineups",

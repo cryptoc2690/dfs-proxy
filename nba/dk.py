@@ -88,6 +88,7 @@ class Player:
     core: bool = False
     in_pool: bool = False
     boost: bool = False      # a typed minimum: construction weight like a core
+    added: str = ""          # "cheap" / "mid" when the pool round-out added him
     removed: bool = False
     notes: list = field(default_factory=list)
 
