@@ -516,7 +516,10 @@ check("round-out: they are the best points per $1,000 in the band",
 check("round-out: the build names them", any("Rounded out your pool" in n["text"] for n in ra["notes"]))
 check("round-out: added players may be used, nobody else off the sheet is",
       all(p["name"] in _pool_names or p["name"] in _adds["cheap"] + _adds["mid"]
-          for l in ra["lineups"] for p in l["players"]))
+          + _adds["stud"] for l in ra["lineups"] for p in l["players"]))
+check("round-out: every stud add is held to his minimum",
+      all(sum(1 for l in ra["lineups"] for p in l["players"] if p["name"] == nm) >= k
+          for nm, k in _adds["studFloors"].items()), str(_adds["studFloors"]))
 check("round-out: each added player is marked in the log",
       any(p.get("added") in ("cheap", "mid") for p in _la["players"]) or not any(
           p["name"] in _adds["cheap"] + _adds["mid"] for p in _la["players"]))
@@ -826,6 +829,25 @@ _d = app._describe("proj", "Player,Salary,Position,Team,Opponent,Projection,Owne
 app.LOG_PATH = _LP
 check("old slate: slot 1 refuses the file and says which day it is from",
       not _d.get("ok") and "2000-01-01" in _d.get("msg", ""), str(_d))
+
+# ---- stud adds: top 3 by projection, above $7,500, under 10% owned, off the
+# sheet, each with a minimum of 2x projected ownership (Oct 22) ----
+_st = lambda nm, sal, pr, own, **kw: _P(name=nm, dk_id=nm, pos="SG", team="AAA",
+                                       opponent="BBB", salary=sal, proj=pr,
+                                       ownership=own, **kw)
+_sp = [_st("Edw", 8800, 44.9, 3.3), _st("Ban", 8700, 43.0, 2.2), _st("Sen", 8900, 42.2, 1.2),
+       _st("Reav", 8000, 42.0, 5.6), _st("Chalk", 9000, 50.0, 30.0),
+       _st("Cheap", 7500, 46.0, 1.0), _st("OnSheet", 9500, 55.0, 2.0)]
+_sp[-1].in_pool = True
+_got = app._stud_adds(_sp, 150)
+check("studs: top 3 by projection above $7,500 under 10% owned, off the sheet",
+      [p.name for p, _k in _got] == ["Edw", "Ban", "Sen"], str([p.name for p, _k in _got]))
+check("studs: minimum is 2x projected ownership in lineups (10 / 7 / 4 of 150)",
+      [k for _p, k in _got] == [10, 7, 4], str([k for _p, k in _got]))
+check("studs: a player capped at 0 is passed over for the next one",
+      [p.name for p, _k in app._stud_adds(_sp, 150, {"Edw"})] == ["Ban", "Sen", "Reav"])
+check("studs: the minimum is at least one lineup in a small set",
+      all(k >= 1 for _p, k in app._stud_adds(_sp, 20)))
 
 # The summary and exit MUST stay last — appending a new section after them
 # silently skips it and the suite still reports a clean pass.

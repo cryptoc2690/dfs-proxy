@@ -89,6 +89,14 @@ the pool and weighted like a core in construction so the minimum is reachable), 
 ownership lean (neutral by default), contest size, and the minimum projection
 for a roster spot.
 
+**Rounding out the pool** (classic, on by default, `--no-pool-adds` turns it off).
+It adds three groups of players who aren't on your sheet:
+- **Cheap:** the 5 best points per $1,000 at $4,500 or less, projected 14+.
+- **Mid:** the 5 best points per $1,000 from $4,600 to $7,500, projected 14+.
+- **Studs:** the 3 highest projections above $7,500 among players under 10% projected ownership. Each stud gets a minimum of 2× his projected ownership, in lineups, at least 1 (Edwards at 3.3% in a 150-max: 10).
+
+The cheap and mid adds become legal but aren't forced. Without the minimum, a stud in the pool reached only 1–3% of lineups on Oct 21. Cap a name at 0 and he's skipped (a stud is replaced by the next in line); a minimum you type wins over the automatic one.
+
 **Late scratch** works the WNBA way: the player is zeroed and about 65% of his
 production goes to teammates, weighted to his position. A fresh Stokastic pull
 is better when there is time.

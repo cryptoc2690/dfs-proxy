@@ -338,6 +338,32 @@ ADD_MIN_PROJ = 14.0
 ADD_CHEAP_MAX = 4500
 ADD_MID_MIN, ADD_MID_MAX = 4600, 7500
 
+# The stud band (user's call, Oct 22). Oct 21: the low-owned studs were off the
+# sheet — Edwards $8,800, 3.3% projected, scored 72 and sat in 8 of the field's
+# top 10 — and nothing above $7,500 was ever added. Pool eligibility alone left
+# him in 1-3% of 150 (the ranker sees no ownership at this field size and ranks
+# studs on points per dollar), so each stud add carries a MINIMUM: twice his
+# projected ownership, in lineups, at least one. Rebuilt Oct 21 over 10 seeds,
+# median mini-MAX net +$105 -> +$132; Oct 20 the rule adds nobody. Two slates
+# are not evidence: logged and graded, keep it if it beats the same seeds
+# without it on 8 of 12 mini-MAX nights. Cap a stud at 0 and the next one in
+# line takes his place; a minimum you type for him wins over this one.
+STUD_N = 3
+STUD_MIN_SALARY = 7500     # strictly above
+STUD_MAX_OWN = 10.0        # projected ownership, percent, strictly below
+STUD_FLOOR_X = 2.0
+
+
+def _stud_adds(players, n, skip=()):
+    """-> [(player, minimum lineups)]: the top STUD_N by projection off the sheet,
+    above STUD_MIN_SALARY and under STUD_MAX_OWN projected ownership. `skip` is
+    the dk_ids capped at 0 — a player you have ruled out is passed over."""
+    off = [p for p in players if not p.in_pool and not p.core and not p.removed
+           and p.proj > 0 and p.salary > STUD_MIN_SALARY
+           and p.ownership < STUD_MAX_OWN and p.dk_id not in skip]
+    top = sorted(off, key=lambda p: (-p.proj, p.name))[:STUD_N]
+    return [(p, max(1, round(STUD_FLOOR_X * p.ownership / 100.0 * n))) for p in top]
+
 
 def _pool_adds(players):
     """-> (cheap adds, mid adds), each the top ADD_N by projection per $1,000."""
@@ -964,8 +990,12 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                     "duplication estimate. That is a much weaker build.")
 
     min_proj = _f(o.get("minProj"), E.MIN_PROJ)
-    adds = {"cheap": [], "mid": []}
+    adds = {"cheap": [], "mid": [], "stud": [], "studFloors": {}}
+    studs = []
     if pool_names and fmt == "classic" and str(o.get("poolAdds", "on")) != "off":
+        zero = {pid for pid, c in _player_caps(o.get("capPlayers"), players)[0].items()
+                if c <= 0}
+        studs = _stud_adds(players, n, zero)
         cheap, mid = _pool_adds(players)
         for tag, lst in (("cheap", cheap), ("mid", mid)):
             for p in lst:
@@ -979,6 +1009,18 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                         + (f" — ${ADD_CHEAP_MAX:,} or less: {show(cheap)}" if cheap else "")
                         + (f"; ${ADD_MID_MIN:,}-${ADD_MID_MAX:,}: {show(mid)}" if mid else "")
                         + ". They are legal now, not forced; cap one at 0 to drop him.")
+        for p, k in studs:
+            p.in_pool, p.added = True, "stud"
+        adds["stud"] = [p.name for p, _k in studs]
+        adds["studFloors"] = {p.name: k for p, k in studs}
+        if studs:
+            say("info", f"Stud adds (off your sheet, above ${STUD_MIN_SALARY:,}, under "
+                        f"{STUD_MAX_OWN:.0f}% projected owned, top {STUD_N} by "
+                        f"projection), each with a minimum of {STUD_FLOOR_X:g}x his "
+                        f"projected ownership: "
+                        + ", ".join(f"{p.name} (${p.salary:,}, {p.proj:.1f} proj, "
+                                    f"{p.ownership:.1f}% owned) in {k}+" for p, k in studs)
+                        + ". Cap one at 0 to drop him; a minimum you type wins.")
     raw_off = o.get("maxOffPool")
     if not pool_names:
         off_pool = None
@@ -1033,6 +1075,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
     if floor_bad:
         say("warn", "These minimum lines need a name and a number of lineups, e.g. "
                     "\"Andre Drummond 2\" — ignored: " + "; ".join(floor_bad))
+    for p, k in studs:
+        pfloors.setdefault(p.dk_id, k)        # a typed minimum wins
     for p in players:
         if p.dk_id in pfloors:
             if p.proj <= 0:
@@ -1153,7 +1197,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
             ("A minimum could not be met — " + "; ".join(short)
              + ". Usually the salary cap or his projection is below the floor "
                "for a roster spot.") if short else
-            "Every minimum you typed is met: " + ", ".join(
+            "Every minimum is met: " + ", ".join(
                 f"{p.name} in {sum(1 for lu in chosen if p.dk_id in lu.ids())}"
                 for p in players if p.dk_id in pfloors) + ".")
     coach = _coach(players, chosen, mat, sims, removed, pool_names, off_pool,

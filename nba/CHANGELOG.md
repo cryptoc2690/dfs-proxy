@@ -2,7 +2,19 @@
 
 Newest first. One entry per change, in plain words: what changed and why.
 
-## Oct 21, 2026
+## Oct 22, 2026
+
+**Stud adds in the pool round-out**
+- Adds the 3 highest-projected players above $7,500 who are under 10% projected owned and not on your sheet.
+- Each gets a minimum of 2× his projected ownership, in lineups, at least 1. Oct 21 would have been Edwards 10, Banchero 7, Sengun 4 of 150.
+- Why: on Oct 21 Edwards ($8,800, 3.3% projected) scored 72 and was in 8 of the field's top 10, and we had none. In the pool alone he reached only 1–3% of lineups, because the ranker doesn't see ownership at this contest size.
+- Evidence so far, from `NBA Stud Report 10-22.md`, rebuilt over 10 seeds:
+  - Oct 21: median mini-MAX net went from +$105 to +$132.
+  - Oct 20: the rule adds nobody.
+- Two slates aren't proof. Keep the rule if, on at least 8 of the next 12 mini-MAX nights, it beats the same build without it.
+- Cap a player at 0 to skip him (e.g. Booker), and the next stud takes his place. A minimum you type wins.
+
+
 
 **Old projections are refused** (commit 3f1c387)
 - What happened: the morning Data Hub file still held Oct 20's games (BOS, DET, NYK, OKC, PHI, SAS). Slot 1 gave it a green tick, so tonight's pasted pool matched nobody. Lineups had to be built by hand from the command line minutes before lock.
@@ -34,10 +46,6 @@ Newest first. One entry per change, in plain words: what changed and why.
 - Every build logs each file's name and fingerprint.
 - Minimum lineups per player are set as a count, not a percentage.
 - ETR slot added. It is logged only and not used in the build.
-
-## Wanted, not built yet
-
-- **Stud add for the pool round-out.** Add the lowest-owned stud above $7,500 who projects near the top of the slate. On Oct 21, Anthony Edwards ($8,800, projected 44.9, 3% owned) wasn't on the sheet, and the round-out stops at $7,500. To be built with the stud and ownership review.
 
 ## Tonight's lineups (Oct 21)
 

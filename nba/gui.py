@@ -202,7 +202,9 @@ INDEX_HTML = r"""<!doctype html>
         Round out the pool automatically</label>
       <div class="picknote">Adds the 5 best points-per-$1,000 players off your sheet at
         $4,500 or less, and 5 more from $4,600 to $7,500, all projected 14+. They become
-        legal, not forced. The build names them.</div>
+        legal, not forced. Plus the 3 highest-projected studs above $7,500 under 10%
+        owned, each in at least 2x his projected ownership. Cap a name at 0 to drop
+        him. The build names them all.</div>
       <label>Players from outside the pool, per lineup</label>
       <select id="offpool">
         <option value="0" selected>0 — build only from the pool</option>
