@@ -27,7 +27,7 @@ Newest first. One entry per change, in plain words: what changed and why.
 - Two slates aren't proof. Keep the rule if, on at least 8 of the next 12 mini-MAX nights, it beats the same build without it.
 - Cap a player at 0 to skip him (e.g. Booker), and the next stud takes his place. A minimum you type wins.
 
-
+## Oct 21, 2026
 
 **Old projections are refused** (commit 3f1c387)
 - What happened: the morning Data Hub file still held Oct 20's games (BOS, DET, NYK, OKC, PHI, SAS). Slot 1 gave it a green tick, so tonight's pasted pool matched nobody. Lineups had to be built by hand from the command line minutes before lock.
@@ -59,6 +59,13 @@ Newest first. One entry per change, in plain words: what changed and why.
 - Every build logs each file's name and fingerprint.
 - Minimum lineups per player are set as a count, not a percentage.
 - ETR slot added. It is logged only and not used in the build.
+
+## Wanted, not built yet
+
+- **Trim the build's info section** (asked Oct 22, for Oct 23).
+  - It's too much to read.
+  - Lead with one short list: every player in your pool and the added pool (cheap, mid and stud adds) who is in **zero** lineups. Then you can decide whether to give anyone a few lineups with the minimum box before downloading.
+  - Keep the rest, but shorter, and below that list.
 
 ## Tonight's lineups (Oct 21)
 
