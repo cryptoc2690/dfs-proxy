@@ -35,6 +35,10 @@ Newest first. One entry per change, in plain words: what changed and why.
 - Minimum lineups per player are set as a count, not a percentage.
 - ETR slot added. It is logged only and not used in the build.
 
+## Wanted, not built yet
+
+- **Stud add for the pool round-out.** Add the lowest-owned stud above $7,500 who projects near the top of the slate. On Oct 21, Anthony Edwards ($8,800, projected 44.9, 3% owned) wasn't on the sheet, and the round-out stops at $7,500. To be built with the stud and ownership review.
+
 ## Tonight's lineups (Oct 21)
 
 - Built from the command line, because the page still held this morning's file.
