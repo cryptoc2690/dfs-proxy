@@ -207,8 +207,37 @@ def expected_copies(hit, scale):
     return max(0.0, scale * (DUPE_A + DUPE_B * hit))
 
 
+# Salary left cuts real duplication, and the estimate ran BACKWARDS on it
+# (NBA Salary Left Report 10-22: every distinct roster in six DK standings
+# files, Oct 20 and Oct 21). Most of the field spends to the cap, so a roster
+# that leaves money is held by fewer entrants at the same ownership; the
+# ownership product meanwhile rises with salary left, because cheap players are
+# higher-owned per dollar. The real-to-estimate ratio, against $0 left: about
+# 0.5 at $100-300, 0.15 at $400-700, 0.05 at $800-1,200, 0.03 beyond — fitted
+# on Oct 20, checked on Oct 21 (0.47 / 0.16). Both branches. Classic only: it
+# was measured on classic. Strongest on small slates (3 games: 27% of $0
+# rosters duplicated vs 7% on 11). Moved no money over 10 seeds on either slate;
+# refit after a few small slates, and take it out if it keeps moving nothing.
+LEFTOVER_DUPE_FACTOR = ((100, 1.0), (400, 0.5), (800, 0.15), (1300, 0.05))
+LEFTOVER_DUPE_TAIL = 0.03
+
+
+def leftover_factor(lu):
+    if isinstance(lu, ShowdownLineup):
+        return 1.0
+    left = SALARY_CAP - lu.salary
+    for below, f in LEFTOVER_DUPE_FACTOR:
+        if left < below:
+            return f
+    return LEFTOVER_DUPE_TAIL
+
+
 def estimated_dupes(lu, idx, scale=1.0, field_n=0.0):
     """How many OPPONENTS are expected to hold this exact roster."""
+    return _estimated_dupes(lu, idx, scale, field_n) * leftover_factor(lu)
+
+
+def _estimated_dupes(lu, idx, scale=1.0, field_n=0.0):
     hit = idx.get(lu.key())
     if hit is not None:
         return expected_copies(hit, scale)

@@ -298,7 +298,8 @@ _vend = [l for l in app._field_lineups(fe, "classic")[0]][:5]
 _idx = E.dupe_index(_vend)
 check("duplication: a roster the field holds is charged scale * (A + B * copies)",
       abs(E.estimated_dupes(_vend[0], _idx, scale=4.0)
-          - 4.0 * (E.DUPE_A + E.DUPE_B * (1 + _vend[0].metrics["vdupes"]))) < 1e-9)
+          - 4.0 * (E.DUPE_A + E.DUPE_B * (1 + _vend[0].metrics["vdupes"]))
+          * E.leftover_factor(_vend[0])) < 1e-9)
 _chalk = C.Lineup(sorted(pl, key=lambda p: -p.ownership)[:8])
 _punt = C.Lineup(sorted(pl, key=lambda p: p.ownership)[:8])
 check("duplication: chalk is charged more than a punt off the field's pool",
@@ -651,8 +652,15 @@ LS_LOG = app.LOG_PATH
 s0 = LS.run_late_swap(PROJ5, _mid, _stand, {}, log_path=LS_LOG)
 check("swap: runs", not s0.get("error"), s0.get("error", ""))
 _s150 = [s for s in s0["swaps"] if s["contest"].startswith("NBA $15K")]
-check("swap: nothing changed and nothing moves", s0["changed"] == 0, f"{s0['changed']} changed")
-check("swap: every hold says why", all(s.get("hold") for s in _s150))
+# No news here, so the only moves allowed are free ones that clear the no-news
+# bar (+14). Whether the synthetic build leaves one available depends on the
+# build, so the rule is checked, not a count.
+_moved = [s for s in s0["swaps"] if not s.get("hold")]
+check("swap: with no news, every move clears the +14 bar and carries no news",
+      all((s.get("gain") or 0) >= LS.SWAP_DISC_GAIN and not s.get("news") for s in _moved)
+      and s0["changed"] == len(_moved) and len(_moved) <= 2,
+      f"{s0['changed']} changed: " + ", ".join(str(s.get("gain")) for s in _moved))
+check("swap: every hold says why", all(s.get("hold") for s in _s150 if s not in _moved))
 _one = next(s for s in _s150 if s.get("timeLeft"))
 check("swap: projected final counts the clock, not just the score",
       _one["projFinal"] is not None and _one["projFinal"] > _one["banked"] + 50,
@@ -848,6 +856,17 @@ check("studs: a player capped at 0 is passed over for the next one",
       [p.name for p, _k in app._stud_adds(_sp, 150, {"Edw"})] == ["Ban", "Sen", "Reav"])
 check("studs: the minimum is at least one lineup in a small set",
       all(k >= 1 for _p, k in app._stud_adds(_sp, 20)))
+
+# ---- salary left cuts the duplicate estimate (NBA Salary Left Report 10-22) ----
+class _LU(C.Lineup):
+    def __init__(self, sal):
+        self._sal = sal
+    salary = property(lambda self: self._sal)
+check("salary left: $0 / $100-300 / $400-700 / $800-1,200 / more = x1 / .5 / .15 / .05 / .03",
+      [E.leftover_factor(_LU(50000 - x)) for x in (0, 300, 700, 1200, 2000)]
+      == [1.0, 0.5, 0.15, 0.05, 0.03])
+check("salary left: showdown is untouched (measured on classic only)",
+      E.leftover_factor(E.ShowdownLineup.__new__(E.ShowdownLineup)) == 1.0)
 
 # The summary and exit MUST stay last — appending a new section after them
 # silently skips it and the suite still reports a clean pass.

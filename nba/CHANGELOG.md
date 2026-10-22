@@ -4,6 +4,19 @@ Newest first. One entry per change, in plain words: what changed and why.
 
 ## Oct 22, 2026
 
+**Salary left counts in the duplicate estimate** (classic)
+- Based on `NBA Salary Left Report 10-22.md`, which looked at every roster in six DK standings files.
+- What it found:
+  - Rosters that leave salary are duplicated far less, even at the same ownership.
+  - The tool's estimate ran backwards on this.
+  - The effect is much stronger on small slates: 27% of full-cap rosters were duplicated on the 3-game slate vs 7% on the 11-game slate.
+- The estimate is now multiplied by ×1 at $0 left, ×0.5 at $100–300, ×0.15 at $400–700, ×0.05 at $800–1,200, and ×0.03 beyond that.
+- Over 10 seeds on both slates it moved no money. It changes which lineups get picked on chalky, small slates. If it keeps moving nothing after five small slates, take it back out.
+- Not changed, per the report:
+  - The $2,000 limit on unspent salary, because it never binds.
+  - Deliberately building lineups that leave salary, because the ranking discards them.
+- Separate, not fixed yet: the counts taken from Stokastic's lineups file run 2–4× too high.
+
 **Stud adds in the pool round-out**
 - Adds the 3 highest-projected players above $7,500 who are under 10% projected owned and not on your sheet.
 - Each gets a minimum of 2× his projected ownership, in lineups, at least 1. Oct 21 would have been Edwards 10, Banchero 7, Sengun 4 of 150.
