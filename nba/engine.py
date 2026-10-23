@@ -92,8 +92,19 @@ def _calibrate(row, mean_t, sd_t):
     return row
 
 
+# Under 10 projected, Stokastic's Std Dev (0.3-3 points) cannot hold the real
+# night, which is zero or a garbage-time / wrong-role 15-25: across Oct 20-22,
+# 54% of these players beat the tool's own 90th percentile (10% if calibrated),
+# and the WNBA data against LineStar's ranges shows the same shape. At 10+ the
+# stated Std Dev measured right (realised / stated 0.90-1.03), so it is left
+# alone there (NBA Range Of Outcomes Report 10-23).
+LOW_PROJ = 10.0
+LOW_PROJ_SD_FLOOR = 6.0
+
+
 def player_sd(p):
-    return p.sd if p.sd > 0 else max(SD_FLOOR, SD_SHARE * p.proj)
+    sd = p.sd if p.sd > 0 else max(SD_FLOOR, SD_SHARE * p.proj)
+    return max(sd, LOW_PROJ_SD_FLOOR) if 0 < p.proj < LOW_PROJ else sd
 
 
 def simulate(players, sims=4000, seed=0):

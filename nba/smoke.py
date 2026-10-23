@@ -868,6 +868,27 @@ check("salary left: $0 / $100-300 / $400-700 / $800-1,200 / more = x1 / .5 / .15
 check("salary left: showdown is untouched (measured on classic only)",
       E.leftover_factor(E.ShowdownLineup.__new__(E.ShowdownLineup)) == 1.0)
 
+# ---- the info section and the cheap tier's range (Oct 23) ----
+_lo = _st("Lo", 3100, 7.8, 1.1); _lo.sd = 1.0
+_hi = _st("Hi", 6000, 30.0, 20.0); _hi.sd = 9.0
+check("range: under 10 projected, the spread is at least 6 points",
+      E.player_sd(_lo) == 6.0 and E.player_sd(_hi) == 9.0)
+_inf = ra["info"]
+check("info: confirmations collapse into short check labels",
+      any("distinct lineups" in c for c in _inf["checks"])
+      and any(c.startswith("Stokastic projections") for c in _inf["checks"]), str(_inf["checks"]))
+check("info: every warning lands in the problem line",
+      len(_inf["problems"]) == sum(1 for x in ra["notes"] if x["type"] == "warn"))
+_used = {p["name"] for l in ra["lineups"] for p in l["players"]}
+check("info: the zero list is pool / added players in no lineup, and only them",
+      all(z["name"] not in _used for z in _inf["zeroes"])
+      and all(z["name"] in _pool_names or z["from"] != "pool" for z in _inf["zeroes"]))
+check("info: overweights are 15+ over the field, with floor and ceiling numbers",
+      all(o["over"] >= 15 and o["floorKeeps"] is not None and o["ceilingAdds"] is not None
+          for o in _inf["overweights"]), str(_inf["overweights"])[:200])
+check("info: a same-range peer is within $600 and a 40-60% coin flip",
+      all(40 <= q["beats"] <= 60 for o in _inf["overweights"] for q in o["peers"]))
+
 # The summary and exit MUST stay last — appending a new section after them
 # silently skips it and the suite still reports a clean pass.
 print(f"\n{'=' * 56}\n  {ok} passed, {fail} failed\n{'=' * 56}")

@@ -446,7 +446,8 @@ def _coach(players, chosen, mat, sims, removed, pool_names, off_pool, floors_tot
     for c in cores:
         if c.proj <= 0:
             notes.append(("warn", f"Core check — {c.name}: projected 0 (out, or removed). "
-                                  f"He is in no lineup; drop him from the cores."))
+                                  f"He is in no lineup; drop him from the cores.",
+                          {"tag": "core", "name": c.name, "n": 0, "why": "projected 0"}))
             continue
         grp = [q for q in live if prim(q) == prim(c)] or live
         pct = sum(1 for q in grp if up[q.dk_id] < up[c.dk_id]) / len(grp)
@@ -462,12 +463,16 @@ def _coach(players, chosen, mat, sims, removed, pool_names, off_pool, floors_tot
         if why:
             notes.append(("warn", f"Core check — {c.name}: " + ", ".join(why) + f", {own}. "
                                   f"That is mandatory-exposure territory, not a "
-                                  f"build-around — the data would lean lighter here."))
+                                  f"build-around — the data would lean lighter here.",
+                          {"tag": "core", "name": c.name, "n": count.get(c.dk_id, 0),
+                           "why": ", ".join(why)}))
         else:
             notes.append(("good", f"Core check — {c.name}: {up[c.dk_id]:.0f} ceiling "
                                   f"(top {100 - pct * 100:.0f}% of {prim(c)}s), {own}"
                                   + (f", {c.minutes:.0f} min" if c.minutes else "")
-                                  + ". Solid anchor."))
+                                  + ". Solid anchor.",
+                          {"tag": "core", "name": c.name, "n": count.get(c.dk_id, 0),
+                           "why": None}))
     if len(cores) >= 2:
         by_game = {}
         for c in cores:
@@ -475,7 +480,8 @@ def _coach(players, chosen, mat, sims, removed, pool_names, off_pool, floors_tot
         g, names = max(by_game.items(), key=lambda kv: len(kv[1]))
         if len(names) >= 2:
             notes.append(("info", f"{len(names)} of your {len(cores)} cores are in {g} "
-                                  f"({', '.join(names)}) — they rise and fall together."))
+                                  f"({', '.join(names)}) — they rise and fall together.",
+                          {"tag": "coregame"}))
     if floors_total:
         want = next(iter(floors_total.values()))
         held = []
@@ -490,7 +496,7 @@ def _coach(players, chosen, mat, sims, removed, pool_names, off_pool, floors_tot
                                   f"{n} lineups (the floor is n / (cores + 1), so more cores "
                                   f"spread it thinner). What that did: " + "; ".join(held)
                                   + ". A core only moves a player the ranking would "
-                                    "otherwise under-use."))
+                                    "otherwise under-use.", {"tag": "hide"}))
 
     non_core = [(count.get(p.dk_id, 0), p) for p in live if not p.core]
     if non_core:
@@ -503,7 +509,8 @@ def _coach(players, chosen, mat, sims, removed, pool_names, off_pool, floors_tot
                           f"{p.ownership:.0f}%): ${p.salary:,}, proj {p.proj:.1f}, "
                           f"{value:.1f}x value. "
                           + ("Earned — don't cut it on a hunch." if value >= 5.0 else
-                             "Modest value; know the set leans on that one spot.")))
+                             "Modest value; know the set leans on that one spot."),
+                          {"tag": "hide"}))
 
     slots, teams_n = {}, len({p.team for p in live if p.team}) or 1
     for lu in chosen:
@@ -520,11 +527,90 @@ def _coach(players, chosen, mat, sims, removed, pool_names, off_pool, floors_tot
     for r in removed:
         notes.append(("info", f"You removed {r['name']} (projected {r['proj']} at "
                               f"${r['salary']:,}). Right call if it is a confirmed scratch; "
-                              f"if it is a hunch, the data liked this play."))
+                              f"if it is a hunch, the data liked this play.", {"tag": "hide"}))
     if pool_names and off_pool:
         notes.append(("info", f"Up to {off_pool} off-pool player(s) per lineup allowed — "
                               f"they are marked in the lineup and exposure tables."))
-    return [{"type": t, "text": x} for t, x in notes]
+    return [{"type": t[0], "text": t[1], **(t[2] if len(t) > 2 else {})} for t in notes]
+
+
+# ---------------- the info section: zeroes and overweights ----------------
+# Oct 23, the user's call after the 2-game Oct 22: "I need to know who I have
+# zero of from my pool / the added pool" and "if this person hits his floor, am I
+# justified in being 20% over the field?". Neither changes the build — they put
+# the decision in front of him before he downloads.
+OVERWEIGHT_MIN = 15.0      # points over projected ownership before a player is shown
+OVERWEIGHT_SHOW = 5
+PEER_SALARY = 600          # Range Of Outcomes Report 10-23: direct peers are within
+PEER_LO, PEER_HI = 0.40, 0.60   # $600 and a coin flip (40-60%) to outscore him
+
+
+def _zeroes(players, chosen, adds, pfloors, pool_names):
+    """Every player you put in play — pool, core, added, or given a minimum — who
+    is in no lineup. Empty when no pool was typed (then everyone is in play)."""
+    if not pool_names:
+        return []
+    used = {p.dk_id for lu in chosen for p in lu.players}
+    out = []
+    for p in sorted(players, key=lambda q: -q.proj):
+        if p.proj <= 0 or p.dk_id in used:
+            continue
+        why = ("core" if p.core else p.added if getattr(p, "added", None)
+               else "minimum" if p.dk_id in pfloors else "pool" if p.in_pool else None)
+        if why:
+            out.append({"name": p.name, "salary": p.salary, "proj": round(p.proj, 1),
+                        "own": round(p.ownership, 1), "from": why})
+    return out
+
+
+def _overweights(players, chosen, mat, bar, sims):
+    """Players the set is OVERWEIGHT_MIN+ points over the field on, with what the
+    report measured: the share of the set's chance of beating the field's top-1%
+    line that survives his floor nights (his simulated 10th percentile and
+    below) and what his ceiling nights (90th and up) add — and his direct peers,
+    players within $600 who are a coin flip to outscore him, with our exposure
+    and the field's. A number to decide on, not a rule."""
+    if not bar or not chosen:
+        return []
+    n = len(chosen)
+    count = {}
+    for lu in chosen:
+        for p in lu.players:
+            count[p.dk_id] = count.get(p.dk_id, 0) + 1
+    live = [p for p in players if p.proj > 0 and p.dk_id in mat]
+    over = sorted(((100.0 * count.get(p.dk_id, 0) / n - p.ownership, p) for p in live),
+                  key=lambda t: -t[0])
+    over = [(d, p) for d, p in over if d >= OVERWEIGHT_MIN][:OVERWEIGHT_SHOW]
+    if not over:
+        return []
+    cache = {}
+    scores = [E.score_lineup(lu, mat, cache) for lu in chosen]
+    beat = [sum(1 for sc in scores if sc[s] > bar[s]) / n for s in range(sims)]
+    whole = sum(beat) / sims or 1e-9
+    out = []
+    for d, p in over:
+        row = mat[p.dk_id]
+        srt = sorted(row)
+        lo, hi = srt[int(0.10 * (sims - 1))], srt[int(0.90 * (sims - 1))]
+        floor = [beat[s] for s in range(sims) if row[s] <= lo]
+        ceil = [beat[s] for s in range(sims) if row[s] >= hi]
+        peers = []
+        for q in live:
+            if q.dk_id == p.dk_id or abs(q.salary - p.salary) > PEER_SALARY:
+                continue
+            qr = mat[q.dk_id]
+            win = sum(1 for s in range(sims) if qr[s] > row[s]) / sims
+            if PEER_LO <= win <= PEER_HI:
+                peers.append({"name": q.name, "ours": round(100.0 * count.get(q.dk_id, 0) / n),
+                              "field": round(q.ownership), "beats": round(100 * win)})
+        peers.sort(key=lambda r: -r["field"])
+        out.append({"name": p.name, "salary": p.salary,
+                    "ours": round(100.0 * count.get(p.dk_id, 0) / n), "field": round(p.ownership),
+                    "over": round(d),
+                    "floorKeeps": round(100 * (sum(floor) / len(floor)) / whole) if floor else None,
+                    "ceilingAdds": round(100 * ((sum(ceil) / len(ceil)) / whole - 1)) if ceil else None,
+                    "peers": peers[:4]})
+    return out
 
 
 # ---------------- exposure ----------------
@@ -730,8 +816,13 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
     o = options or {}
     notes = []
 
-    def say(kind, text):
-        notes.append({"type": kind, "text": text})
+    # Every message is kept (the page's "details"), but the info section shows
+    # them three ways (Oct 23, the user's call — "too much info"): a confirmation
+    # is tagged "check" and collapses into one ✓ line by its short label; any
+    # "warn" is a problem and goes in one red line; "hide" is detail only.
+    # Untagged info stays as its own line.
+    def say(kind, text, tag=None, label=None):
+        notes.append({"type": kind, "text": text, "tag": tag, "label": label})
 
     players, rep = read_projections(proj_text or "")
     if rep.get("error"):
@@ -755,7 +846,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                           ("linestar", linestar_text), ("etr", etr_text))
              if (t or "").strip()}
     say("info", f"Projections: {rep['players']} players. Columns — "
-                + ", ".join(f"{k} from “{v}”" for k, v in rep["matched"].items()))
+                + ", ".join(f"{k} from “{v}”" for k, v in rep["matched"].items()),
+        "check", f"Stokastic projections ({rep['players']} players)")
     if rep.get("loose"):
         say("warn", "Columns matched by GUESS, not exact name — check these: "
                     + ", ".join(f"{k} <- “{h}”" for k, h in rep["loose"]))
@@ -788,7 +880,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
             fmt = "showdown" if len(teams) <= 2 else "classic"
             why = f"the projections cover {len(teams)} teams"
     say("info", f"Reading this as {'SHOWDOWN' if fmt == 'showdown' else 'CLASSIC'} "
-                f"— {why}.")
+                f"— {why}.", "check", fmt)
     if fmt == "classic" and dk and dk.get("entries") and tuple(dk["slots"]) != CLASSIC_SLOTS:
         say("warn", f"The DK file's slots are {', '.join(dk['slots'])}, not DK's NBA "
                     f"classic {', '.join(CLASSIC_SLOTS)}. Is this the right export?")
@@ -800,7 +892,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                              f"Download the entries file again — the one with the "
                              f"player list to the right of the entries.", "notes": notes}
         hit, miss, no_cpt = _attach_dk(players, dk)
-        say("good", f"DK entries: {len(dk['entries'])} entries, {hit} player IDs matched.")
+        say("good", f"DK entries: {len(dk['entries'])} entries, {hit} player IDs matched.",
+            "check", f"DK entries ({len(dk['entries'])}, {hit} player IDs matched)")
         if miss:
             live_miss = [n for n in miss if next((p for p in players if p.name == n)).proj > 0]
             if live_miss:
@@ -858,7 +951,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                 far = sum(1 for a, b in both if abs(a - b) >= 6)
                 msg += (f" The two agree at r = {cov / (va * vb or 1):.2f}; "
                         f"{far} player(s) differ by 6+ points.")
-            say("info", msg)
+            say("info", msg, "check", "LineStar (logged only)")
             if zeroed:
                 # The one thing in the file worth saying before lock. Advisory:
                 # the removal box is yours to use, the tool never removes anyone.
@@ -882,7 +975,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                     p.etr_proj, p.etr_own = rec["proj"], rec["own"]
                     got += 1
             say("info", f"ETR: projection and ownership for {got} players logged "
-                        f"beside Stokastic's. Not used in the build.")
+                        f"beside Stokastic's. Not used in the build.", "check",
+                "ETR (logged only)")
 
     # Pool and cores. Marked before removal, so a removed core is a known name.
     pool_names = read_sharp(o.get("pool") or "")
@@ -899,7 +993,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                     f"and were ignored: " + ", ".join(missed[:12]))
     if pool_names or core_names:
         say("info", f"Sharp's sheet: {sum(1 for p in players if p.core)} cores, "
-                    f"{sum(1 for p in players if p.in_pool)} in pool.")
+                    f"{sum(1 for p in players if p.in_pool)} in pool.", "hide")
 
     # Late scratches — the WNBA removal.
     removed, rem_missing = apply_removals(players, read_sharp(o.get("remove") or ""))
@@ -924,7 +1018,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
             field, bad_rows = _field_lineups(raw, fmt)
             say("good", f"Stokastic lineups: {len(field):,} of {frep['rows']:,} read as "
                         f"the opponent field (roster columns: "
-                        f"{', '.join(frep.get('roster_columns') or [])}).")
+                        f"{', '.join(frep.get('roster_columns') or [])}).", "check",
+                f"Stokastic lineups ({len(field):,})")
             if frep.get("unresolved_rosters"):
                 say("warn", f"{frep['unresolved_rosters']:,} of their lineups hold a player "
                             f"the projections do not list, so they were skipped.")
@@ -937,12 +1032,14 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
         ok_own = 700 <= tot_own <= 900
         say("good" if ok_own else "warn",
             f"Ownership: {tot_own:.0f}% across the slate — expected about 800 for "
-            f"eight roster slots." + ("" if ok_own else " Check which column was read."))
+            f"eight roster slots." + ("" if ok_own else " Check which column was read."),
+            "check" if ok_own else None, f"ownership {tot_own:.0f}%")
     else:
         cpt_tot = sum(p.cpt_own for p in live)
         say("info", f"Ownership: {tot_own:.0f}% UTIL + {cpt_tot:.0f}% captain. Expected "
                     f"about 500 + 100; NBA showdown's Stokastic columns are not yet "
-                    f"confirmed from a real file, so check this against it.")
+                    f"confirmed from a real file, so check this against it.", "check",
+            f"ownership {tot_own:.0f}% + {cpt_tot:.0f}% captain")
 
     sims = _i(o.get("sims"), 4000)
     seed = _i(o.get("seed"), 0)
@@ -974,12 +1071,13 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
     if bar:
         srt = sorted(bar)
         say("info", f"Score to beat (the field's 99th percentile, {sampled:,} sampled "
-                    f"opponents): {srt[len(srt) // 2]:.0f} median across simulations.")
+                    f"opponents): {srt[len(srt) // 2]:.0f} median across simulations.",
+            "hide")
         say("info", f"Stokastic's pool models {modelled:,.0f} opponent entries in "
-                    f"{len(idx):,} distinct lineups.")
+                    f"{len(idx):,} distinct lineups.", "hide")
         if expect:
             say("info", f"Scaling duplication ×{dupe_scale:.2f} for a {expect:,}-entry "
-                        f"field.")
+                        f"field.", "hide")
         else:
             say("warn", "No contest size given, so duplication is measured against the "
                         "field Stokastic models, which is smaller than a real contest. "
@@ -1008,7 +1106,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                         f"projected {ADD_MIN_PROJ:.0f}+)"
                         + (f" — ${ADD_CHEAP_MAX:,} or less: {show(cheap)}" if cheap else "")
                         + (f"; ${ADD_MID_MIN:,}-${ADD_MID_MAX:,}: {show(mid)}" if mid else "")
-                        + ". They are legal now, not forced; cap one at 0 to drop him.")
+                        + ". They are legal now, not forced; cap one at 0 to drop him.",
+                "hide")
         for p, k in studs:
             p.in_pool, p.added = True, "stud"
         adds["stud"] = [p.name for p, _k in studs]
@@ -1020,7 +1119,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                         f"projected ownership: "
                         + ", ".join(f"{p.name} (${p.salary:,}, {p.proj:.1f} proj, "
                                     f"{p.ownership:.1f}% owned) in {k}+" for p, k in studs)
-                        + ". Cap one at 0 to drop him; a minimum you type wins.")
+                        + ". Cap one at 0 to drop him; a minimum you type wins.", "hide")
     raw_off = o.get("maxOffPool")
     if not pool_names:
         off_pool = None
@@ -1044,7 +1143,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                         "as a shortlist.")
     if pool_names and off_pool is not None:
         say("info", "Pool is a build constraint: " + ("every player must come from it."
-                    if not off_pool else f"up to {off_pool} off-pool player(s) per lineup."))
+                    if not off_pool else f"up to {off_pool} off-pool player(s) per lineup."),
+            "hide")
     if pool_names and fmt == "showdown":
         gaps = _pool_gaps_note(players, mat, sims, min_proj)
         if gaps:
@@ -1088,7 +1188,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
             p.boost = True        # and weights construction so the floor is reachable
     if pfloors:
         say("info", "Minimum lineups in force — " + ", ".join(
-            f"{p.name} {pfloors[p.dk_id]}" for p in players if p.dk_id in pfloors))
+            f"{p.name} {pfloors[p.dk_id]}" for p in players if p.dk_id in pfloors), "hide")
     if fmt == "showdown":
         caps["captain_cap"] = _share(o.get("captainCap"), E.CAPTAIN_CAP)
     max_leftover = _i(o.get("maxLeftover"),
@@ -1144,9 +1244,9 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
         if n_mine:
             if floors:
                 say("info", f"Each of your {len(core_ids)} core(s) is guaranteed at least "
-                            f"{next(iter(floors.values()))} of {n_mine} lineups.")
+                            f"{next(iter(floors.values()))} of {n_mine} lineups.", "hide")
             chosen += E.select(cands, n_mine, core_floors=floors, **caps)
-            say("info", f"Built {len(chosen)} lineups from {len(cands):,} candidates.")
+            say("info", f"Built {len(chosen)} lineups from {len(cands):,} candidates.", "hide")
 
     if n_vendor:
         vfield = [lu for lu in field if _enterable(lu, fmt)]
@@ -1199,9 +1299,12 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                "for a roster spot.") if short else
             "Every minimum is met: " + ", ".join(
                 f"{p.name} in {sum(1 for lu in chosen if p.dk_id in lu.ids())}"
-                for p in players if p.dk_id in pfloors) + ".")
+                for p in players if p.dk_id in pfloors) + ".",
+            None if short else "check", "minimums met")
     coach = _coach(players, chosen, mat, sims, removed, pool_names, off_pool,
                    floors_total)
+    zeroes = _zeroes(players, chosen, adds, pfloors, pool_names)
+    overweights = _overweights(players, chosen, mat, bar, sims)
     if core_ids:
         want = max(1, -(-len(chosen) // (len(core_ids) + 1)))
         short = [f"{p.name} is in {sum(1 for lu in chosen if p.dk_id in lu.ids())} of "
@@ -1210,13 +1313,15 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                  and sum(1 for lu in chosen if p.dk_id in lu.ids()) < want]
         say("warn" if short else "good",
             ("A core could not be given its full share — " + "; ".join(short))
-            if short else f"Every core is in at least {want} of {len(chosen)} entries.")
+            if short else f"Every core is in at least {want} of {len(chosen)} entries.",
+            None if short else "check", "cores met")
     keys = [lu.key() for lu in chosen]
     if len(keys) != len(set(keys)):
         say("warn", f"{len(keys) - len(set(keys))} entries duplicate another exactly — do "
                     f"not upload until that is looked at.")
     else:
-        say("good", f"All {len(chosen)} entries are distinct rosters.")
+        say("good", f"All {len(chosen)} entries are distinct rosters.", "check",
+            f"{len(chosen)} distinct lineups")
     heavy = sorted(((sum(1 for lu in chosen if p.dk_id in lu.ids()), p.name)
                     for p in players if p.proj > 0), reverse=True)
     heavy = [(c, nm) for c, nm in heavy if c >= 0.7 * len(chosen)][:3]
@@ -1224,14 +1329,14 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
         say("info", "Heavy exposure: " + ", ".join(f"{nm} {c} of {len(chosen)}"
                                                    for c, nm in heavy)
                     + ". That is the build following the projections, not a bug — "
-                      "type a per-player cap if you want it reined in.")
+                      "type a per-player cap if you want it reined in.", "hide")
     if field:
         f_own = sorted(lu.own_sum for lu in field)
         mine_own = sum(lu.own_sum for lu in chosen) / len(chosen)
         pct = 100.0 * sum(1 for v in f_own if v < mine_own) / len(f_own)
         say("info", f"Ownership: your lineups average {mine_own:.0f}% against the field's "
                     f"{f_own[len(f_own) // 2]:.0f}% median — higher than {pct:.0f}% of "
-                    f"the field.")
+                    f"the field.", "hide")
 
     # ---- the upload file ----
     slots = list(dk["slots"]) if dk and dk.get("entries") else (
@@ -1271,7 +1376,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                 say("info", f"{len(contests)} contests in this DK file; each gets the top "
                             f"of the same ranked list: "
                             + "; ".join(f"{len(es)} entries in {nm or cid}"
-                                        for cid, nm, es in contests))
+                                        for cid, nm, es in contests),
+                    "check", f"{len(contests)} contests")
             for cid, nm, es in contests:
                 if len(es) > len(chosen):
                     say("warn", f"{nm or cid} has {len(es)} entries but only "
@@ -1291,12 +1397,17 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                                   "Entry ID,Contest Name,Contest ID,Entry Fee,"
                                   + ",".join(slots), fmt)
                 say("good", f"Upload file checked: {len(ents)} rows, every player ID "
-                            f"valid for its slot, no repeats, none over the cap.")
+                            f"valid for its slot, no repeats, none over the cap.", "check",
+                    "upload file valid")
                 meta["entry_ids"] = [e["entry_id"] for e in ents]
                 meta["contest_ids"] = [e["contest_id"] for e in ents]
     else:
         say("warn", "No DK entries file, so there is no uploadable CSV — that export is "
                     "the only source of your Entry IDs and DK's player IDs.")
+    # Logged so 10-15 slates can say whether a floor night costs what the
+    # simulation says it does (Range Of Outcomes Report 10-23, item 4).
+    meta["overweights"] = overweights
+    meta["zeroes"] = [z["name"] for z in zeroes]
     err = _log(log_lus, log_rosters, meta)
     if err:
         say("warn", err + " Grading reads that log, so this night will not be gradable.")
@@ -1310,7 +1421,31 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
     arms = {}
     for lu in chosen:
         arms[lu.source] = arms.get(lu.source, 0) + 1
+    used = {}
+    for lu in chosen:
+        for p in lu.players:
+            used[p.dk_id] = used.get(p.dk_id, 0) + 1
+    by_name = {p.name: p for p in players}
+    pct = lambda p: round(100.0 * used.get(p.dk_id, 0) / len(chosen))
+    info = {
+        "checks": [x["label"] for x in notes if x.get("tag") == "check"],
+        "problems": [x["text"].strip() for x in notes if x["type"] == "warn"],
+        "shown": [x for x in notes if x["type"] != "warn" and not x.get("tag")]
+                 + [x for x in coach if not x.get("tag")],
+        "zeroes": zeroes,
+        "overweights": overweights,
+        "adds": {k: [{"name": nm, "n": used.get(by_name[nm].dk_id, 0),
+                      "min": adds["studFloors"].get(nm)} for nm in adds[k] if nm in by_name]
+                 for k in ("cheap", "mid", "stud")},
+        "cores": [x for x in coach if x.get("tag") == "core"],
+        "coreGame": next((x["text"] for x in coach if x.get("tag") == "coregame"), None),
+        "mostUsed": [{"name": p.name, "n": used[p.dk_id], "pct": pct(p),
+                      "field": round(p.ownership)}
+                     for p in sorted((q for q in players if used.get(q.dk_id)),
+                                     key=lambda q: -used[q.dk_id])[:6]],
+    }
     return {
+        "info": info,
         "notes": notes, "coach": coach, "format": fmt, "teams": teams, "games": games,
         "summary": {
             "n": len(chosen), "arms": arms,

@@ -63,6 +63,18 @@ INDEX_HTML = r"""<!doctype html>
   .note.good{border-color:#2c6b4a;background:#14251d;color:#a8e0c4}
   .note.warn{border-color:#7a5a1e;background:#26200f;color:#e8cf9a}
   .note.info{color:#b9c4d2}
+  .note.bad{border-color:#8a3a3a;background:#2a1414;color:#f0b8b8}
+  .note .muted{color:var(--muted)}
+  .note .mk{font-weight:700;margin-right:6px}
+  .note.good .mk,.note .mk.ok{color:var(--good)}
+  .note.bad .mk{color:#f07070}
+  .note .mk.zero{color:var(--accent2)}
+  .note .mk.over{color:var(--warn)}
+  .note .lbl{display:inline-block;min-width:118px;font-size:11px;letter-spacing:.05em;
+    text-transform:uppercase;color:var(--muted);margin-right:6px}
+  .note ul.probs{margin:6px 0 0;padding-left:20px}
+  .alldetails{margin-top:16px}
+  .alldetails summary{cursor:pointer;color:var(--muted);font-size:13px;margin-bottom:8px}
   .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
     gap:10px;margin:14px 0}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
@@ -795,18 +807,83 @@ function exposureHtml(e, n, sd){
   return h;
 }
 
+// The info section (Oct 23): one line for "is everything right", then only
+// what you act on — who you have none of, where the set is far over the field
+// and what that bet costs on his floor night, the adds, the cores, the most
+// used. Every original message is still under "All build details".
+function infoHtml(d){
+  const f = d.info; let h = '';
+  const pl = (x, k) => '<b>'+esc(x.name)+'</b>' + (k ? ' <span class="muted">('+k+')</span>' : '');
+  if(f.problems.length){
+    h += '<div class="note bad"><span class="mk">✗</span><b>'+f.problems.length
+      + ' problem'+(f.problems.length === 1 ? '' : 's')+'.</b><ul class="probs">'
+      + f.problems.map(x => '<li>'+esc(x)+'</li>').join('') + '</ul></div>';
+  } else {
+    h += '<div class="note good"><span class="mk">✓</span><b>Everything checks out.</b> '
+      + '<span class="muted">'+f.checks.map(esc).join(' · ')+'</span></div>';
+  }
+  if(f.zeroes.length){
+    const src = {pool:'', core:'core', cheap:'added', mid:'added', stud:'added stud', minimum:'minimum'};
+    h += '<div class="note info"><span class="mk zero">●</span><b>In 0 lineups</b> '
+      + '<span class="muted">(your pool and the added players)</span>: '
+      + f.zeroes.map(z => '<b>'+esc(z.name)+'</b> <span class="muted">($'
+          + z.salary.toLocaleString()+', '+z.proj+' proj, '+Math.round(z.own)+'% owned'
+          + (src[z.from] ? ', '+src[z.from] : '')+')</span>').join(' · ')
+      + '. <span class="muted">Want any of them? Type a minimum and rebuild.</span></div>';
+  }
+  f.overweights.forEach(o => {
+    h += '<div class="note info"><span class="mk over">▲</span><b>'+esc(o.name)+'</b> '
+      + o.ours+'% vs field '+o.field+'% (<b>+'+o.over+'</b>). '
+      + (o.floorKeeps != null ? 'If he hits his floor, the set keeps <b>'+o.floorKeeps
+          + '%</b> of its chance at the top 1%; his ceiling adds '+o.ceilingAdds+'%. ' : '')
+      + (o.peers.length ? '<span class="muted">Same-range peers: '
+          + o.peers.map(q => esc(q.name)+' '+q.ours+'% (field '+q.field+'%)').join(' · ')
+          + '</span>' : '<span class="muted">No same-range peer within $600.</span>')
+      + '</div>';
+  });
+  const a = f.adds, addTxt = [];
+  if(a.cheap.length) addTxt.push('<b>Cheap:</b> '+a.cheap.map(x => esc(x.name)+' (in '+x.n+')').join(' · '));
+  if(a.mid.length) addTxt.push('<b>Mid:</b> '+a.mid.map(x => esc(x.name)+' (in '+x.n+')').join(' · '));
+  if(a.stud.length) addTxt.push('<b>Studs:</b> '+a.stud.map(x => esc(x.name)+' (in '+x.n
+                                 + (x.min ? ', min '+x.min : '')+')').join(' · '));
+  if(addTxt.length) h += '<div class="note info"><span class="lbl">Added to your pool</span>'
+    + addTxt.join(' &nbsp; ') + '</div>';
+  if(f.cores.length){
+    h += '<div class="note info"><span class="lbl">Cores</span>'
+      + f.cores.map(c => esc(c.name)+' in '+c.n+' '
+          + (c.why ? '<span class="mk over">⚠</span> <span class="muted">'+esc(c.why)+'</span>'
+                   : '<span class="mk ok">✓</span>')).join(' · ')
+      + (f.coreGame ? '<br><span class="muted">'+esc(f.coreGame)+'</span>' : '') + '</div>';
+  }
+  if(f.mostUsed.length){
+    h += '<div class="note info"><span class="lbl">Most used</span>'
+      + f.mostUsed.map(m => esc(m.name)+' '+m.pct+'% <span class="muted">(field '+m.field+'%)</span>').join(' · ')
+      + '</div>';
+  }
+  f.shown.forEach(n => { h += '<div class="note '+n.type+'">'+esc(n.text)+'</div>'; });
+  return h;
+}
+
+function detailsHtml(d){
+  const all = (d.notes||[]).concat(d.coach||[]);
+  if(!all.length) return '';
+  return '<details class="alldetails"><summary>All build details ('+all.length+')</summary>'
+    + all.map(n => '<div class="note '+n.type+'">'+esc(n.text)+'</div>').join('')
+    + '</details>';
+}
+
 function render(d){
   let h = '';
-  (d.notes||[]).forEach(n => {
-    h += '<div class="note '+n.type+'">'+esc(n.text)+'</div>';
-  });
-  if(d.error){
-    h += '<div class="note warn"><b>'+esc(d.error)+'</b></div>';
-    $('#out').innerHTML = h; return;
-  }
-  if(d.coach && d.coach.length){
-    h += '<div class="exptitle" style="margin-top:14px">The read on this build</div>';
-    d.coach.forEach(n => { h += '<div class="note '+n.type+'">'+esc(n.text)+'</div>'; });
+  if(d.error || !d.info){
+    (d.notes||[]).forEach(n => {
+      h += '<div class="note '+n.type+'">'+esc(n.text)+'</div>';
+    });
+    if(d.error){
+      h += '<div class="note warn"><b>'+esc(d.error)+'</b></div>';
+      $('#out').innerHTML = h; return;
+    }
+  } else {
+    h += infoHtml(d);
   }
   const s = d.summary;
   if(d.format) setFmt(d.format, true);
@@ -855,6 +932,7 @@ function render(d){
       + '<td class="num">'+l.dupes.toFixed(1)+'</td></tr>';
   });
   h += '</tbody></table></div>';
+  if(d.info) h += detailsHtml(d);
   $('#out').innerHTML = h;
   if(d.dkCsv){
     $('#dl').style.display = '';

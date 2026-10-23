@@ -4,6 +4,24 @@ Newest first. One entry per change, in plain words: what changed and why.
 
 ## Oct 23, 2026
 
+**New info section after a build**
+- **One check line.** Everything that confirms the files and the build is right collapses into one green ✓ line. If anything is wrong, it turns red and lists only what failed.
+- **In 0 lineups:** everyone from your pool, cores and added players who's in no lineup, so you can give them a minimum before downloading.
+- **Overweights:** every player 15+ points over the field, with:
+  - how much of the set's chance at the top 1% survives his floor night, and what his ceiling night adds;
+  - his same-range peers (within $600, a 40–60% coin flip to outscore him), with our exposure and the field's.
+  
+  It shows the bet; it doesn't change the build.
+- **Short lines** for the added players, the cores, and the most-used players against the field.
+- **Every original message** is still under "All build details" at the bottom.
+- The overweights and the zero list are logged each night, so 10–15 slates can say whether floor nights cost what the simulation says.
+
+**Cheap tier gets a real range**
+- Anyone projected under 10 now gets a spread of at least 6 points; Stokastic's file gives them 0.3–3.
+- Why, from `NBA Range Of Outcomes Report 10-23.md`: across Oct 20–22, 54% of these players beat the tool's own 90th percentile, when it should be 10%. WNBA showed the same shape.
+- Players projected 10+ were measured as right, so they're unchanged.
+- **Not built, per the report:** no limit on going over the field and no peer spreading. On 3 slates a limit was free on the 2-game night but cost about $45 on the 11-game night.
+
 **Late swap: see each lineup**
 - Each row of the late-swap table has a **lineup** button, like WNBA's. It opens what you entered next to the proposed lineup, slot by slot, with the changed slots lit.
 - Marks: 🔒 locked, ★ core, ◇ off your pool. Each player shows salary, projection and ownership.
@@ -69,10 +87,7 @@ Newest first. One entry per change, in plain words: what changed and why.
 
 ## Wanted, not built yet
 
-- **Trim the build's info section** (asked Oct 22, for Oct 23).
-  - It's too much to read.
-  - Lead with one short list: every player in your pool and the added pool (cheap, mid and stud adds) who is in **zero** lineups. Then you can decide whether to give anyone a few lineups with the minimum box before downloading.
-  - Keep the rest, but shorter, and below that list.
+- **Over-the-field limit, revisit after 10–15 slates** of logged overweights. Small slates only, if it ever pays.
 
 ## Tonight's lineups (Oct 21)
 
