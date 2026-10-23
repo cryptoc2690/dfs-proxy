@@ -363,6 +363,14 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
         soon = sum(1 for p in roster if normalize_name(p.name) in early)
         return base - SWAP_EARLY_PENALTY * soon
 
+    def view(roster, locks):
+        """Slot by slot, for the page's before / after drawdown (WNBA's)."""
+        return [{"slot": sl, "name": p.name, "team": p.team, "salary": p.salary,
+                 "proj": round(p.proj, 1), "own": round(p.ownership, 1),
+                 "locked": bool(lk), "core": bool(p.core),
+                 "offPool": bool(pool_names or core_names) and not p.in_pool}
+                for sl, p, lk in zip(slots, roster, locks)]
+
     rng = random.Random(int(o.get("seed") or 0))
     results, lines = [], ["Entry ID,Contest Name,Contest ID,Entry Fee," + ",".join(slots)]
     stale, changed = [], 0
@@ -597,6 +605,8 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
                        "newsRoster": [p.name for p in news_pick] if news_pick else None},
             "rowBefore": _dk_line(e, e["cells"]),
             "rowAfter": _dk_line(e, out_cells),
+            "before": view(lineup, is_locked),
+            "after": view(slotted, is_locked),
         })
         results.append(rec)
         lines.append(rec["rowAfter"])
@@ -674,7 +684,7 @@ def _log_swap(out, players, baseline, games, options):
                "games": games, "mode": out["mode"], "bars": out["bars"],
                "hadBaseline": bool(baseline), "news": out["news"],
                "projectionsMoved": moved,
-               "swaps": [{k: v for k, v in s.items() if k not in ("rowBefore", "rowAfter")}
+               "swaps": [{k: v for k, v in s.items() if k not in ("rowBefore", "rowAfter", "before", "after")}
                          for s in out["swaps"]]}
         os.makedirs(os.path.dirname(SWAP_LOG_PATH), exist_ok=True)
         with open(SWAP_LOG_PATH, "a", encoding="utf-8") as fh:

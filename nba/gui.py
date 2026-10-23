@@ -104,6 +104,19 @@ INDEX_HTML = r"""<!doctype html>
   #welcome{color:var(--muted);font-size:14px;line-height:1.7;max-width:760px}
   .fslot.bad b{color:#e08080}
   .fslot.bad .fstate{color:#e08080}
+  .swaptoggle{background:none;border:1px solid var(--line);color:var(--muted);
+    border-radius:6px;font:inherit;font-size:11px;padding:2px 8px;cursor:pointer}
+  .swaptoggle:hover{color:var(--text);border-color:var(--muted)}
+  .cmp{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:8px 4px;max-width:1000px}
+  .cmp h5{margin:0 0 5px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+  .cmp table{width:100%;border-collapse:collapse;font-size:12px}
+  .cmp td{padding:3px 4px;border-bottom:1px solid var(--line);white-space:nowrap}
+  .cmp td.slot{color:var(--muted);width:40px;font-size:10px}
+  .cmp td.num{text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+  .cmp tr.diff td{background:rgba(255,138,60,.12)}
+  .cmp tr.diff td.slot{color:var(--accent2)}
+  .cmp .lockmark,.cmp .tag{color:var(--muted);font-size:10px}
+  tr.cmprow > td{background:var(--panel2)}
   .pastewarn{color:#e08080;font-weight:600}
 
   /* ---- type-ahead picker ---- */
@@ -891,7 +904,7 @@ function renderSwap(r){
   h += '<div class="picknote" style="margin:6px 0">Untick any swap you do not want; '
      + 'the download keeps that entry exactly as entered. "Now" is the live score, '
      + '"left" is player-minutes still on the clock, "final" is the projected finish.</div>';
-  h += '<div class="tblwrap"><table><thead><tr><th>use</th><th>entry</th><th>contest</th>'
+  h += '<div class="tblwrap"><table><thead><tr><th>use</th><th></th><th>entry</th><th>contest</th>'
      + '<th class="num">now</th><th class="num">left</th><th class="num">final</th>'
      + '<th class="num">pct</th><th>change</th><th class="num">gain</th><th>why</th>'
      + '</tr></thead><tbody>';
@@ -900,19 +913,53 @@ function renderSwap(r){
     const why = s.error ? s.error : (sw ? (s.forced ? 'news: ' : 'no news, cleared the bar')
               + (s.news||[]).join('; ') : (s.hold || ''));
     h += '<tr><td>' + (sw ? '<input type="checkbox" class="usesw" data-i="'+i+'" checked>' : '')
+      + '</td><td>'+(s.before ? '<button class="swaptoggle" data-i="'+i+'">lineup</button>' : '')
       + '</td><td>'+esc(s.entryId)+'</td><td>'+esc((s.contest||'').slice(0,26))+'</td>'
       + '<td class="num">'+(s.banked==null?'—':s.banked)+'</td>'
       + '<td class="num">'+(s.timeLeft==null?'—':s.timeLeft)+'</td>'
       + '<td class="num">'+(s.projFinal==null?'—':s.projFinal)+'</td>'
       + '<td class="num">'+(s.pct==null?'—':s.pct.toFixed(1)+'%')+'</td>'
-      + '<td>'+(sw ? '<span class="down">OUT</span> '+esc(s.out.join(', '))
+      + '<td style="white-space:normal;min-width:220px;max-width:360px">'+(sw ? '<span class="down">OUT</span> '+esc(s.out.join(', '))
                     +' &rarr; <span class="up">IN</span> '+esc(s['in'].join(', ')) : 'hold')+'</td>'
       + '<td class="num">'+(s.gain==null?'':'+'+s.gain)+'</td>'
-      + '<td style="white-space:normal;max-width:320px">'+esc(why)+'</td></tr>';
+      + '<td style="white-space:normal;max-width:320px">'+esc(why)+'</td></tr>'
+      + '<tr class="cmprow" id="cw'+i+'" style="display:none"><td colspan="11"></td></tr>';
   });
   h += '</tbody></table></div>';
   $('#out').innerHTML = h;
+  document.querySelectorAll('#out .swaptoggle').forEach(b =>
+    b.addEventListener('click', () => toggleCmp(+b.dataset.i, b)));
   $('#lsdl').style.display = r.dkCsv ? '' : 'none';
+}
+
+// WNBA's drawdown: what you entered beside what the swap would enter, the
+// changed slots lit. 🔒 locked, ★ core, ◇ off your pool.
+function cmpTable(title, roster, other){
+  const names = new Set((other||[]).map(p => p.name));
+  const rows = roster.map(p => '<tr'+(names.has(p.name) ? '' : ' class="diff"')+'>'
+    + '<td class="slot">'+esc(p.slot)+'</td>'
+    + '<td>'+esc(p.name)+(p.locked ? ' <span class="lockmark">🔒</span>' : '')
+    + (p.core ? ' <span class="tag">★</span>' : '')
+    + (p.offPool ? ' <span class="tag">◇</span>' : '')+'</td>'
+    + '<td class="num">'+esc(p.team)+'</td>'
+    + '<td class="num">$'+p.salary.toLocaleString()+'</td>'
+    + '<td class="num">'+p.proj+' pr</td>'
+    + '<td class="num">'+p.own+'%</td></tr>').join('');
+  const sal = roster.reduce((a,p) => a+p.salary, 0);
+  const pr = roster.reduce((a,p) => a+p.proj, 0);
+  return '<div><h5>'+title+'</h5><table><tbody>'+rows+'</tbody><tfoot><tr>'
+    + '<td class="slot"></td><td>total</td><td class="num"></td>'
+    + '<td class="num">$'+sal.toLocaleString()+'</td>'
+    + '<td class="num">'+pr.toFixed(1)+'</td><td class="num"></td></tr></tfoot></table></div>';
+}
+function toggleCmp(i, btn){
+  const row = $('#cw'+i), s = swapResult.swaps[i];
+  if(row.style.display !== 'none'){ row.style.display = 'none'; btn.textContent = 'lineup'; return; }
+  const cell = row.firstElementChild;
+  if(!cell.innerHTML)
+    cell.innerHTML = '<div class="cmp">' + cmpTable('You entered', s.before, s.after)
+      + cmpTable(s.keep ? 'Unchanged' : 'Proposed', s.after, s.before) + '</div>';
+  row.style.display = ''; btn.textContent = 'hide';
 }
 
 $('#lsdl').addEventListener('click', () => {

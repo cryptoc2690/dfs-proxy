@@ -2,6 +2,13 @@
 
 Newest first. One entry per change, in plain words: what changed and why.
 
+## Oct 23, 2026
+
+**Late swap: see each lineup**
+- Each row of the late-swap table has a **lineup** button, like WNBA's. It opens what you entered next to the proposed lineup, slot by slot, with the changed slots lit.
+- Marks: 🔒 locked, ★ core, ◇ off your pool. Each player shows salary, projection and ownership.
+- The swap table's change column now wraps, so the table fits the page.
+
 ## Oct 22, 2026
 
 **Salary left counts in the duplicate estimate** (classic)
