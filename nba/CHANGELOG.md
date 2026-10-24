@@ -87,6 +87,11 @@ Newest first. One entry per change, in plain words: what changed and why.
 
 ## Wanted, not built yet
 
+- **Teams that fail together (asked Oct 24).**
+  - Oct 23 main: CHA was in 100% of our lineups and IND in 80%, against the field's 79% and 64%. Both got blown out, so the set was dead.
+  - The simulator draws every player independently (`GAME_SD = 0`, carried over from WNBA), so it can't see that one team's bad night kills every lineup holding that team.
+  - Open test: `NBA Team Blowout Prompt 10-24.md`. Then a team line in the info section, like the player overweights.
+
 - **Late swap bugs found Oct 23 (night slate, cores only, no pool):**
   1. **Cores-only is treated as the whole pool.** With no pool typed, every non-core player counted as "off your pool". Each swap then needed +8 to +17 per incoming player (+24 / +32 on screen), so nothing moved. Fix: the off-pool bar should only apply when a real pool was typed, the same way the build treats it.
   2. **The bench rule floods the news.** Any held bench player counts as "news" if a cheaper starter projects 1.5× him: "Al Horford — on the bench — Gregory Jackson is starting… 27 against 18". That fired on 27 players. It isn't news when the build already knew he came off the bench. Fix: only count a player as news if something changed since the build (ruled out, projection moved, starting status flipped), and use the bench rule only when there's no logged build to compare against.
