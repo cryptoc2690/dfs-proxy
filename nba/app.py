@@ -978,16 +978,29 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                         f"beside Stokastic's. Not used in the build.", "check",
                 "ETR (logged only)")
 
+    # Neutral by default on classic (user's call, Oct 24): see engine.neutral_plan.
+    # The sharp's "cores" are the plays he expects the field on in cash games, not
+    # build-arounds, so in neutral mode they are ordinary pool players — no floor,
+    # no construction weight. With no pool typed the whole slate is the pool and
+    # they carry nothing.
+    plan = (E.neutral_plan(len(games)) if fmt == "classic"
+            and str(o.get("neutral", "on")) != "off" else None)
+
     # Pool and cores. Marked before removal, so a removed core is a known name.
     pool_names = read_sharp(o.get("pool") or "")
     core_names = read_sharp(o.get("cores") or "")
+    typed = pool_names | core_names
+    if plan:
+        if pool_names:
+            pool_names |= core_names
+        core_names = set()
     known = {normalize_name(p.name) for p in players}
     for p in players:
         n = normalize_name(p.name)
         p.core = n in core_names
         p.in_pool = p.core or (n in pool_names)
         p._sheet = bool(pool_names)
-    missed = sorted((pool_names | core_names) - known)
+    missed = sorted(typed - known)
     if missed:
         say("warn", f"{len(missed)} name(s) on your sheet match no player on this slate "
                     f"and were ignored: " + ", ".join(missed[:12]))
@@ -1194,7 +1207,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
     max_leftover = _i(o.get("maxLeftover"),
                       E.SD_MAX_LEFTOVER if fmt == "showdown" else C.MAX_LEFTOVER)
 
-    n_mine = n if split is None else max(0, min(split, n))
+    n_mine = n if split is None or (plan and not plan["vendor"]) else max(0, min(split, n))
     n_vendor = n - n_mine
     chosen, cands = [], []
     core_ids = [p.dk_id for p in players if p.core and p.proj > 0]
@@ -1221,6 +1234,10 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
             return E.build_showdown(players, count, rng=rng, max_off_pool=off,
                                     cpt_pool=cpt_pool or None, max_leftover=leftover,
                                     min_proj=min_proj)
+        if plan and plan["quota"] and plan["railShare"]:
+            return C.build_candidates_quota(players, count, plan["railShare"], rng=rng,
+                                            max_off_pool=off, min_proj=min_proj,
+                                            max_leftover=leftover)
         return C.build_candidates(players, count, rng=rng, max_off_pool=off,
                                   min_proj=min_proj, max_leftover=leftover)
 
@@ -1245,7 +1262,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
             if floors:
                 say("info", f"Each of your {len(core_ids)} core(s) is guaranteed at least "
                             f"{next(iter(floors.values()))} of {n_mine} lineups.", "hide")
-            chosen += E.select(cands, n_mine, core_floors=floors, **caps)
+            chosen += E.select(cands, n_mine, core_floors=floors, neutral=plan, **caps)
             say("info", f"Built {len(chosen)} lineups from {len(cands):,} candidates.", "hide")
 
     if n_vendor:
@@ -1257,7 +1274,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                       if sum(1 for p in lu.players if not p.in_pool and not p.core) <= off_pool]
         if vfield:
             chosen += E.vendor_arm(vfield, n_vendor, dupe_scale=dupe_scale,
-                                   core_floors=floors_total, prior=chosen, **caps)
+                                   core_floors=floors_total, prior=chosen, neutral=plan,
+                                   **caps)
         else:
             say("warn", "No usable vendor lineups for their half of the split "
                         + ("(no lineups file)" if not field else
@@ -1265,9 +1283,33 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                         + f", so all {n} come from our own builder.")
     if len(chosen) < n and cands:
         need = n - len(chosen)
-        chosen += E.select(cands, need, core_floors=floors_total, prior=chosen, **caps)
+        chosen += E.select(cands, need, core_floors=floors_total, prior=chosen,
+                           neutral=plan, **caps)
     if not chosen:
         return {"error": "No lineups produced.", "notes": notes}
+    if plan and chosen:
+        tct = {}
+        for lu in chosen:
+            for t in {p.team for p in lu.players}:
+                tct[t] = tct.get(t, 0) + 1
+        top_t, top_c = max(tct.items(), key=lambda kv: kv[1])
+        lim = ""
+        if plan["railShare"]:
+            lim = f" · team limit {round(100 * plan['railShare'])}%"
+            if top_c / len(chosen) > plan["railShare"] + 0.005:
+                # Stokastic's half is fixed rosters, and on big slates our own
+                # candidates run short of room: say how close the set got.
+                lim += f" (reached {top_t} {round(100 * top_c / len(chosen))}%)"
+        label = (f"neutral: {plan['games']} games · main game rotated, sides 50/50{lim} · "
+                 + ("both arms" if n_vendor else "ours only")
+                 + (" · cores in pool" if read_sharp(o.get("cores") or "")
+                    and read_sharp(o.get("pool") or "") else ""))
+        say("info", f"Built neutral — {label}. Most-held team: {top_t} in {top_c} of "
+                    f"{len(chosen)}. {plan['short']} lineup(s) could not fit the rotation "
+                    f"and limit and were filled by score.", "check", label)
+        if plan["short"] > len(chosen) / 3:
+            say("warn", f"Neutral: {plan['short']} of {len(chosen)} lineups could not fit the "
+                        f"game rotation and team limit and were filled by score instead.")
     if len(chosen) < n:
         say("warn", f"Only {len(chosen)} distinct lineups for {n} entries — the rest "
                     f"will have no lineup and score zero.")
@@ -1347,7 +1389,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                 "ownLean": _f(o.get("ownLean"), E.OWN_LEAN),
                 "playerCap": caps["player_cap"], "captainCap": caps.get("captain_cap"),
                 "minProj": min_proj, "maxLeftover": max_leftover,
-                "maxOffPool": off_pool, "cores": sorted(core_names),
+                "maxOffPool": off_pool, "cores": sorted(core_names), "neutral": plan,
                 "pool": sorted(pool_names), "capPlayers": o.get("capPlayers") or "",
                 "poolAdds": adds,
                 "floorPlayers": {p.name: pfloors[p.dk_id] for p in players
@@ -1805,6 +1847,9 @@ def main(argv=None):
     ap.add_argument("--etr", help="ETR projections export — logged only")
     ap.add_argument("--no-pool-adds", action="store_true",
                     help="do not round out the pool automatically")
+    ap.add_argument("--no-neutral", action="store_true",
+                    help="the old build: no game rotation, sides or team limit; "
+                         "cores keep their floor")
     ap.add_argument("--n", type=int, default=150)
     ap.add_argument("--split", type=int, default=None,
                     help="entries from OUR builder; the rest come from Stokastic's "
@@ -1883,6 +1928,7 @@ def main(argv=None):
         "pool": _read(a.pool), "cores": _read(a.cores), "remove": a.remove or "",
         "capPlayers": a.caps or "", "floorPlayers": a.floors or "",
         "poolAdds": "off" if a.no_pool_adds else "on",
+        "neutral": "off" if a.no_neutral else "on",
         "fileNames": {k: os.path.basename(v) for k, v in (
             ("proj", a.proj), ("field", a.field), ("dk", a.dk),
             ("linestar", a.linestar), ("etr", a.etr)) if v},

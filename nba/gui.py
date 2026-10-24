@@ -185,7 +185,15 @@ INDEX_HTML = r"""<!doctype html>
       <label>How many are OURS (rest come from their pool)</label>
       <input id="split" type="number" value="75" min="0" max="150">
       <div class="hint">Splitting inside one contest is the only way to compare
-        the two without slate luck. Both arms are tagged in the log.</div>
+        the two without slate luck. Both arms are tagged in the log. In neutral
+        mode on a 2–4 game slate every lineup is ours.</div>
+      <label style="display:flex;gap:8px;align-items:center;margin-top:12px">
+        <input type="checkbox" id="neutral" checked style="width:auto">
+        Neutral build</label>
+      <div class="hint">Like NFL showdown: each lineup's main game rotated across the
+        slate, the two teams in it held 50/50, and no team in too many lineups
+        (sized by slate). Field ownership never steers it. Cores just join the pool.
+        Untick for the old build.</div>
     </div>
     <div>
       <label>Ownership lean — <span id="lv">+0.00</span>
@@ -251,7 +259,8 @@ INDEX_HTML = r"""<!doctype html>
       <div class="chips" id="corechips"></div>
       <div class="picknote">Type a few letters, click or press Enter — or paste a
         comma-separated list. Cores count as in-pool automatically. Click a chip
-        to remove it.</div>
+        to remove it. In neutral mode a core is just a pool player — no
+        guaranteed share.</div>
       <label>Late scratch — remove players</label>
       <textarea id="remove" rows="2" spellcheck="false"
                 placeholder="Stephon Castle"></textarea>
@@ -674,6 +683,7 @@ $('#go').addEventListener('click', async () => {
           remove: $('#remove').value,
           floorPlayers: $('#floorplayers').value,
           poolAdds: $('#pooladds').checked ? 'on' : 'off',
+          neutral: $('#neutral').checked ? 'on' : 'off',
           fileNames: fileNames,
           fieldCap: num('#cap',0), fillPct: num('#fillpct',100),
           maxOffPool: $('#offpool').value,
@@ -960,7 +970,8 @@ $('#ls').addEventListener('click', async () => {
     const res = await fetch('/api/lateswap', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({proj: files.proj, dk: files.dk, standings: files.standings,
-        options: {pool: [...sel.pool].join('\n'), cores: [...sel.core].join('\n'),
+        options: {neutral: $('#neutral').checked ? 'on' : 'off',
+                  pool: [...sel.pool].join('\n'), cores: [...sel.core].join('\n'),
                   remove: $('#remove').value}})
     });
     swapResult = await res.json();

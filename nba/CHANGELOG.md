@@ -2,6 +2,29 @@
 
 Newest first. One entry per change, in plain words: what changed and why.
 
+## Oct 24, 2026
+
+**Neutral build, on by default**
+- Built like NFL showdown: field ownership is shown, but it never steers the build.
+- **Main game rotated:** each lineup's main game is rotated evenly across the slate.
+- **Sides 50/50:** inside that game, the two teams are held even.
+- **Team limit, by slate size:** none at 2 games; 1.25× the even share at 3–7 games (63% at 6); a loose 1.5× at 8+ (47% at 11).
+- **Stokastic's half:** dropped at 2–4 games; kept at 5+ and held to the same rules.
+- **Cores are just pool players** (your call): they're the sharp's cash-game reads, not build-arounds. With no pool, they carry nothing. Late swap treats them the same way.
+- **8+ games:** a quota-aware generator, so the team limit can actually be reached.
+- **One line** in the check row says what was applied, and how close the set got to the limit.
+- **Untick "Neutral build"** (`--no-neutral`) for the old build.
+- From `NBA Neutral Build Report 10-24.md`, against the old build on the same seeds:
+  - 2 games: best rank #327 → #137.
+  - 3 games: #723 → #179, top 10% 9 → 22.
+  - 6 games: top 1% 0 → 6, top 10% 6 → 25.
+  - 11 games: limits cost money; that's why the 8+ limit is loose.
+- Rebuilt here:
+  - Oct 23: CHA 100% → 65%, IND 80% → 65%, Schroder 76% → out of the top four.
+  - Oct 21: LAC 90% → 58%, Jerome 79% → 55%.
+  
+  One slate per group on 5–7 and 8+, so grade the next few.
+
 ## Oct 23, 2026
 
 **New info section after a build**
@@ -96,7 +119,6 @@ Newest first. One entry per change, in plain words: what changed and why.
   1. **Cores-only is treated as the whole pool.** With no pool typed, every non-core player counted as "off your pool". Each swap then needed +8 to +17 per incoming player (+24 / +32 on screen), so nothing moved. Fix: the off-pool bar should only apply when a real pool was typed, the same way the build treats it.
   2. **The bench rule floods the news.** Any held bench player counts as "news" if a cheaper starter projects 1.5× him: "Al Horford — on the bench — Gregory Jackson is starting… 27 against 18". That fired on 27 players. It isn't news when the build already knew he came off the bench. Fix: only count a player as news if something changed since the build (ruled out, projection moved, starting status flipped), and use the bench rule only when there's no logged build to compare against.
 
-- **Over-the-field limit, revisit after 10–15 slates** of logged overweights. Small slates only, if it ever pays.
 
 ## Tonight's lineups (Oct 21)
 

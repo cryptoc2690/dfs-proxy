@@ -270,6 +270,12 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
             say("info", f"Pool and cores taken from your build at "
                         f"{(base_row.get('ts') or '')[11:16]}: {len(pool_names | core_names)} "
                         f"names, {len(core_names)} cores.")
+    # Neutral by default, as the build: a core is a pool player (when there is a
+    # pool) and is opened for swaps like anyone else.
+    if str(o.get("neutral", "on")) != "off":
+        if pool_names:
+            pool_names |= core_names
+        core_names = set()
     pool_names |= core_names
     for p in players:
         n = normalize_name(p.name)

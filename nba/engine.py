@@ -312,8 +312,165 @@ PLAYER_CAP = 1.0
 CAPTAIN_CAP = 1.0          # showdown; NFL's 0.28 rail never bound there either
 
 
+# --- neutral (classic) ---------------------------------------------------
+# NFL showdown's SIDE_CAP idea, carried to NBA classic (user's call, Oct 24:
+# "I am not the field" — field info is shown, never steers). Two levels:
+# each lineup's MAIN game (its biggest block) is rotated evenly across the
+# slate's games, and inside that game the two sides are held 50/50 (running
+# form, like SIDE_CAP; an even split counts for neither side). On 3+ games a
+# team RAIL caps how many entries any team sits in, as a multiple of the even
+# share: the share of lineups a team holds when eight slots spread evenly over
+# G games, 1 - (1 - 1/2G)^8. Typed cores become plain pool players.
+#
+# Sized by slate from NBA Neutral Build Report 10-24 (5 slates, ~2,500 rebuilds,
+# same seeds against the old build):
+#   2 games  rotation + sides, no rail, no vendor arm  best rank #327 -> #137
+#   3-4      + rail 1.25x, no vendor arm               #723 -> #179, top-10% 9 -> 22
+#   5-7      + rail 1.25x, vendor arm kept, held to    top-1% 0 -> 6, top-10% 6 -> 25
+#            the same rules
+#   8+       + rail 1.5x (loose — the one 11-game slate punished every rail),
+#            vendor arm kept, quota-aware generation so the rail can be met
+# One slate per group on 5-7 and 8+, pointing opposite ways. Grade the next few
+# in each group against the old build before trusting the sizes.
+NEUTRAL_RAIL = {2: None, 3: 1.25, 4: 1.25, 5: 1.25, 6: 1.25, 7: 1.25}
+NEUTRAL_RAIL_BIG = 1.5          # 8+ games
+NEUTRAL_VENDOR_MIN_GAMES = 5    # under this, the vendor arm is dropped
+
+
+def even_share(games):
+    return 1 - (1 - 1 / (2 * games)) ** 8
+
+
+def neutral_plan(games):
+    """-> the neutral settings for a classic slate of `games` games, or None."""
+    if games < 2:
+        return None
+    rail = NEUTRAL_RAIL.get(games, NEUTRAL_RAIL_BIG)
+    return {"games": games, "rotate": True, "sides": True, "rail": rail,
+            "railShare": None if rail is None else min(1.0, rail * even_share(games)),
+            "vendor": games >= NEUTRAL_VENDOR_MIN_GAMES, "quota": games >= 8,
+            "short": 0}
+
+
+def _main_games(lu):
+    g = {}
+    for p in lu.players:
+        g[p.game] = g.get(p.game, 0) + 1
+    top = max(g.values())
+    return [k for k, v in g.items() if v == top]
+
+
+def _major_side(lu, game):
+    t = {}
+    for p in lu.players:
+        if p.game == game:
+            t[p.team] = t.get(p.team, 0) + 1
+    vals = sorted(t.values(), reverse=True)
+    if len(vals) > 1 and vals[0] == vals[1]:
+        return None
+    return max(t, key=lambda k: t[k])
+
+
+def select_neutral(lineups, n, plan, *, player_cap=None, player_caps=None,
+                   core_floors=None, prior=None, **_ignored):
+    """The neutral selector: score order, under the caps and floors as `select`,
+    plus the main-game rotation, the 50/50 sides and the team rail from `plan`.
+    Team counts run over `prior` too, so the rail holds across both arms. What
+    rotation or sides cannot fill is filled by score inside the caps and rail,
+    then by score alone; plan["short"] counts those."""
+    prior = list(prior or [])
+    player_cap = PLAYER_CAP if player_cap is None else player_cap
+    seen = {lu.key() for lu in prior}
+    uniq = []
+    for lu in lineups:
+        if lu.key() not in seen:
+            seen.add(lu.key())
+            uniq.append(lu)
+    total = n + len(prior)
+    ply = max(1, round(player_cap * total))
+    caps = {i: max(0, int(round(v * total))) for i, v in (player_caps or {}).items()}
+    floors = dict(core_floors or {})
+    games = sorted({p.game for lu in uniq for p in lu.players})
+    quota = {}
+    if plan.get("rotate") and games:
+        base, extra = divmod(n, len(games))
+        quota = {g: base + (1 if i < extra else 0) for i, g in enumerate(games)}
+    team_limit = (math.ceil(plan["railShare"] * total) if plan.get("railShare") else None)
+    slack = 2 if n <= 20 else 4
+    used, tused, gused, sused = {}, {}, {}, {}
+    chosen, taken = [], set()
+
+    def bump(lu):
+        for p in lu.players:
+            used[p.dk_id] = used.get(p.dk_id, 0) + 1
+        for t in {p.team for p in lu.players}:
+            tused[t] = tused.get(t, 0) + 1
+
+    for lu in prior:
+        bump(lu)
+
+    def ok(lu):
+        for p in lu.players:
+            lim = caps.get(p.dk_id)
+            if used.get(p.dk_id, 0) >= (lim if lim is not None else ply):
+                return False
+        return team_limit is None or all(tused.get(t, 0) < team_limit
+                                         for t in {p.team for p in lu.players})
+
+    def slot(lu):
+        mg = _main_games(lu)
+        if quota:
+            opts = [g for g in mg if gused.get(g, 0) < quota.get(g, 0)]
+            if not opts:
+                return None
+            g = min(opts, key=lambda g: gused.get(g, 0) / max(1, quota[g]))
+        else:
+            g = mg[0]
+        side = _major_side(lu, g) if plan.get("sides") else None
+        if side is not None:
+            taken_here = sum(v for (gg, _), v in sused.items() if gg == g)
+            if sused.get((g, side), 0) >= max(slack, math.ceil(0.5 * (taken_here + 1))):
+                return None
+        return g, side
+
+    def take(lu, sl):
+        chosen.append(lu)
+        taken.add(id(lu))
+        bump(lu)
+        if sl:
+            gused[sl[0]] = gused.get(sl[0], 0) + 1
+            if sl[1] is not None:
+                sused[(sl[0], sl[1])] = sused.get((sl[0], sl[1]), 0) + 1
+
+    for cid, floor in floors.items():
+        for lu in uniq:
+            if len(chosen) >= n or used.get(cid, 0) >= floor:
+                break
+            if id(lu) in taken or cid not in lu.ids() or not ok(lu):
+                continue
+            sl = slot(lu)
+            if sl:
+                take(lu, sl)
+    for lu in uniq:
+        if len(chosen) >= n:
+            break
+        if id(lu) not in taken and ok(lu):
+            sl = slot(lu)
+            if sl:
+                take(lu, sl)
+    plan["short"] = plan.get("short", 0) + (n - len(chosen))
+    for loose in (True, False):
+        for lu in uniq:
+            if len(chosen) >= n:
+                break
+            if id(lu) not in taken and (not loose or ok(lu)):
+                take(lu, None)
+    return chosen[:n]
+
+
 def select(lineups, n, *, player_cap=None, player_caps=None, max_overlap=None,
-           captain_cap=None, core_floors=None, prior=None, roster_size=None):
+           captain_cap=None, core_floors=None, prior=None, roster_size=None,
+           neutral=None):
     """Pick the final N, score-first, under your caps and the core floors.
 
     Ported from NFL's selector with the football quotas taken out. `prior` is
@@ -322,6 +479,10 @@ def select(lineups, n, *, player_cap=None, player_caps=None, max_overlap=None,
     under the same caps as everything else (NFL: swapping them in afterwards
     past every cap once put a core in 62 of 75 against a cap of 49).
     """
+    if neutral:
+        return select_neutral(lineups, n, neutral, player_cap=player_cap,
+                              player_caps=player_caps, core_floors=core_floors,
+                              prior=prior)
     prior = list(prior or [])
     player_cap = PLAYER_CAP if player_cap is None else player_cap
     captain_cap = CAPTAIN_CAP if captain_cap is None else captain_cap

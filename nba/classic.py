@@ -23,6 +23,7 @@ already in the projections.
 
 from __future__ import annotations
 
+import dataclasses
 import random
 
 from dk import CLASSIC_SIZE, CLASSIC_SLOTS, SALARY_CAP, SLOT_TAKES
@@ -256,3 +257,47 @@ def build_candidates(players, n, *, rng=None, max_off_pool=None,
         seen.add(lu.key())
         out.append(lu)
     return out
+
+
+# ---------------- quota-aware generation (neutral, 8+ games) ----------------
+# Construction weights by projection cubed, so on a big slate the same twenty
+# players fill nearly every one of the 4,500 candidates and a team rail cannot be
+# met from them (NBA Neutral Build Report 10-24: on 11 games 27 of 150 lineups fell
+# back to chalk). Here candidates come in batches; after each, any team over the
+# rail, as a share of the candidates so far, has its players' construction
+# weight scaled down for the next batch, and eased back once it is under. Aimed
+# below the rail (GEN_SLACK) so the selector still has room to choose.
+GEN_SLACK = 0.75
+
+
+def build_candidates_quota(players, n, rail_share, rng=None, min_proj=MIN_PROJ, **kw):
+    rng = rng or random.Random(0)
+    orig = {p.dk_id: p for p in players}
+    floor = (MIN_PROJ if min_proj is None else min_proj) + 0.01
+    out, seen, tcount, tscale = [], set(), {}, {}
+    batch = max(100, n // 20)
+    for _ in range(60):
+        if len(out) >= n:
+            break
+        pl = [dataclasses.replace(p, proj=max(floor, p.proj * tscale[p.team]))
+              if p.team in tscale and p.proj >= floor else p for p in players]
+        built = build_candidates(pl, batch, rng=rng, min_proj=min_proj, **kw)
+        if not built:
+            break
+        for lu in built:
+            lu.players = [orig[p.dk_id] for p in lu.players]
+            lu.slotting = None
+            if lu.key() in seen:
+                continue
+            seen.add(lu.key())
+            out.append(lu)
+            for t in {p.team for p in lu.players}:
+                tcount[t] = tcount.get(t, 0) + 1
+        aim = GEN_SLACK * rail_share
+        for t, c in tcount.items():
+            share = c / len(out)
+            if share > aim:
+                tscale[t] = max(0.1, tscale.get(t, 1.0) * aim / share)
+            elif share < 0.7 * aim and t in tscale:
+                tscale[t] = min(1.0, tscale[t] * 1.25)
+    return out[:n]

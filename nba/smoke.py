@@ -26,6 +26,7 @@ import csv
 import io
 import json
 import os
+import math
 import random
 import sys
 import tempfile
@@ -336,7 +337,8 @@ check("pool: every player comes from the sheet at off-pool 0",
       not rp.get("error") and all(normalize_name(p["name"]) in _in
                                   for l in rp["lineups"] for p in l["players"]),
       rp.get("error", ""))
-rc = build(cores="Nikola Jokić\nMIA Player4\nNobody Mcghost")
+# The old core rule (floor + construction weight), kept behind neutral=off.
+rc = build(cores="Nikola Jokić\nMIA Player4\nNobody Mcghost", neutral="off")
 check("a misspelled core is named back", any("Nobody Mcghost".lower() in n["text"].lower()
                                             for n in rc.get("notes", [])))
 _jk = sum(1 for l in rc["lineups"] if any(p["name"] == "Nikola Jokić" for p in l["players"]))
@@ -722,7 +724,8 @@ check("swap: each run is logged with both policies", len(_sl) == 3 and "shadow" 
 _core = next(c.split(" (")[0] for c in _entries40[0][4:12]
              if next(x["Team"] for x in R5 if x["Player"] == c.split(" (")[0]) not in _g0
              and c.split(" (")[0] != _out_nm)
-s2 = LS.run_late_swap(PROJ5, _mid, _stand, {"remove": _out_nm, "cores": _core}, log_path=LS_LOG)
+s2 = LS.run_late_swap(PROJ5, _mid, _stand, {"remove": _out_nm, "cores": _core,
+                                           "neutral": "off"}, log_path=LS_LOG)
 check("swap: a core with no news is never swapped out",
       not any(_core in s["out"] for s in s2["swaps"] if not s["keep"]))
 _stale_id = _entries40[3][0]
@@ -888,6 +891,46 @@ check("info: overweights are 15+ over the field, with floor and ceiling numbers"
           for o in _inf["overweights"]), str(_inf["overweights"])[:200])
 check("info: a same-range peer is within $600 and a 40-60% coin flip",
       all(40 <= q["beats"] <= 60 for o in _inf["overweights"] for q in o["peers"]))
+
+# ---- neutral by default (NBA Neutral Build Report 10-24) ----
+import collections as _co
+check("neutral plan by slate size: 2 no rail no vendor / 4 rail no vendor / 6 rail + vendor / 11 loose rail + quota",
+      (E.neutral_plan(2)["railShare"], E.neutral_plan(2)["vendor"]) == (None, False)
+      and E.neutral_plan(4)["rail"] == 1.25 and not E.neutral_plan(4)["vendor"]
+      and E.neutral_plan(6)["rail"] == 1.25 and E.neutral_plan(6)["vendor"]
+      and E.neutral_plan(11)["rail"] == 1.5 and E.neutral_plan(11)["quota"])
+check("neutral team limit at 6 games is 63% of entries",
+      round(100 * E.neutral_plan(6)["railShare"]) == 63)
+rn0 = build(cores="Nikola Jokić\nMIA Player4\nNobody Mcghost")
+check("neutral: a misspelled core is still named back",
+      any("nobody mcghost" in n["text"].lower() for n in rn0["notes"]))
+check("neutral: typed cores carry no floor and no core check",
+      not any("Core check" in n["text"] for n in rn0["coach"])
+      and not rn0["info"]["cores"])
+check("neutral: the build says so in the check line",
+      any(c.startswith("neutral: 5 games") for c in rn0["info"]["checks"]), str(rn0["info"]["checks"]))
+_lim = math.ceil(E.neutral_plan(5)["railShare"] * 40)
+_tc = _co.Counter(t for l in rn0["lineups"] for t in {p["team"] for p in l["players"]})
+check("neutral: no team over the rail", max(_tc.values()) <= _lim, f"{_tc.most_common(2)} vs {_lim}")
+_gm = {}
+for _a, _b in GAMES5:
+    _gm[_a] = _gm[_b] = "@".join(sorted([_a, _b]))
+_main = _co.Counter()
+for l in rn0["lineups"]:
+    if l["source"] != "mine":
+        continue
+    _g = _co.Counter(_gm[p["team"]] for p in l["players"])
+    _main[_g.most_common(1)[0][0]] += 1
+check("neutral: our arm's main games are spread across the slate",
+      len(_main) >= 4 and max(_main.values()) <= 0.4 * sum(_main.values()), str(_main))
+_qp = [p for p in pl if p.proj > 0]
+_qc = C.build_candidates_quota(_qp, 600, 0.45, rng=random.Random(1))
+_qt = _co.Counter(t for lu in _qc for t in {p.team for p in lu.players})
+_plain = C.build_candidates(_qp, 600, rng=random.Random(1))
+_pt = _co.Counter(t for lu in _plain for t in {p.team for p in lu.players})
+check("quota generation pulls the most-held team down",
+      max(_qt.values()) / len(_qc) < max(_pt.values()) / len(_plain),
+      f"{max(_qt.values()) / len(_qc):.2f} vs {max(_pt.values()) / len(_plain):.2f}")
 
 # The summary and exit MUST stay last — appending a new section after them
 # silently skips it and the suite still reports a clean pass.

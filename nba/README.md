@@ -80,6 +80,18 @@ Classic or showdown is read from the DK file's slot header (`PG … UTIL` or
 `--split` runs NFL's A/B: that many lineups from our builder and the rest
 re-ranked out of Stokastic's pool, in the same contest, tagged in the log.
 
+## Neutral build (default, classic)
+
+Built the way NFL showdown is: field ownership is shown, never steers.
+- **Main game rotated:** each lineup's biggest game block is rotated evenly across the slate's games.
+- **Sides 50/50:** inside that game, the two teams are held even.
+- **Team limit, sized by slate:** none at 2 games; 1.25× the even share at 3–7 games (63% of entries at 6); 1.5× at 8+ (47% at 11). The even share is 1 − (1 − 1/2G)^8.
+- **Stokastic's half:** dropped at 2–4 games; kept at 5+ and held to the same rules.
+- **Cores** are plain pool players. With no pool typed, they carry nothing.
+- **8+ games:** candidates are generated with team quotas, so the limit can be reached.
+
+The check line says what was applied: `neutral: 6 games · main game rotated, sides 50/50 · team limit 63% · both arms`. Untick "Neutral build" (`--no-neutral`) for the old build. Sizes come from `NBA Neutral Build Report 10-24.md`, which has one slate per group at 5–7 and 8+, so grade the next few against the old build.
+
 ## Settings
 
 Pool and cores (type-ahead or pasted lists), players allowed off the pool, a
