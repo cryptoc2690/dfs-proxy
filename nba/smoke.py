@@ -932,6 +932,20 @@ check("quota generation pulls the most-held team down",
       max(_qt.values()) / len(_qc) < max(_pt.values()) / len(_plain),
       f"{max(_qt.values()) / len(_qc):.2f} vs {max(_pt.values()) / len(_plain):.2f}")
 
+# ---- late-swap bugs from the Oct 23 night slate ----
+_bp = _st("Bench Guy", 5000, 18.0, 5.0, starting=False); _bp.eligible = {"SG", "G", "UTIL"}
+_sp = _st("Cheap Starter", 3600, 27.0, 5.0, starting=True); _sp.eligible = {"SG", "G", "UTIL"}
+_nb = LS.news_names([_bp, _sp], {"bench guy": {"proj": 18.0, "starting": False}}, set(), {"bench guy"})
+check("swap news: a bench player the build already knew about is not news", not _nb, str(_nb))
+_nb2 = LS.news_names([_bp, _sp], {}, set(), {"bench guy"})
+check("swap news: with no build to compare, a held bench player beaten by a cheaper starter is",
+      "bench guy" in _nb2)
+check("swap news: the bench rule ignores players you do not hold",
+      not LS.news_names([_bp, _sp], {}, set(), set()))
+_s5 = LS.run_late_swap(PROJ5, _mid, _stand, {"cores": _core, "neutral": "off"}, log_path=LS_LOG)
+check("swap: cores with no pool are not a pool (nothing held for being off-pool)",
+      not any("off your pool" in (x.get("hold") or "") for x in _s5["swaps"]))
+
 # The summary and exit MUST stay last — appending a new section after them
 # silently skips it and the suite still reports a clean pass.
 print(f"\n{'=' * 56}\n  {ok} passed, {fail} failed\n{'=' * 56}")

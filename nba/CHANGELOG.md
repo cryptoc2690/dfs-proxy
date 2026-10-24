@@ -4,6 +4,10 @@ Newest first. One entry per change, in plain words: what changed and why.
 
 ## Oct 24, 2026
 
+**Two late-swap bugs fixed** (found on the Oct 23 night slate: 3 cores, no pool, 0 of 20 changed)
+1. **Cores alone are no longer a pool.** With no pool typed, every other player had counted as "off your pool". Each swap then needed +24 to +32, and nothing moved. Now "off your pool" only applies when a pool was typed or logged.
+2. **The bench rule no longer floods the news.** A bench player beaten by a cheaper starter now counts as news only if you hold him and there's no logged build of him to compare against. That night it called 27 players "news"; the same files now show the 3 real changes (Gregory Jackson starting; Gui Santos and Jerami Grant to the bench). Rerun on the same 9:55 pm files, 8 of the 20 lineups would have moved instead of 0.
+
 **Neutral build, on by default**
 - Built like NFL showdown: field ownership is shown, but it never steers the build.
 - **Main game rotated:** each lineup's main game is rotated evenly across the slate.
@@ -109,6 +113,11 @@ Newest first. One entry per change, in plain words: what changed and why.
 - ETR slot added. It is logged only and not used in the build.
 
 ## Wanted, not built yet
+
+- **Teams that fail together (asked Oct 24).**
+  - Oct 23 main: CHA was in 100% of our lineups and IND in 80%, against the field's 79% and 64%. Both got blown out, so the set was dead.
+  - The simulator draws every player independently (`GAME_SD = 0`, carried over from WNBA), so it can't see that one team's bad night kills every lineup holding that team.
+  - Open test: `NBA Team Blowout Prompt 10-24.md`. Then a team line in the info section, like the player overweights.
 
 - **Teams that fail together (asked Oct 24).**
   - Oct 23 main: CHA was in 100% of our lineups and IND in 80%, against the field's 79% and 64%. Both got blown out, so the set was dead.

@@ -139,7 +139,11 @@ def news_names(players, baseline, locked, held=()):
             if b.get("starting") is False and p.starting is True:
                 news[nm] = "was on the bench at lock, now starting"
                 continue
-        if p.starting is False:
+        # A bench player beaten by a cheaper starter is only news when there is
+        # no logged build of him to compare against. With one, the build already
+        # knew he came off the bench; on Oct 23's night slate this rule called 27
+        # held players "news" and reopened nearly every lineup.
+        if b is None and nm in held and p.starting is False:
             alt = [q for q in live if q.eligible & p.eligible and q.salary <= p.salary
                    and q.proj >= p.proj * SWAP_BENCH_EDGE and q is not p]
             if alt:
@@ -276,6 +280,10 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
         if pool_names:
             pool_names |= core_names
         core_names = set()
+    # Only a typed (or logged) pool makes "off your pool" mean anything. Cores
+    # alone are not a pool: on Oct 23's night slate three cores and no pool made
+    # every other player "off pool", every swap needed +24 to +32, and nothing moved.
+    sheet = set(pool_names)
     pool_names |= core_names
     for p in players:
         n = normalize_name(p.name)
@@ -374,7 +382,7 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
         return [{"slot": sl, "name": p.name, "team": p.team, "salary": p.salary,
                  "proj": round(p.proj, 1), "own": round(p.ownership, 1),
                  "locked": bool(lk), "core": bool(p.core),
-                 "offPool": bool(pool_names or core_names) and not p.in_pool}
+                 "offPool": bool(sheet) and not p.in_pool}
                 for sl, p, lk in zip(slots, roster, locks)]
 
     rng = random.Random(int(o.get("seed") or 0))
@@ -527,7 +535,7 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
                          if not ({normalize_name(p.name) for p in r} & dead_here)]
                 for sc, r in alive:                 # best one inside the pool first
                     inn = {normalize_name(p.name) for p in r} - here
-                    if not pool_names or all(n in pool_names for n in inn):
+                    if not sheet or all(n in pool_names for n in inn):
                         return r, sc - cur_score, True, None
                 if alive:                           # else the best one at all
                     return alive[0][1], alive[0][0] - cur_score, True, None
@@ -552,7 +560,7 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
                 sal = sum(p.salary for p in r)
                 if SALARY_CAP - sal > SWAP_MAX_LEFTOVER and gain < SWAP_STRAND_GAIN:
                     continue
-                if pool_names:
+                if sheet:
                     off = [p for p in r if normalize_name(p.name) in inn
                            and normalize_name(p.name) not in pool_names]
                     bar = SWAP_NEWS_GAIN if forced else SWAP_OFF_POOL_GAIN
