@@ -87,6 +87,10 @@ Newest first. One entry per change, in plain words: what changed and why.
 
 ## Wanted, not built yet
 
+- **Late swap bugs found Oct 23 (night slate, cores only, no pool):**
+  1. **Cores-only is treated as the whole pool.** With no pool typed, every non-core player counted as "off your pool". Each swap then needed +8 to +17 per incoming player (+24 / +32 on screen), so nothing moved. Fix: the off-pool bar should only apply when a real pool was typed, the same way the build treats it.
+  2. **The bench rule floods the news.** Any held bench player counts as "news" if a cheaper starter projects 1.5× him: "Al Horford — on the bench — Gregory Jackson is starting… 27 against 18". That fired on 27 players. It isn't news when the build already knew he came off the bench. Fix: only count a player as news if something changed since the build (ruled out, projection moved, starting status flipped), and use the bench rule only when there's no logged build to compare against.
+
 - **Over-the-field limit, revisit after 10–15 slates** of logged overweights. Small slates only, if it ever pays.
 
 ## Tonight's lineups (Oct 21)
