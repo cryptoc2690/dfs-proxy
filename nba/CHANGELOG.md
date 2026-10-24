@@ -114,6 +114,8 @@ Newest first. One entry per change, in plain words: what changed and why.
 
 ## Wanted, not built yet
 
+- **Hunch to test once there's data (Oct 24):** chalk or core on an 11-game slate may behave completely differently from chalk on a 5–6 game slate. So far: on the 11-game Oct 21 the core hit and spreading cost about $60; on the 6-game Oct 23 it failed and spreading won. That's one slate each, so it can't be told apart from luck yet. Revisit by slate size as the 5–7 and 8+ slates pile up.
+
 - **Teams that fail together (asked Oct 24).**
   - Oct 23 main: CHA was in 100% of our lineups and IND in 80%, against the field's 79% and 64%. Both got blown out, so the set was dead.
   - The simulator draws every player independently (`GAME_SD = 0`), so it can't see a blowout.
