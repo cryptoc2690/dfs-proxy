@@ -295,6 +295,9 @@ INDEX_HTML = r"""<!doctype html>
     <button id="dl" class="alt" style="display:none">&#11015; Download DK file</button>
     <button id="ls" class="alt" disabled title="needs a fresh Stokastic pull (1), your current DK entries export (3), and ideally the live standings (6)">&#8635; Late swap</button>
     <button id="lsdl" class="alt" style="display:none">&#11015; Download late-swap file</button>
+    <label style="display:inline-flex;gap:6px;align-items:center;margin:0 4px;font-size:12.5px;color:var(--muted)"
+           title="Swaps with no news behind them, at +14. Off by default: across five nights they went 4 for 15, -198 points.">
+      <input type="checkbox" id="nonews" style="width:auto"> allow no-news swaps</label>
     <span id="status" style="color:var(--muted);font-size:13px"></span>
   </div>
   <div class="row" id="graderow" style="display:none">
@@ -971,6 +974,7 @@ $('#ls').addEventListener('click', async () => {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({proj: files.proj, dk: files.dk, standings: files.standings,
         options: {neutral: $('#neutral').checked ? 'on' : 'off',
+                  noNewsSwaps: $('#nonews').checked ? 'on' : 'off',
                   pool: [...sel.pool].join('\n'), cores: [...sel.core].join('\n'),
                   remove: $('#remove').value}})
     });
@@ -987,8 +991,8 @@ function renderSwap(r){
   let h = '';
   (r.notes||[]).forEach(n => { h += '<div class="note '+n.type+'">'+esc(n.text)+'</div>'; });
   h += '<div class="cards">' + card(r.changed+' of '+r.entries, 'lineups to change')
-     + card(r.mode === 'news' ? 'news only' : 'free + bars', 'policy')
-     + card('+'+r.bars.news+' / +'+r.bars.noNews, 'bar: news / no news')
+     + card(r.mode === 'news' ? 'news only' : (r.noNewsSwaps ? 'free + bars' : 'bad news only'), 'policy')
+     + card('+'+r.bars.news+' / '+(r.bars.noNews ? '+'+r.bars.noNews : 'off'), 'bar: news / no news')
      + (r.winLine ? card(r.winLine, 'projected FINAL top-1% line') : '') + '</div>';
   h += '<div class="picknote" style="margin:6px 0">Untick any swap you do not want; '
      + 'the download keeps that entry exactly as entered. "Now" is the live score, '

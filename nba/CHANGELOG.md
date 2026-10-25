@@ -2,6 +2,33 @@
 
 Newest first. One entry per change, in plain words: what changed and why.
 
+## Oct 25, 2026
+
+From `NBA Review Report 10-25.md` and `NBA Follow-up Report 10-25.md`.
+
+**Late swap**
+- **Only bad news reopens a lineup** (ruled out, projection cut, moved to the bench). Good news is listed but reopens nothing.
+- **A move to or from the bench counts as news only when projection or minutes moved 8%+.** Every bench move is logged with its percentages so the number can be re-fit.
+  - 8% keeps Oct 21's Grayson Allen swaps, which gained.
+  - It drops Grant, Sasser and Risacher, whose swaps lost.
+- **No-news swaps are off by default.** They went 4 for 15, −198 points, over five nights. A checkbox next to Late swap turns them back on.
+- **Swaps respect the neutral team limit and sides across the set.** A ruled-out player is still always replaced.
+- **Each run saves its input files** (projections, DK export, standings) for exact replays.
+- **On the saved nights:**
+  - Oct 24: 0 swaps instead of 18. The 18 had cost 278 points.
+  - Oct 21 at 7:17: a handful of Allen-news swaps, all gaining in real points.
+  - Oct 21 at 8:13: untouched.
+
+**20-max (any build of 20 or fewer)**
+- **On 3+ games:** a player with 10+ tier-mates (within $600, projected at least half his) is held to half the set. Typed caps win.
+- **On 5+ games:** the split becomes 15 ours / 5 Stokastic.
+- The check line shows both.
+- On 5–7 games the median best rank went from 3.1% of the field to 0.3%. Low confidence: five contests.
+
+**Tracking only:** grading writes each team's starter and bench residual to `nba/logs/nba_team_residuals.jsonl`, for the depth-chart pattern (PHI, HOU, BKN starters high, benches low).
+
+**Not built:** a team limit sized by each team, or adjusting for a team's projection bias. Neither held up.
+
 ## Oct 24, 2026
 
 **Two late-swap bugs fixed** (found on the Oct 23 night slate: 3 cores, no pool, 0 of 20 changed)
@@ -113,13 +140,6 @@ Newest first. One entry per change, in plain words: what changed and why.
 - ETR slot added. It is logged only and not used in the build.
 
 ## Wanted, not built yet
-
-- **Late swap, seen Oct 24 (mini-MAX, 18 of 150 swapped):**
-  1. **Good news reopens the lineup.** "Risacher now starting", on a player already in the lineup, dropped the bar to +8 and let a +8.1 KD/Amen → Sasser/Wemby swap through. Likely fix: only bad news (ruled out, projection cut, moved to the bench) reopens a lineup at +8.
-  2. **A player who just moved to the bench can be swapped in** (Sasser). Probably legit: he was a sheet core, DAL's guards behind him are rookies, and his minutes and projection barely moved. The real fix is upstream: moving to the bench should only count as "news" when his projection or minutes actually drop (say 15%+). A role change in name alone shouldn't count as news, good or bad.
-  3. **Late swap isn't neutral.** It judges each lineup alone, so swaps drift to whatever projects best (chalk). Apply the neutral team limit and sides across the swapped set.
-
-- **Hunch to test once there's data (Oct 24):** chalk or core on an 11-game slate may behave completely differently from chalk on a 5–6 game slate. So far: on the 11-game Oct 21 the core hit and spreading cost about $60; on the 6-game Oct 23 it failed and spreading won. That's one slate each, so it can't be told apart from luck yet. Revisit by slate size as the 5–7 and 8+ slates pile up.
 
 - **Teams that fail together (asked Oct 24).**
   - Oct 23 main: CHA was in 100% of our lineups and IND in 80%, against the field's 79% and 64%. Both got blown out, so the set was dead.

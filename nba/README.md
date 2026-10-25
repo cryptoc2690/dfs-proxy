@@ -121,16 +121,26 @@ swap** (or `python3 nba/app.py --lateswap --proj … --dk … --standings …`).
 
 The WNBA tool's rules, NBA's files (`nba/lateswap.py` has the reasoning):
 
-- Locked players never move, and stay in their exact slot. Cores are held unless
-  there is news about them.
-- **News** = a player ruled out (or typed as a late scratch), a projection cut or
-  jump of 25% and 5+ points against your build, a starter change, or a benched
-  player with a cheaper starter at his position projecting 1.5x.
+- Locked players never move, and stay in their exact slot. In neutral mode (the
+  default) cores are ordinary pool players.
+- **Bad news reopens a lineup:** a player ruled out (or typed as a late scratch), a
+  projection cut of 25% and 5+ points against your build, or a move to the bench
+  where his projection or minutes moved **8%+**. Good news (projection up, moved
+  into the lineup) is listed but reopens nothing. A move under 8% is a role
+  change, not news. With no build to compare against, a held bench player with a
+  cheaper starter at his position projecting 1.5x also counts.
 - **Every open slot is open.** For each lineup it builds the best lineup it can from
   all open slots on the fresh projections — nothing in the lineup is kept for its
   own sake.
-- **Bars** (WNBA's x1.4): if the lineup holds a player with news, swap when the best
-  lineup beats what is entered by **+8** simulated points; with no news, by **+14**.
+- **Bars** (WNBA's x1.4): if the lineup holds a player with bad news, swap when the
+  best lineup beats what is entered by **+8** simulated points. **No-news swaps
+  (+14) are off by default.** Across five nights they went 4 for 15, −198 points.
+  Tick "allow no-news swaps" to turn them back on.
+- **Neutral across the set:** a swap that adds a team already at the team limit,
+  or tips its main game's sides past 50/50, is skipped for the next-best roster
+  that fits. A ruled-out player is still always replaced.
+- Every run saves its input files (`nba/logs/swap_inputs/<time>/`) so it can be
+  replayed exactly.
   An off-pool player needs +17 of projection each; stranding $2,000+ needs +17.
 - A lineup projecting top 1% is never moved without news.
 - Ahead in the standings leans to safety, behind leans to ceiling; ownership is

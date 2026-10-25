@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import bisect
 import json
+import math
 import os
 import random
 from datetime import datetime
@@ -65,6 +66,18 @@ SWAP_EARLY_PENALTY = 0.5    # tiny tiebreak against filling from the next game t
 SWAP_NEWS_PROJ_SHARE = 0.25  # a raw projection moving this share...
 SWAP_NEWS_MIN_PTS = 5.0      # ...and at least this many points (WNBA 4, x1.4 rounded)
 SWAP_BENCH_EDGE = 1.5        # a cheaper starter at the position projecting this multiple
+# A move to or from the bench is news only when the player's projection or minutes
+# moved this much against the build. NBA Follow-up Report 10-25, five saved swap
+# nights: Allen (Oct 21, -9% / -9%) reopened nine lineups that all gained, +143;
+# Grant (-7%), Sasser (4-5%) and Risacher (1%) reopened lineups that lost. 15%
+# throws Allen away, 8% keeps him and drops the other three. Fitted to four cases
+# — every bench move is logged with its percentages so this can be re-fitted.
+SWAP_BENCH_MOVE = 0.08
+# Only BAD news reopens a lineup at the news bar: ruled out, removed, projection
+# cut, moved to the bench. Good news (projection up, now starting) on a player you
+# hold is not a reason to rebuild around him (Oct 24: "Risacher now starting"
+# reopened a lineup and let a +8.1 swap through that lost 6.8 real points).
+GOOD_NEWS = ("projection up", "was on the bench at lock, now starting")
 
 # --- breadth ------------------------------------------------------------------
 SWAP_TOP_PER_SLOT = 12
@@ -103,11 +116,20 @@ def news_baseline(log_path, games):
     for r in last:
         for p in r.get("players") or []:
             out[normalize_name(p["name"])] = {"proj": p.get("proj"),
-                                              "starting": p.get("starting")}
+                                              "starting": p.get("starting"),
+                                              "minutes": p.get("minutes")}
     return out, last[0]
 
 
-def news_names(players, baseline, locked, held=()):
+def is_bad_news(why):
+    return not any(why.startswith(g) for g in GOOD_NEWS)
+
+
+def _moved(was, now):
+    return abs(now - was) / was if was else 0.0
+
+
+def news_names(players, baseline, locked, held=(), moves=None):
     """{norm name: reason} for every player something has changed about.
 
     `held` is everyone in your entries: a held player now projected 0 is news
@@ -133,11 +155,20 @@ def news_names(players, baseline, locked, held=()):
             if now - was >= SWAP_NEWS_MIN_PTS and now - was >= was * SWAP_NEWS_PROJ_SHARE:
                 news[nm] = f"projection up {was:.0f} to {now:.0f}"
                 continue
-            if b.get("starting") is True and p.starting is False:
-                news[nm] = "was starting at lock, now on the bench"
-                continue
-            if b.get("starting") is False and p.starting is True:
-                news[nm] = "was on the bench at lock, now starting"
+            flip = (b.get("starting") is True and p.starting is False,
+                    b.get("starting") is False and p.starting is True)
+            if any(flip):
+                dp = _moved(was, now)
+                dm = _moved(b.get("minutes") or 0, p.minutes or 0) if p.minutes else 0.0
+                counts = max(dp, dm) >= SWAP_BENCH_MOVE
+                if moves is not None:
+                    moves.append({"name": p.name, "to": "bench" if flip[0] else "starting",
+                                  "projPct": round(100 * (now - was) / was, 1) if was else None,
+                                  "minPct": round(100 * dm, 1), "counted": counts})
+                if counts:
+                    tail = f" (projection {100 * (now - was) / was:+.0f}%, minutes {100 * dm:.0f}% moved)"
+                    news[nm] = ("was starting at lock, now on the bench" if flip[0] else
+                                "was on the bench at lock, now starting") + tail
                 continue
         # A bench player beaten by a cheaper starter is only news when there is
         # no logged build of him to compare against. With one, the build already
@@ -297,13 +328,97 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
                     "or benched — a projection cut cannot be seen without the build.")
     held = {normalize_name(c["name"]) for e in dk["entries"] for c in e.get("cells") or []
             if c}
-    news = news_names(players, baseline, locked, held)
+    bench_moves = []
+    news = news_names(players, baseline, locked, held, bench_moves)
+    bad_news = {k: v for k, v in news.items() if is_bad_news(v)}
     if news:
         say("info", f"News on {len(news)} player(s): " + "; ".join(
-            f"{by_norm[n].name if n in by_norm else n} — {why}" for n, why in
-            sorted(news.items())[:12]))
+            f"{by_norm[n].name if n in by_norm else n} — {why}"
+            + ("" if n in bad_news else " (good news: doesn't reopen the lineup)")
+            for n, why in sorted(news.items())[:12]))
     else:
         say("info", "No news found on any unlocked player.")
+    quiet = [m for m in bench_moves if not m["counted"]]
+    if quiet:
+        say("info", "Role change only, not news (projection and minutes moved under "
+                    f"{100 * SWAP_BENCH_MOVE:.0f}%): " + ", ".join(
+                        f"{m['name']} to the {m['to']}" for m in quiet))
+    allow_free = str(o.get("noNewsSwaps") or "off") == "on"
+
+    # Set-level neutral (Follow-up Report 10-25): the same team limit and 50/50
+    # sides the build uses, counted over every entry's CURRENT roster in its
+    # contest, locked players included. A swap that adds a team already at the
+    # limit, or tips its main game's sides past the running 50/50, is skipped for
+    # the next-best roster that fits. Oct 24: every one of the 14 no-news swaps
+    # added DAL while DAL sat at 107 of 150, and they lost 217 points.
+    plan = (E.neutral_plan(len(games)) if str(o.get("neutral", "on")) != "off" else None)
+    by_contest = {}
+    for e in dk["entries"]:
+        by_contest.setdefault(e["contest_id"] or e["contest"], []).append(e)
+    tcount, sused, tlimit, slack_of = {}, {}, {}, {}
+
+    def _shape(roster):
+        g = {}
+        for q in roster:
+            g[q.game] = g.get(q.game, 0) + 1
+        top = max(g.values())
+        game = sorted(k for k, v in g.items() if v == top)[0]
+        t = {}
+        for q in roster:
+            if q.game == game:
+                t[q.team] = t.get(q.team, 0) + 1
+        vals = sorted(t.values(), reverse=True)
+        side = None if len(vals) > 1 and vals[0] == vals[1] else max(t, key=lambda k: t[k])
+        return game, side
+
+    if plan:
+        for cid, es in by_contest.items():
+            tc, sc = {}, {}
+            for e in es:
+                ros = [by_norm.get(normalize_name(c["name"])) for c in e["cells"] if c]
+                if any(q is None for q in ros) or not ros:
+                    continue
+                for t in {q.team for q in ros}:
+                    tc[t] = tc.get(t, 0) + 1
+                gs = _shape(ros)
+                if gs[1] is not None:
+                    sc[gs] = sc.get(gs, 0) + 1
+            tcount[cid], sused[cid] = tc, sc
+            tlimit[cid] = (math.ceil(plan["railShare"] * len(es)) if plan["railShare"]
+                           else None)
+            slack_of[cid] = 2 if len(es) <= 20 else 4
+
+    def fits(roster, cur, cid):
+        """-> None when the swap keeps the set neutral, else why it doesn't."""
+        if not plan:
+            return None
+        lim, tc = tlimit[cid], tcount[cid]
+        if lim:
+            for t in {q.team for q in roster} - {q.team for q in cur}:
+                if tc.get(t, 0) >= lim:
+                    return f"{t} is already in {tc[t]} lineups, the team limit"
+        new, old = _shape(roster), _shape(cur)
+        if new[1] is not None and new != old:
+            sc = sused[cid]
+            taken = sum(v for (g, _), v in sc.items() if g == new[0]) - (
+                1 if old[0] == new[0] and old[1] is not None else 0)
+            if sc.get(new, 0) >= max(slack_of[cid], math.ceil(0.5 * (taken + 1))):
+                return f"it would tip {new[0]} past 50/50 toward {new[1]}"
+        return None
+
+    def commit(roster, cur, cid):
+        if not plan:
+            return
+        tc, sc = tcount[cid], sused[cid]
+        for t in {q.team for q in cur}:
+            tc[t] = tc.get(t, 0) - 1
+        for t in {q.team for q in roster}:
+            tc[t] = tc.get(t, 0) + 1
+        old, new = _shape(cur), _shape(roster)
+        if old[1] is not None:
+            sc[old] = sc.get(old, 0) - 1
+        if new[1] is not None:
+            sc[new] = sc.get(new, 0) + 1
 
     # Standings: live points, rank, the field.
     contest = None
@@ -416,7 +531,7 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
                 lines.append(_dk_line(e, e["cells"]))
                 continue
         news_here = {i for i, p in enumerate(lineup)
-                     if not is_locked[i] and normalize_name(p.name) in news}
+                     if not is_locked[i] and normalize_name(p.name) in bad_news}
         open_idx = [i for i, p in enumerate(lineup) if not is_locked[i]
                     and not (p.core and p.proj > 0 and i not in news_here)]
         # Where this lineup stands.
@@ -525,35 +640,42 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
         # bar at all (the user, Oct 21: "why would I willingly take a 0?"): the
         # best lineup without him wins, whatever its gain, salary left or pool.
         dead_here = {normalize_name(lineup[i].name) for i in news_here
-                     if news[normalize_name(lineup[i].name)] in
+                     if bad_news[normalize_name(lineup[i].name)] in
                      ("ruled out", "removed by you (late scratch)")}
+        cid = e["contest_id"] or e["contest"]
 
         def choose(news_only):
             blocked = None
             if dead_here:
                 alive = [(sc, r) for sc, r in scored
                          if not ({normalize_name(p.name) for p in r} & dead_here)]
-                for sc, r in alive:                 # best one inside the pool first
-                    inn = {normalize_name(p.name) for p in r} - here
-                    if not sheet or all(n in pool_names for n in inn):
-                        return r, sc - cur_score, True, None
-                if alive:                           # else the best one at all
-                    return alive[0][1], alive[0][0] - cur_score, True, None
+                in_pool = [(sc, r) for sc, r in alive
+                           if not sheet or all(n in pool_names for n in
+                                               {normalize_name(p.name) for p in r} - here)]
+                # Pool and neutral first, then neutral, then pool, then anything:
+                # a 0 is never kept to protect a limit.
+                for group in ([t for t in in_pool if fits(t[1], lineup, cid) is None],
+                              [t for t in alive if fits(t[1], lineup, cid) is None],
+                              in_pool, alive):
+                    if group:
+                        return group[0][1], group[0][0] - cur_score, True, None
             for sc, r in scored:
                 names = {normalize_name(p.name) for p in r}
                 if names == here:
                     continue
                 out, inn = here - names, names - here
-                forced = any(n in news for n in out | inn)
+                forced = any(n in bad_news for n in out | inn)
                 if news_only:
-                    out_news = [n for n in out if n in news]
-                    if not out_news or len([n for n in out if n not in news]) > 1:
+                    out_news = [n for n in out if n in bad_news]
+                    if not out_news or len([n for n in out if n not in bad_news]) > 1:
                         continue
                     need = SWAP_NEWS_GAIN
                 else:
                     forced = lineup_news
+                    # No-news swaps are off by default (Follow-up Report 10-25:
+                    # 15 made across five nights, 4 gained, -198 points).
                     need = SWAP_NEWS_GAIN if lineup_news else (
-                        float("inf") if winning else SWAP_DISC_GAIN)
+                        float("inf") if winning or not allow_free else SWAP_DISC_GAIN)
                 gain = sc - cur_score
                 if gain < need:
                     continue
@@ -571,6 +693,11 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
                                        f"+{gain_proj:.1f} proj but is off your pool; "
                                        f"that needs +{bar * len(off):.0f}")
                         continue
+                why_not = fits(r, lineup, cid)
+                if why_not:
+                    if blocked is None:
+                        blocked = f"the best swap is held back: {why_not}"
+                    continue
                 return r, gain, forced, blocked
             return None, None, False, blocked
 
@@ -590,6 +717,7 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
                 slotted[i] = p
             out_cells = [{"name": p.name, "dk_id": p.dk_id} for p in slotted]
             changed += 1
+            commit(slotted, lineup, cid)
         else:
             out_cells = [{"name": c["name"], "dk_id": c["dk_id"]} for c in e["cells"]]
             slotted = list(lineup)
@@ -600,8 +728,8 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
             out_cells = [{"name": c["name"], "dk_id": c["dk_id"]} for c in e["cells"]]
             slotted, pick = list(lineup), None
             changed -= 1
-        why_news = [f"{p.name}: {news[normalize_name(p.name)]}" for i, p in enumerate(lineup)
-                    if i in news_here]
+        why_news = [f"{p.name}: {bad_news[normalize_name(p.name)]}"
+                    for i, p in enumerate(lineup) if i in news_here]
         rec.update({
             "keep": pick is None, "open": len(open_idx), "banked": banked,
             "timeLeft": live.get("time_left") if live else None,
@@ -611,7 +739,8 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
             "forced": bool(pick and forced),
             "out": [p.name for p in lineup if pick and p not in slotted],
             "in": [p.name for p in slotted if pick and p not in lineup],
-            "hold": None if pick else _hold_reason(blocked, open_idx, winning, why_news),
+            "hold": None if pick else _hold_reason(blocked, open_idx, winning, why_news,
+                                                   allow_free),
             "shadow": {"acted": "news" if news_mode else "free",
                        "freeGain": None if free_pick is None else round(free_gain, 1),
                        "newsGain": None if news_pick is None else round(news_gain, 1),
@@ -641,21 +770,25 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
     out = {"notes": notes, "entries": len(entries), "changed": changed,
            "winLine": win_line,
            "mode": "news" if str(o.get("swapMode") or "free") == "news" else "free",
-           "bars": {"news": SWAP_NEWS_GAIN, "noNews": SWAP_DISC_GAIN,
+           "noNewsSwaps": allow_free, "neutral": plan,
+           "bars": {"news": SWAP_NEWS_GAIN, "noNews": SWAP_DISC_GAIN if allow_free else None,
                     "offPool": SWAP_OFF_POOL_GAIN},
-           "news": {k: v for k, v in news.items()},
+           "news": {k: v for k, v in news.items()}, "benchMoves": bench_moves,
            "swaps": results, "csvHeader": lines[0],
            "dkCsv": "\n".join(lines) + "\n"}
-    _log_swap(out, players, baseline, games, o)
+    _log_swap(out, players, baseline, games, o,
+              {"proj.csv": proj_text, "dk.csv": dk_text, "standings.csv": standings_text})
     return out
 
 
-def _hold_reason(blocked, open_idx, winning, why_news):
+def _hold_reason(blocked, open_idx, winning, why_news, allow_free=True):
     """Why a lineup is left alone — never a silent shrug."""
     if blocked:
         return blocked
     if not open_idx:
         return "nothing left to move"
+    if not why_news and not allow_free:
+        return "no news — no-news swaps are off"
     if winning and not why_news:
         return "projecting to win — only news moves it"
     if why_news:
@@ -685,8 +818,21 @@ def _build_log():
     return app.LOG_PATH
 
 
-def _log_swap(out, players, baseline, games, options):
-    """One line per run, BOTH policies per entry, so each night grades both."""
+def _log_swap(out, players, baseline, games, options, inputs=None):
+    """One line per run, BOTH policies per entry, so each night grades both. The
+    run's input files are saved beside it, so a replay needs no shortcut (the
+    Oct 24 replay had to borrow logged aggression: the 7:50 standings were gone)."""
+    saved = None
+    try:
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        saved = os.path.join(os.path.dirname(SWAP_LOG_PATH), "swap_inputs", stamp)
+        os.makedirs(saved, exist_ok=True)
+        for name, text in (inputs or {}).items():
+            if (text or "").strip():
+                with open(os.path.join(saved, name), "w", encoding="utf-8") as fh:
+                    fh.write(text)
+    except OSError:
+        saved = None
     try:
         moved = []
         for p in players:
@@ -697,6 +843,8 @@ def _log_swap(out, players, baseline, games, options):
         rec = {"ts": datetime.now().astimezone().isoformat(timespec="seconds"),
                "games": games, "mode": out["mode"], "bars": out["bars"],
                "hadBaseline": bool(baseline), "news": out["news"],
+               "benchMoves": out.get("benchMoves"), "noNewsSwaps": out.get("noNewsSwaps"),
+               "neutral": out.get("neutral"), "inputs": saved,
                "projectionsMoved": moved,
                "swaps": [{k: v for k, v in s.items() if k not in ("rowBefore", "rowAfter", "before", "after")}
                          for s in out["swaps"]]}

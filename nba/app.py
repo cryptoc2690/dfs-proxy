@@ -353,6 +353,13 @@ STUD_MIN_SALARY = 7500     # strictly above
 STUD_MAX_OWN = 10.0        # projected ownership, percent, strictly below
 STUD_FLOOR_X = 2.0
 
+# Small sets (the 20-max) under neutral — see run_build.
+SMALL_SET = 20
+SMALL_SPLIT = 0.75          # 15 of 20 ours on 5+ games
+SMALL_TIER_CAP = 0.5
+TIER_SALARY = 600
+TIER_MATES = 10
+
 
 def _stud_adds(players, n, skip=()):
     """-> [(player, minimum lineups)]: the top STUD_N by projection off the sheet,
@@ -1175,6 +1182,27 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
         caps["player_caps"] = pcaps
         say("info", "Per-player caps in force — " + ", ".join(
             f"{p.name} {round(pcaps[p.dk_id] * 100)}%" for p in players if p.dk_id in pcaps))
+    # 20-max (Follow-up Report 10-25, 11 contests x 5 seeds): on 3+ games, a pool
+    # player with 10+ tier-mates (within $600, projected at least half his) is
+    # held to half the set; the freed lineups go to his tier. On 5-7 games the
+    # median best rank went from 3.1% of the field to 0.3%. Nothing paid in the
+    # 150-max, so it is the small sets only. Your typed caps win. Low confidence:
+    # five contests drove it.
+    tier_capped = []
+    if plan and n <= SMALL_SET and plan["games"] >= 3:
+        live = [p for p in players if p.proj > 0 and p.salary > 0]
+        for p in live:
+            if p.dk_id in (pcaps or {}) or (pool_names and not p.in_pool):
+                continue
+            mates = sum(1 for q in live if q is not p
+                        and abs(q.salary - p.salary) <= TIER_SALARY
+                        and q.proj >= 0.5 * p.proj)
+            if mates >= TIER_MATES:
+                tier_capped.append(p)
+        if tier_capped:
+            caps["player_caps"] = dict(caps.get("player_caps") or {})
+            for p in tier_capped:
+                caps["player_caps"][p.dk_id] = SMALL_TIER_CAP
     if cap_missing:
         say("warn", "No player on this slate matches these caps, so they are NOT in "
                     "force: " + "; ".join(cap_missing))
@@ -1208,6 +1236,10 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                       E.SD_MAX_LEFTOVER if fmt == "showdown" else C.MAX_LEFTOVER)
 
     n_mine = n if split is None or (plan and not plan["vendor"]) else max(0, min(split, n))
+    # 20-max on 5+ games: 15 ours / 5 Stokastic (Follow-up Report 10-25: 15/5 with
+    # the tier cap kept the cap's gain and added a top-0.1% finish; 11/9 trailed).
+    if plan and plan["vendor"] and n <= SMALL_SET:
+        n_mine = max(0, min(n, round(SMALL_SPLIT * n)))
     n_vendor = n - n_mine
     chosen, cands = [], []
     core_ids = [p.dk_id for p in players if p.core and p.proj > 0]
@@ -1301,7 +1333,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                 # candidates run short of room: say how close the set got.
                 lim += f" (reached {top_t} {round(100 * top_c / len(chosen))}%)"
         label = (f"neutral: {plan['games']} games · main game rotated, sides 50/50{lim} · "
-                 + ("both arms" if n_vendor else "ours only")
+                 + (f"{n_mine}/{n_vendor} ours/Stokastic" if n_vendor else "ours only")
+                 + (f" · tier cap 50% on {len(tier_capped)}" if tier_capped else "")
                  + (" · cores in pool" if read_sharp(o.get("cores") or "")
                     and read_sharp(o.get("pool") or "") else ""))
         say("info", f"Built neutral — {label}. Most-held team: {top_t} in {top_c} of "
@@ -1451,6 +1484,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
     meta["overweights"] = overweights
     meta["zeroes"] = [z["name"] for z in zeroes]
     err = _log(log_lus, log_rosters, meta)
+    _log_slate(players, meta)
     if err:
         say("warn", err + " Grading reads that log, so this night will not be gradable.")
 
@@ -1526,6 +1560,73 @@ def _lineup_payload(lu, roster, fmt, slots):
 
 
 # ---------------- grading ----------------
+# ---------------- team residual tracking ----------------
+# Follow-up Report 10-25: no team carries a projection bias we can use yet (it
+# needs ~12 games a team), but PHI, HOU and BKN all showed starters running high
+# and benches low. Tracked, not acted on: every build logs the slate's projected
+# players, and grading writes each team's starter and bench mean residual (z,
+# actual minus projection over the tool's spread) to nba_team_residuals.jsonl.
+def _side_log(name, log_path=None):
+    return os.path.join(os.path.dirname(log_path or LOG_PATH), name)
+
+
+def _log_slate(players, meta):
+    try:
+        rec = {"ts": datetime.now().astimezone().isoformat(timespec="seconds"),
+               "slate": meta.get("slate"), "games": meta.get("games"),
+               "players": [{"name": p.name, "team": p.team, "proj": round(p.proj, 2),
+                            "sd": round(E.player_sd(p), 2), "starting": p.starting}
+                           for p in players if p.proj > 0]}
+        with open(_side_log("nba_slates.jsonl"), "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec) + "\n")
+    except OSError:
+        pass
+
+
+def _team_residuals(slate, games, actual, log_path=None):
+    """-> [{team, starters_z, bench_z, starters, bench}] for the graded slate, and
+    appended once per slate and team to the tracking log."""
+    rec = None
+    try:
+        with open(_side_log("nba_slates.jsonl", log_path), encoding="utf-8") as fh:
+            for line in fh:
+                r = json.loads(line)
+                if r.get("slate") == slate and sorted(r.get("games") or []) == sorted(games or []):
+                    rec = r
+    except (OSError, ValueError):
+        return []
+    if not rec:
+        return []
+    acc = {}
+    for p in rec["players"]:
+        k = normalize_name(p["name"])
+        if p["proj"] < 10 or k not in actual or not p.get("sd"):
+            continue
+        z = (actual[k] - p["proj"]) / p["sd"]
+        a = acc.setdefault(p["team"], {"s": [], "b": []})
+        a["s" if p.get("starting") else "b"].append(z)
+    mean = lambda v: round(sum(v) / len(v), 2) if v else None
+    out = [{"team": t, "starters_z": mean(a["s"]), "bench_z": mean(a["b"]),
+            "starters": len(a["s"]), "bench": len(a["b"])} for t, a in sorted(acc.items())]
+    path = _side_log("nba_team_residuals.jsonl", log_path)
+    try:
+        seen = set()
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as fh:
+                for line in fh:
+                    r = json.loads(line)
+                    seen.add((r.get("slate"), tuple(r.get("games") or []), r.get("team")))
+        with open(path, "a", encoding="utf-8") as fh:
+            for row in out:
+                key = (slate, tuple(sorted(games or [])), row["team"])
+                if key not in seen:
+                    fh.write(json.dumps({"slate": slate, "games": sorted(games or []),
+                                         **row}) + "\n")
+    except (OSError, ValueError):
+        pass
+    return out
+
+
 def grade(standings_text, slate=None, ladder=None, log_path=None):
     """Score logged entries against DK's contest standings. -> report dict
 
@@ -1662,6 +1763,7 @@ def grade(standings_text, slate=None, ladder=None, log_path=None):
         "by_arm": {k: stat(v) for k, v in sorted(arms.items())},
         "by_shape": {k: stat(v) for k, v in sorted(shapes.items())},
         "players": players,
+        "teams": _team_residuals(pick[0].get("slate"), pick[0].get("games"), actual, log_path),
         "top": graded[:5],
         "unscored": sorted(unknown)[:8],
     }

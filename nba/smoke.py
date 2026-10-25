@@ -946,6 +946,42 @@ _s5 = LS.run_late_swap(PROJ5, _mid, _stand, {"cores": _core, "neutral": "off"}, 
 check("swap: cores with no pool are not a pool (nothing held for being off-pool)",
       not any("off your pool" in (x.get("hold") or "") for x in _s5["swaps"]))
 
+# ---- late swap and 20-max from the Follow-up Report 10-25 ----
+check("swap: good news does not reopen, bad news does",
+      not LS.is_bad_news("projection up 20 to 27") and not LS.is_bad_news(
+          "was on the bench at lock, now starting (projection +2%, minutes 1% moved)")
+      and LS.is_bad_news("ruled out") and LS.is_bad_news("projection cut 30 to 20")
+      and LS.is_bad_news("was starting at lock, now on the bench (projection -9%, minutes 9% moved)"))
+_bm = _st("Moved Guy", 5000, 27.0, 5.0, starting=False); _bm.minutes = 28.0
+_mv = []
+_nw = LS.news_names([_bm], {"moved guy": {"proj": 28.0, "starting": True, "minutes": 29.0}},
+                    set(), {"moved guy"}, _mv)
+check("swap: a move to the bench under 8% is a role change, not news",
+      not _nw and _mv and _mv[0]["counted"] is False, str(_mv))
+_bm.proj = 25.0
+_nw = LS.news_names([_bm], {"moved guy": {"proj": 28.0, "starting": True, "minutes": 29.0}},
+                    set(), {"moved guy"}, [])
+check("swap: a move to the bench with the projection down 8%+ is news", "moved guy" in _nw)
+check("swap: no-news swaps are off by default",
+      s0["noNewsSwaps"] is False and all(x.get("news") for x in s0["swaps"] if not x["keep"]))
+_s6 = LS.run_late_swap(PROJ5, _mid, _stand, {"noNewsSwaps": "on"}, log_path=LS_LOG)
+check("swap: no-news swaps can be switched back on", _s6["noNewsSwaps"] is True
+      and _s6["bars"]["noNews"] == LS.SWAP_DISC_GAIN)
+check("swap: each run saves its input files for replay",
+      any(os.path.exists(os.path.join(_TMP, "swap_inputs", d, "dk.csv"))
+          for d in os.listdir(os.path.join(_TMP, "swap_inputs"))))
+_r20 = build(n=20, split=11)
+check("20-max on 5 games: 15 ours / 5 Stokastic",
+      sum(1 for l in _r20["lineups"] if l["source"] == "mine") == 15
+      or not any(l["source"] == "vendor" for l in _r20["lineups"]),
+      str(_co.Counter(l["source"] for l in _r20["lineups"])))
+_pc20 = _co.Counter(p["name"] for l in _r20["lineups"] for p in l["players"])
+_cap20 = [c for c in _r20["info"]["checks"] if "tier cap" in c]
+check("20-max: the tier cap is on at 5 games and no player passes 10 of 20",
+      _cap20 and max(_pc20.values()) <= 10, f"{_cap20} {_pc20.most_common(2)}")
+check("grading tracks each team's starter and bench residuals",
+      isinstance(g.get("teams"), list), str(g.get("teams"))[:120])
+
 # The summary and exit MUST stay last — appending a new section after them
 # silently skips it and the suite still reports a clean pass.
 print(f"\n{'=' * 56}\n  {ok} passed, {fail} failed\n{'=' * 56}")
