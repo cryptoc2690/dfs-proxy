@@ -116,7 +116,7 @@ Newest first. One entry per change, in plain words: what changed and why.
 
 - **Late swap, seen Oct 24 (mini-MAX, 18 of 150 swapped):**
   1. **Good news reopens the lineup.** "Risacher now starting", on a player already in the lineup, dropped the bar to +8 and let a +8.1 KD/Amen → Sasser/Wemby swap through. Likely fix: only bad news (ruled out, projection cut, moved to the bench) reopens a lineup at +8.
-  2. **A player who just moved to the bench can be swapped in** (Sasser). Check first: DAL is thin, so his projection may really hold off the bench. If Stokastic's fresh number already reflects it, it's legit; if the file didn't update, block it.
+  2. **A player who just moved to the bench can be swapped in** (Sasser). Probably legit: he was a sheet core, DAL's guards behind him are rookies, and his minutes and projection barely moved. The real fix is upstream: moving to the bench should only count as "news" when his projection or minutes actually drop (say 15%+). A role change in name alone shouldn't count as news, good or bad.
   3. **Late swap isn't neutral.** It judges each lineup alone, so swaps drift to whatever projects best (chalk). Apply the neutral team limit and sides across the swapped set.
 
 - **Hunch to test once there's data (Oct 24):** chalk or core on an 11-game slate may behave completely differently from chalk on a 5–6 game slate. So far: on the 11-game Oct 21 the core hit and spreading cost about $60; on the 6-game Oct 23 it failed and spreading won. That's one slate each, so it can't be told apart from luck yet. Revisit by slate size as the 5–7 and 8+ slates pile up.
