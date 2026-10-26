@@ -130,14 +130,23 @@ Different game, and the brief is explicit that three things point the other way:
 
 - **Stacking is the lever**, in the place the team split occupies in showdown.
   Each extra pass-catcher rostered with your QB is worth about +31% relative win
-  probability at matched projection. The real Sunday field builds QB+3 **4.6%**
-  of the time; the default targets 45%, as a quota for the same reason the
-  showdown split is one.
-- **Bring-backs are insurance, not construction.** A player from your QB's
-  opponent hedges game script: it lifts the floor and cuts the tail, which is
-  wrong when first place is the objective (-12.7% win equity). Kept at 15% by
-  deliberate choice, and the QB's opponent is closed off in the fill so a random
-  draw cannot turn that into 34%.
+  probability at matched projection, and per lineup QB+3 still has the highest
+  top-1% lift in the real field (1.73×). But across 16 real contests QB+1 and
+  QB+2 won 8 each and QB+3 none. Since 2026-10-26 the quota is **30/50/20**
+  (QB+3 / +2 / +1, was 45/55/0): rebuilt on 7 slates with a 30% bring-back it
+  is +$3.7 a slate (CI +0.9..+6.9), +1.6 cashes, better on 5 of 7, with top-1%
+  and top-0.1% counts slightly down (intervals cover zero). Copying the field's
+  or the top 1%'s mix outright lost money.
+- **The QB's own RB never sits beside three of his receivers.** That shape was
+  9% of our arm, built by accident (the stack took three receivers, then the
+  fill added the RB on projection). The field builds it 0.4% of the time, it
+  never reached the top 0.1%, and our 68 entered ones ran −43% ROI with no
+  top-1% finish. With the RB in, at most two receivers (`RB_STACK_MAX_REC`).
+- **Bring-backs.** A player from your QB's opponent hedges game script. It was
+  kept at 15% as insurance (−12.7% win equity in the brief); the real top 10
+  carry one 61% of the time, and it is **30%** since 2026-10-26 as part of the
+  mix above. The QB's opponent is still closed off in the fill, so a random
+  draw cannot add more.
 - **Ownership lean is neutral, not negative.** Ranking on win probability
   already fades chalk hard by itself — on the real main slate these lineups land
   near the field's 12th ownership percentile with the lean at zero, and adding a
@@ -234,8 +243,8 @@ Main slate only:
 
 | Flag | Default | Note |
 |---|---|---|
-| `--stack-targets` | `3:45,2:55` | Share of lineups at each stack depth. |
-| `--bring-back` | `0.15` | Share carrying a player from the QB's opponent. |
+| `--stack-targets` | `3:30,2:50,1:20` | Share of lineups at each stack depth. |
+| `--bring-back` | `0.30` | Share carrying a player from the QB's opponent. |
 | `--qb-cap` | `0.35` | QB exposure *is* stack exposure, so it binds tighter. |
 | `--dst-cap` | `0.30` | Share of entries one defense may hold. |
 

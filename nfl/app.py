@@ -1422,7 +1422,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
         if o.get("stackTargets") and shape_targets == dict(C.STACK_TARGETS) \
                 and not _stack_targets_valid(o.get("stackTargets")):
             say("warn", "The stack-shape boxes did not add up to anything usable, "
-                        "so the default 45/55 is in force.")
+                        "so the default 30/50/20 is in force.")
     caps = dict(player_cap=_share(o.get("playerCap"), M.PLAYER_CAP))
     pcaps, cpt_caps, cap_missing, cap_bad = _player_caps(o.get("capPlayers"),
                                                          players)

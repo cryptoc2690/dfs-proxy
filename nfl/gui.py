@@ -182,18 +182,20 @@ INDEX_HTML = r"""<!doctype html>
     <div class="cl-only">
       <label>Stack shape — share of lineups at QB+3 / QB+2 / QB+1</label>
       <div class="trio">
-        <input id="st3" type="number" value="45" min="0" max="100">
-        <input id="st2" type="number" value="55" min="0" max="100">
-        <input id="st1" type="number" value="0" min="0" max="100">
+        <input id="st3" type="number" value="30" min="0" max="100">
+        <input id="st2" type="number" value="50" min="0" max="100">
+        <input id="st1" type="number" value="20" min="0" max="100">
       </div>
-      <label>Bring-back (a player from your QB's opponent) — <span id="bv">15</span>%</label>
-      <input id="bb" type="range" min="0" max="60" value="15" style="width:100%">
+      <label>Bring-back (a player from your QB's opponent) — <span id="bv">30</span>%</label>
+      <input id="bb" type="range" min="0" max="60" value="30" style="width:100%">
       <div class="hint">Stacking is the main lever on a main slate: each extra
         pass-catcher with your QB is worth about +31% relative win probability at
-        matched projection, and the field builds QB+3 under 5% of the time. No
-        QB+1 by default — a floor on the weakest shape was measured to cost
-        first-place equity. A bring-back does the opposite of a stack — it
-        raises the floor and cuts the tail — so it is a small insurance block.</div>
+        matched projection, and the field builds QB+3 under 5% of the time. But
+        across 16 real contests QB+1 and QB+2 won 8 each and QB+3 none, so the
+        default is 30/50/20 with a 30% bring-back (+$3.7 a slate on 7 rebuilt
+        slates, better on 5). The QB's own RB never sits beside three of his
+        receivers: that shape is 0.4% of the field and never reached the top
+        0.1%.</div>
     </div>
     <div class="cl-only">
       <label>Max share on one QB — <span id="qv">35</span>%</label>
@@ -613,8 +615,8 @@ $('#go').addEventListener('click', async () => {
           captainCap: num('#ccap',28)/100,
           qbCap: num('#qbcap',35)/100,
           dstCap: num('#dstcap',30)/100,
-          bringBack: num('#bb',15)/100,
-          stackTargets: '3:'+num('#st3',45)+',2:'+num('#st2',55)+',1:'+num('#st1',0),
+          bringBack: num('#bb',30)/100,
+          stackTargets: '3:'+num('#st3',30)+',2:'+num('#st2',50)+',1:'+num('#st1',20),
           minProj: num('#minproj', fmt === 'showdown' ? 2 : 3),
           fieldCap: num('#cap',0), fillPct: num('#fillpct',100),
           maxOffPool: $('#offpool').value,
