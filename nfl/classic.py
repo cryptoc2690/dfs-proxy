@@ -55,9 +55,27 @@ MAX_POS = {"QB": 1, "RB": 3, "WR": 4, "TE": 2, "DST": 1}  # the flex is the +1
 # weakest shape was kept for slates where a third partner cannot be afforded,
 # and measured out of sample it cost first-place equity (1.21x the vendor arm
 # with it, 1.33x without, under the calibrated simulator).
-STACK_TARGETS = {3: 0.45, 2: 0.55}
-BRING_BACK_SHARE = 0.15   # the insurance block, and nothing more
+#
+# That was 45/55/0 with a 15% bring-back until 2026-10-26. On the real season
+# since (ten 150-entry main contests, 16 winners): QB+1 and QB+2 won 8 each,
+# QB+3 none; the top 10 carry a bring-back 61% of the time against our 14%.
+# Rebuilt on 7 slates, 3 seeds, real standings, each build's best lineup
+# removed: 30/50/20 with a 30% bring-back is +$3.7 a slate (90% CI +0.9..+6.9)
+# and +1.6 cashes (+0.2..+3.1), better on 5 of 7; top-1% -0.29 and top-0.1%
+# -0.14, both intervals covering zero. Copying the field's or the top 1%'s mix
+# outright lost (-$4.7, -$5.5, intervals clear), so deep stacks keep a share:
+# per lineup, QB+3 still has the highest top-1% lift in the field (1.73x).
+STACK_TARGETS = {3: 0.30, 2: 0.50, 1: 0.20}
+BRING_BACK_SHARE = 0.30
 MIN_STACK = 1             # never build a lineup with no stack at all
+# At most this many of the QB's own receivers when his own RB is in the lineup.
+# QB + RB + three receivers was 9% of our arm and arrived by accident: the
+# stack took three receivers, then the fill added the RB on projection. The
+# field builds it 0.4% of the time at a top-1% lift of 0.14 and a top-0.1% lift
+# of 0; our 68 entered lineups cashed 18%, reached the top 1% zero times and
+# ran -43% ROI. A hard cap on the total was -$10 a slate in the rebuild, all on
+# one slate (9-20, -$72; the other six +$1).
+RB_STACK_MAX_REC = 2
 # Ownership lean: NEUTRAL by default, and this is deliberate. Ranking on win
 # probability already fades chalk on its own — with the lean at zero these
 # lineups land well below the field's median ownership. The lever is live in
@@ -343,6 +361,14 @@ def dst_matchup(players):
             for k, v in faced.items()}
 
 
+def _rb_stack_ok(players, qb):
+    """No more than RB_STACK_MAX_REC of the QB's receivers beside his own RB."""
+    if not any(p.pos == "RB" and p.team == qb.team for p in players):
+        return True
+    return sum(1 for p in players
+               if p.team == qb.team and p.pos in ("WR", "TE")) <= RB_STACK_MAX_REC
+
+
 def build_candidates(players, n, *, rng=None, stack_targets=None,
                      bring_back_share=BRING_BACK_SHARE, max_off_pool=None,
                      min_proj=MIN_PROJ, max_leftover=MAX_LEFTOVER,
@@ -449,6 +475,8 @@ def build_candidates(players, n, *, rng=None, stack_targets=None,
         for p in mates:
             if got >= want:
                 break
+            if not _rb_stack_ok(picked + [p], qb):  # a forced RB is already in
+                break
             if not (licensed or allowed(p, off)):   # off moves as mates land
                 continue
             trial = picked + [p]
@@ -514,6 +542,8 @@ def build_candidates(players, n, *, rng=None, stack_targets=None,
                     continue
                 if forced and short.get(p.pos, 0) <= 0:
                     continue
+                if p.team == qb.team and not _rb_stack_ok(picked + [p], qb):
+                    continue
                 if not _completable(picked + [p]):
                     continue
                 elig.append(p)
@@ -538,7 +568,7 @@ def build_candidates(players, n, *, rng=None, stack_targets=None,
             continue
         if salary > SALARY_CAP or SALARY_CAP - salary > max_leftover:
             continue
-        if not dst_ok(picked):
+        if not dst_ok(picked) or not _rb_stack_ok(picked, qb):
             continue
         if max_off_pool is not None and off > max_off_pool:
             continue
