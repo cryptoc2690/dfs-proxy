@@ -380,11 +380,14 @@ def _pool_gaps_owned(players, min_proj, skip=()):
     precision; QBs projected 16-18 that the sheet left off were one of them in
     5 of 7 contests (Young, Love, Stroud, Darnold, Dak).
 
-    The top five go into the pool on every main-slate build (option
+    The top five went into the pool on every main-slate build (option
     ownedAdds): +$34 a slate with each build's best lineup removed (CI +7..+59),
     +4.8 cashes a contest, on 5 slates. That rule was picked on the same slates
-    it was scored on, so the interval flatters it; the week-10 review confirms
-    it or takes it out. The QBs beyond the five stay advice.
+    it was scored on, so the interval flattered it. Re-run 2026-10-26 on 7
+    slates with the code as it now stands (tier leverage and the QB floor added
+    since): OFF beats on by $9.4 a slate (CI +3.1..+16.2), 2.7 cashes, better on
+    7 of 7. So it is OFF by default and the five are listed as advice;
+    ownedAdds=on puts them back.
     """
     off = [p for p in players
            if not p.in_pool and not p.core and not p.is_dst
@@ -1248,7 +1251,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
         owned = _pool_gaps_owned(players, min_p,
                                  skip={p.dk_id for p in value_adds})
         top, owned_qbs = owned[:GAP_TOP_OWNED], owned[GAP_TOP_OWNED:]
-        if o.get("ownedAdds", "on") != "off":
+        if o.get("ownedAdds", "off") == "on":
             owned_adds = top
         else:
             owned_qbs = owned            # advice only: the whole list
@@ -1453,19 +1456,36 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
         caps.update(qb_cap=_share(o.get("qbCap"), C.QB_CAP),
                     dst_cap=_share(o.get("dstCap"), C.DST_CAP))
 
+    # Trial switches, main slate only, both off by default; see classic.py.
+    ceil_rank = fmt == "classic" and o.get("ceilingRank", "off") == "on"
+    game_w, game_src = {}, ""
+    if fmt == "classic" and o.get("gameFirst", "off") == "on":
+        game_w, game_src = C.game_weights(players, vegas)
+        if game_w:
+            top3 = sorted(game_w.items(), key=lambda kv: -kv[1])[:3]
+            say("info", f"Game-first (trial): QBs drawn by {game_src}, squared. "
+                        "Heaviest: " + ", ".join(f"{t} ×{w:.2f}" for t, w in top3)
+                        + ".")
+    if ceil_rank:
+        say("info", "Ceiling ranking (trial): our arm is ordered on the summed "
+                    "ceiling (projection + 0.675 sd) instead of the simulated "
+                    "win rate. The vendor arm is unchanged.")
+
     def rank_forced(lus):
         """Score lineups built around a forced player on the build's objective."""
         if bar:
             M.rank(lus, mat, bar, sims, idx,
                    own_lean=_f(o.get("ownLean"), M.OWN_LEAN),
                    dupe_scale=dupe_scale, field_n=modelled)
-            return
-        for lu in lus:
-            sc = M.score_lineup(lu, mat, sims)
-            d = M.estimated_dupes(lu, idx, scale=dupe_scale, field_n=modelled)
-            lu.metrics = {"mean": round(sum(sc) / sims, 2), "dupes": round(d, 2)}
-            lu.metrics["score"] = (lu.metrics["mean"]
-                                   / (1 + d) ** getattr(M, "DUPE_EXP", 1.0))
+        else:
+            for lu in lus:
+                sc = M.score_lineup(lu, mat, sims)
+                d = M.estimated_dupes(lu, idx, scale=dupe_scale, field_n=modelled)
+                lu.metrics = {"mean": round(sum(sc) / sims, 2), "dupes": round(d, 2)}
+                lu.metrics["score"] = (lu.metrics["mean"]
+                                       / (1 + d) ** getattr(M, "DUPE_EXP", 1.0))
+        if ceil_rank:            # keeps win/mean/dupes for display, reorders
+            C.rank_ceiling(lus)
 
     qb_floors = {}                       # dk_id -> lineups promised, main slate
     mine_pool, v_rows, tier_moves = None, None, []
@@ -1474,6 +1494,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
         common = dict(rng=rng, max_off_pool=off_pool,
                       max_leftover=_i(o.get("maxLeftover"), M.MAX_LEFTOVER),
                       min_proj=_f(o.get("minProj"), M.MIN_PROJ))
+        if game_w:
+            common["qb_weight"] = game_w
         if fmt == "showdown":
             # Only players DK gave a captain id can go in the captain cell. The
             # writer used to fall back to their flex id, which produces a file
@@ -1509,6 +1531,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                 lu.metrics = {"mean": round(sum(sc) / sims, 2), "dupes": round(d, 2)}
                 lu.metrics["score"] = lu.metrics["mean"] / (1 + d) ** getattr(M, "DUPE_EXP", 1.0)
             cands.sort(key=lambda l: -l.metrics["score"])
+        if ceil_rank:
+            C.rank_ceiling(cands)
         # Every core the sharp set is guaranteed a share of the entries, so a
         # conviction pick cannot be squeezed out by the tool's own preferences.
         if core_ids:
@@ -2020,6 +2044,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                          "SUB_SD_RB", "SUB_SD_REC", "DST_OPP", "DST_OPP_PASS")},
                 "captainSalaryFloor": None,     # no rail yet (theory T1)
                 "ownedAdds": [p.name for p in owned_adds],
+                "ceilingRank": ceil_rank,
+                "gameFirst": game_src or False,
                 "qbFloor": {p.name: qb_floors[p.dk_id]
                             for p in players if p.dk_id in qb_floors}}
     if fmt == "showdown":

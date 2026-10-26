@@ -294,24 +294,44 @@ projected CPT ownership, or the captain share of their field lineups when the
 projections carry none), and lists any player the field is on at 5%+ overall
 or as captain that you are not, at 0%.
 
-**Pool additions (main slate).** Two lists of players off the sheet go into the
-ordinary pool on every main-slate build, where either arm can use them like any
-name you typed. Neither gets dedicated lineups, a lottery ticket or the QB
+**Pool additions (main slate).** Players off the sheet that go into the
+ordinary pool on a main-slate build, where either arm can use them like any
+name you typed. They get no dedicated lineups, no lottery ticket and no QB
 floor; those stay with the sheet's own players. Cap one at 0 to drop him.
 
-- **Most owned** (`ownedAdds`, on): the five highest projected-ownership plays
-  off the sheet. On 7 main contests (2026-10-12) the old leverage note flagged
-  0 of the 34 unpooled players who made the top 1% at 2× their ownership; the
-  misses were the field's mid-priced plays. Adding these five: +$34 a slate with
-  each build's best lineup removed (CI +7..+59), +4.8 cashes a contest. The rule
-  was picked on the same slates, so week 10 confirms it or takes it out.
+- **Most owned** (`ownedAdds`, **off** since 2026-10-26): the five highest
+  projected-ownership plays off the sheet. Shipped 2026-10-12 at +$34 a slate
+  (CI +7..+59), picked on the same slates it was scored on. Re-run on 7 slates
+  with the code as it now stands: off beats on by $9.4 a slate (CI
+  +3.1..+16.2), 2.7 cashes, better on 7 of 7. The five are now listed in the
+  "Pool gaps" note as advice; `ownedAdds=on` adds them again.
 - **Value** (`valueAdds`, on): $4,000 or less, projected 4+, the best five by
   points per $1,000. +5.3 cashes per contest (CI +1.1..+9.6), dollars +$15 (CI
   −6.5..+36), top-1% −0.1.
 
-QBs off the sheet projected 16+ that aren't in the five are listed in the
-"Pool gaps" note as advice, with a pass-catcher to add for any QB the sheet
-cannot stack. Showdown keeps the old leverage note and adds nobody.
+QBs off the sheet projected 16+ are listed in the "Pool gaps" note as advice,
+with a pass-catcher to add for any QB the sheet cannot stack. Showdown keeps the
+old leverage note and adds nobody.
+
+**Trial switches (main slate, both off).** Two checkboxes under the QB and
+defense caps. The 2026-10-26 rebuild (7 main slates, 3 seeds, real standings,
+each build's best lineup removed) put them first and second of eleven ways to
+build; neither is proven, and both are re-tested at week 10.
+
+- **Rank on ceiling** (`ceilingRank`): our arm is ordered on the summed
+  ceiling (projection + 0.675 sd, which is exactly Stokastic's Ceiling column)
+  instead of the simulated win rate. Draws, caps and the vendor arm are
+  unchanged. +$16.2 a slate (CI −4.3..+39.1), top-1% +0.43 (+0.00..+0.86),
+  better on 3 of 7.
+- **Game-first** (`gameFirst`): the QB draw is weighted by his game's total,
+  squared, over the slate's mean. Vegas totals from the LineStar file when it
+  covers every QB's team, else projected game totals. +$8.4 a slate
+  (CI +0.5..+18.9), better on 4 of 7.
+
+Both are logged in `settings` (`ceilingRank`, `gameFirst` = the totals source).
+The same review found our sets chalkier than both the field and the top 1%
+(ownership sum +0.87 field-sd), and every exposure cap tried against that
+lost money on these slates; that question stays open (T20).
 
 Lottery tickets replace **our arm's** lowest-scoring lineups (one holding a core
 or a floored QB goes last). Until 2026-10-05 they replaced the last five rows of the set, which

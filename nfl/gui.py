@@ -204,6 +204,18 @@ INDEX_HTML = r"""<!doctype html>
         correlation structure of the lineup — so it binds tighter than the
         player cap.</div>
     </div>
+    <div class="cl-only">
+      <label>Trial switches — off by default, not proven</label>
+      <label style="font-weight:normal"><input id="ceilrank" type="checkbox">
+        Rank on ceiling instead of win rate</label>
+      <label style="font-weight:normal"><input id="gamefirst" type="checkbox">
+        Game-first: favour QBs in the highest-total games</label>
+      <div class="hint">The 10-26 rebuild on 7 main slates put these first and
+        second of eleven ways to build: ceiling +$16 a slate (CI −4..+39, better
+        on 3 of 7), game-first +$8 (CI +0.5..+19, 4 of 7). Neither is proven;
+        both are re-tested at week 10. Game-first uses the LineStar file's
+        Vegas totals when you load one, else projected game totals.</div>
+    </div>
     <div>
       <label>Contest size — max entries</label>
       <input id="cap" type="number" placeholder="e.g. 237812">
@@ -608,6 +620,8 @@ $('#go').addEventListener('click', async () => {
           maxOffPool: $('#offpool').value,
           pool: [...sel.pool].join('\n'), cores: [...sel.core].join('\n'),
           capPlayers: $('#capplayers').value,
+          ceilingRank: $('#ceilrank').checked ? 'on' : 'off',
+          gameFirst: $('#gamefirst').checked ? 'on' : 'off',
           fileNames: names
         }
       })

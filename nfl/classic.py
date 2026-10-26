@@ -346,7 +346,7 @@ def dst_matchup(players):
 def build_candidates(players, n, *, rng=None, stack_targets=None,
                      bring_back_share=BRING_BACK_SHARE, max_off_pool=None,
                      min_proj=MIN_PROJ, max_leftover=MAX_LEFTOVER,
-                     force=None):
+                     force=None, qb_weight=None):
     """Randomised construction built AROUND the QB stack.
 
     The QB is chosen first because he decides the lineup's whole correlation
@@ -408,6 +408,7 @@ def build_candidates(players, n, *, rng=None, stack_targets=None,
         want_bb = rng.random() < bring_back_share
 
         qw = [max(q.proj, 0.1) ** 2 * (CORE_BOOST if q.core else 1.0)
+              * (qb_weight.get(q.team, 1.0) if qb_weight else 1.0)
               * (0.0 if qb_used.get(q.dk_id, 0) >= qb_room else 1.0) for q in qbs]
         if not any(qw):
             qb_used.clear()
@@ -658,6 +659,61 @@ def rank(lineups, mat, bar, sims, dupes_idx, own_lean=None, dupe_scale=1.0,
         lu.metrics["score"] = (w / (1.0 + d)) * (1 + own_lean * (2 * on - 1))
     lineups.sort(key=lambda l: -l.metrics["score"])
     return lineups
+
+
+# Two TRIAL switches, both off by default. The 10-26 rebuild (7 main slates, 3
+# seeds, real standings, each build's best lineup removed) put them first and
+# second of eleven ways to build, and neither is proven:
+#
+#   ranking on the summed ceiling   +$16.2/slate (90% CI -4.3..+39.1),
+#                                   top-1% +0.43 (+0.00..+0.86), better 3 of 7
+#   QB draw x game total squared    +$8.4/slate (+0.5..+18.9), better 4 of 7
+#
+# Both go back on the week-10 list for a re-run on more slates. They are here so
+# a slate can be built with them, not because they are the new default.
+#
+# Stokastic's Ceiling column is Proj + 0.675 sd at R-squared 1.0000, so it is
+# recomputed from the two columns already read rather than parsed.
+CEILING_Z = 0.675
+
+
+def rank_ceiling(lineups):
+    """Order on the summed ceiling instead of the simulated win rate."""
+    for lu in lineups:
+        c = sum(p.proj + CEILING_Z * (p.sd if p.sd > 0 else 0.9 * p.proj)
+                for p in lu.players)
+        lu.metrics["ceiling"] = round(c, 2)
+        lu.metrics["score"] = c
+    lineups.sort(key=lambda l: -l.metrics["score"])
+    return lineups
+
+
+def game_weights(players, vegas=None):
+    """-> ({team: QB draw multiplier}, source). The game's total, squared,
+    over the slate's mean game total squared.
+
+    Vegas totals from a LineStar file when they cover every team with a QB;
+    otherwise the projected game total (the offence's summed projection), which
+    is what the test fell back to on the one slate without LineStar. One source
+    per slate: the two are on different scales and cannot be mixed.
+    """
+    teams = {p.team for p in players if p.is_qb and p.proj > 0 and p.team}
+    if not teams:
+        return {}, ""
+    vt = {t: (vegas or {}).get(t, {}).get("total") for t in teams}
+    if all(vt.values()):
+        totals, source = vt, "Vegas totals"
+    else:
+        game = {}
+        for p in players:
+            if p.pos in ("QB", "RB", "WR", "TE") and p.proj > 0:
+                game[p.game] = game.get(p.game, 0.0) + p.proj
+        by_team = {p.team: game.get(p.game, 0.0) for p in players if p.team in teams}
+        totals, source = by_team, "projected game totals"
+    mean_sq = sum(v ** 2 for v in totals.values()) / len(totals)
+    if mean_sq <= 0:
+        return {}, ""
+    return {t: v ** 2 / mean_sq for t, v in totals.items()}, source
 
 
 def select(lineups, n, *, player_cap=None, player_caps=None, qb_cap=None,
