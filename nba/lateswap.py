@@ -388,12 +388,17 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
                            else None)
             slack_of[cid] = 2 if len(es) <= 20 else 4
 
-    def fits(roster, cur, cid):
-        """-> None when the swap keeps the set neutral, else why it doesn't."""
+    def fits(roster, cur, cid, news=False):
+        """-> None when the swap keeps the set neutral, else why it doesn't.
+
+        A swap forced by bad news may add a team already at its limit; only the
+        sides hold for it (Review Report 10-26: across the saved nights the team
+        half blocked 4 good news swaps, +85 real points, and 1 bad one, while the
+        chalk drift it was built for is already stopped by no-news swaps off)."""
         if not plan:
             return None
         lim, tc = tlimit[cid], tcount[cid]
-        if lim:
+        if lim and not news:
             for t in {q.team for q in roster} - {q.team for q in cur}:
                 if tc.get(t, 0) >= lim:
                     return f"{t} is already in {tc[t]} lineups, the team limit"
@@ -654,8 +659,8 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
                                                {normalize_name(p.name) for p in r} - here)]
                 # Pool and neutral first, then neutral, then pool, then anything:
                 # a 0 is never kept to protect a limit.
-                for group in ([t for t in in_pool if fits(t[1], lineup, cid) is None],
-                              [t for t in alive if fits(t[1], lineup, cid) is None],
+                for group in ([t for t in in_pool if fits(t[1], lineup, cid, True) is None],
+                              [t for t in alive if fits(t[1], lineup, cid, True) is None],
                               in_pool, alive):
                     if group:
                         return group[0][1], group[0][0] - cur_score, True, None
@@ -693,7 +698,7 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
                                        f"+{gain_proj:.1f} proj but is off your pool; "
                                        f"that needs +{bar * len(off):.0f}")
                         continue
-                why_not = fits(r, lineup, cid)
+                why_not = fits(r, lineup, cid, bool(forced))
                 if why_not:
                     if blocked is None:
                         blocked = f"the best swap is held back: {why_not}"

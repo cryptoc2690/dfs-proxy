@@ -2,6 +2,15 @@
 
 Newest first. One entry per change, in plain words: what changed and why.
 
+## Oct 26, 2026
+
+**Late swap: news swaps may add a team at its limit** (`NBA Review Report 10-26.md`)
+- **What changed:** a swap forced by bad news no longer checks the team limit. The 50/50 sides still hold, and no-news swaps (off by default) keep the full check.
+- **Why:** across the saved nights the team-limit check blocked 4 good news swaps (+85 real points) and 1 bad one. The chalk drift it was built for is already stopped by no-news swaps being off.
+- **Replay of Oct 21 at 7:17:** 4 mini-MAX swaps, +79 real points, all gaining (before this change: 3, +39).
+- **The rest of the review said keep:** the team limit, dropping the Stokastic half under 5 games, the 20-max tier cap (10 peers, 50%), the 8% bench line, bad news only, and no-news swaps off.
+- **Watch:** neutral against the old build is 4 nights to 2 so far. The old build won Oct 21 (11 games) and Oct 25 (4 games); on Oct 25 it was through a heavy DET stack of Stokastic-file lineups that neutral can't make (#12 against #113).
+
 ## Oct 25, 2026
 
 From `NBA Review Report 10-25.md` and `NBA Follow-up Report 10-25.md`.
