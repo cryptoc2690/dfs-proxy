@@ -294,6 +294,8 @@ def rank(lineups, mat, bar, sims, dupes_idx, own_lean=None, dupe_scale=1.0,
             # fallback, and a much weaker build — the page says so.
             lu.metrics["score"] = lu.metrics["mean"] / (1.0 + d) ** DUPE_EXP * lean
     lineups.sort(key=lambda l: -l.metrics["score"])
+    for i, lu in enumerate(lineups):
+        lu.metrics["depth"] = i + 1          # place in the scored list, logged
     return lineups
 
 
@@ -336,6 +338,28 @@ NEUTRAL_RAIL = {2: None, 3: 1.25, 4: 1.25, 5: 1.25, 6: 1.25, 7: 1.25}
 NEUTRAL_RAIL_BIG = 1.5          # 8+ games
 NEUTRAL_VENDOR_MIN_GAMES = 5    # under this, the vendor arm is dropped
 
+# The slate decides (Thorough Review Report 10-27: 8 slates, 23 contests, about
+# 7,000 rebuilds on the same seeds). Neutral paid only on 5-7 games. On 2-4 it
+# cost the top and the tail (150-max top-0.1% 3 against 19 with it off, 18.5 of
+# 150 in the field's bottom 10% against 7); on 11 games it cost a third of the
+# money ($97 against $159). The pool round-out adds hurt on 2-4 games and were
+# behind most "nobody would do this" exposures; on 5+ they helped. Read off the
+# game count on every build and late swap; "on"/"off" still override.
+NEUTRAL_GAMES = (5, 7)
+ADDS_MIN_GAMES = 5
+
+
+def slate_rules(games):
+    """-> {"neutral": bool, "adds": bool} for a classic slate of `games` games."""
+    return {"neutral": NEUTRAL_GAMES[0] <= games <= NEUTRAL_GAMES[1],
+            "adds": games >= ADDS_MIN_GAMES}
+
+
+def resolve(option, auto):
+    """An "on"/"off" option wins; anything else ("auto", blank) takes `auto`."""
+    v = str(option or "auto").lower()
+    return True if v == "on" else False if v == "off" else bool(auto)
+
 
 def even_share(games):
     return 1 - (1 - 1 / (2 * games)) ** 8
@@ -377,24 +401,37 @@ def select_neutral(lineups, n, plan, *, player_cap=None, player_caps=None,
     plus the main-game rotation, the 50/50 sides and the team rail from `plan`.
     Team counts run over `prior` too, so the rail holds across both arms. What
     rotation or sides cannot fill is filled by score inside the caps and rail,
-    then by score alone; plan["short"] counts those."""
+    then by score alone; plan["short"] counts those.
+
+    plan["depth"] (the 20-max): no lineup from past that place in the scored
+    list. Thorough Review 10-27: the worst 20-max lineups came from a median
+    depth of 1,206 against the set's 28, and the near-last And-One lineup of Oct
+    26 (O'Neale's) was candidate 3,966 of 4,000. A short slot is filled inside
+    the depth instead — the caps first, then anything — and only past it when
+    nothing inside can be taken. Minimums are yours, so they may go deeper.
+    Each pick's metrics["via"] says which pass took it."""
     prior = list(prior or [])
     player_cap = PLAYER_CAP if player_cap is None else player_cap
     seen = {lu.key() for lu in prior}
     uniq = []
-    for lu in lineups:
+    for i, lu in enumerate(lineups):
+        lu.metrics.setdefault("depth", i + 1)
         if lu.key() not in seen:
             seen.add(lu.key())
             uniq.append(lu)
+    deep = plan.get("depth")
+    shallow = [lu for lu in uniq if not deep or lu.metrics["depth"] <= deep]
     total = n + len(prior)
     ply = max(1, round(player_cap * total))
     caps = {i: max(0, int(round(v * total))) for i, v in (player_caps or {}).items()}
     floors = dict(core_floors or {})
     games = sorted({p.game for lu in uniq for p in lu.players})
-    quota = {}
-    if plan.get("rotate") and games:
-        base, extra = divmod(n, len(games))
-        quota = {g: base + (1 if i < extra else 0) for i, g in enumerate(games)}
+    # Even rotation: every game gets n // G main games, and the n % G spares go
+    # to whichever games reach them first. (Handing the spares to the first
+    # games alphabetically left the rest at zero whenever the set was smaller
+    # than the slate — a 5-lineup arm on 7 games — and counted the gap as short.)
+    base, extra = divmod(n, len(games)) if plan.get("rotate") and games else (0, 0)
+    rotate = bool(plan.get("rotate") and games)
     team_limit = (math.ceil(plan["railShare"] * total) if plan.get("railShare") else None)
     slack = 2 if n <= 20 else 4
     used, tused, gused, sused = {}, {}, {}, {}
@@ -409,21 +446,31 @@ def select_neutral(lineups, n, plan, *, player_cap=None, player_caps=None,
     for lu in prior:
         bump(lu)
 
-    def ok(lu):
+    def caps_ok(lu):
         for p in lu.players:
             lim = caps.get(p.dk_id)
             if used.get(p.dk_id, 0) >= (lim if lim is not None else ply):
                 return False
-        return team_limit is None or all(tused.get(t, 0) < team_limit
-                                         for t in {p.team for p in lu.players})
+        return True
+
+    def ok(lu):
+        return caps_ok(lu) and (team_limit is None or all(
+            tused.get(t, 0) < team_limit for t in {p.team for p in lu.players}))
+
+    def room(g):
+        got = gused.get(g, 0)
+        if got < base:
+            return True
+        spare = sum(1 for v in gused.values() if v > base)
+        return got == base and spare < extra
 
     def slot(lu):
         mg = _main_games(lu)
-        if quota:
-            opts = [g for g in mg if gused.get(g, 0) < quota.get(g, 0)]
+        if rotate:
+            opts = [g for g in mg if room(g)]
             if not opts:
                 return None
-            g = min(opts, key=lambda g: gused.get(g, 0) / max(1, quota[g]))
+            g = min(opts, key=lambda g: gused.get(g, 0))
         else:
             g = mg[0]
         side = _major_side(lu, g) if plan.get("sides") else None
@@ -433,9 +480,10 @@ def select_neutral(lineups, n, plan, *, player_cap=None, player_caps=None,
                 return None
         return g, side
 
-    def take(lu, sl):
+    def take(lu, sl, via):
         chosen.append(lu)
         taken.add(id(lu))
+        lu.metrics["via"] = via
         bump(lu)
         if sl:
             gused[sl[0]] = gused.get(sl[0], 0) + 1
@@ -450,21 +498,24 @@ def select_neutral(lineups, n, plan, *, player_cap=None, player_caps=None,
                 continue
             sl = slot(lu)
             if sl:
-                take(lu, sl)
-    for lu in uniq:
+                take(lu, sl, "minimum")
+    for lu in shallow:
         if len(chosen) >= n:
             break
         if id(lu) not in taken and ok(lu):
             sl = slot(lu)
             if sl:
-                take(lu, sl)
+                take(lu, sl, "rules")
     plan["short"] = plan.get("short", 0) + (n - len(chosen))
-    for loose in (True, False):
-        for lu in uniq:
+    passes = ([(shallow, ok, "fill"), (shallow, caps_ok, "caps"), (shallow, None, "any"),
+               (uniq, ok, "deep"), (uniq, None, "deep")] if deep else
+              [(uniq, ok, "fill"), (uniq, None, "any")])
+    for pool, test, via in passes:
+        for lu in pool:
             if len(chosen) >= n:
                 break
-            if id(lu) not in taken and (not loose or ok(lu)):
-                take(lu, None)
+            if id(lu) not in taken and (test is None or test(lu)):
+                take(lu, None, via)
     return chosen[:n]
 
 
@@ -490,7 +541,8 @@ def select(lineups, n, *, player_cap=None, player_caps=None, max_overlap=None,
     max_overlap = (size - 1) if max_overlap is None else max_overlap
     seen = {lu.key() for lu in prior}
     uniq = []
-    for lu in lineups:
+    for i, lu in enumerate(lineups):
+        lu.metrics.setdefault("depth", i + 1)
         if lu.key() in seen:
             continue
         seen.add(lu.key())
@@ -512,7 +564,8 @@ def select(lineups, n, *, player_cap=None, player_caps=None, max_overlap=None,
     for lu in prior:
         bump(lu)
 
-    def take(lu):
+    def take(lu, via="rules"):
+        lu.metrics["via"] = via
         chosen.append(lu)
         taken.add(id(lu))
         sets.append(set(lu.overlap_ids()))
@@ -528,7 +581,7 @@ def select(lineups, n, *, player_cap=None, player_caps=None, max_overlap=None,
         s = set(lu.overlap_ids())
         return not any(len(s & t) > overlap for t in sets)
 
-    def sweep(overlap, need=None, floor=None):
+    def sweep(overlap, need=None, floor=None, via="rules"):
         for lu in lineups:
             if len(chosen) >= n:
                 return
@@ -539,16 +592,16 @@ def select(lineups, n, *, player_cap=None, player_caps=None, max_overlap=None,
             if need is not None and need not in lu.ids():
                 continue
             if ok(lu, overlap):
-                take(lu)
+                take(lu, via)
 
     for cid, floor in (core_floors or {}).items():
-        sweep(max_overlap, need=cid, floor=floor)
+        sweep(max_overlap, need=cid, floor=floor, via="minimum")
     sweep(max_overlap)
     for relax in (max_overlap + 1, size):
-        sweep(relax)
+        sweep(relax, via="fill")
     for cid, floor in (core_floors or {}).items():
         if used.get(cid, 0) < floor:
-            sweep(size, need=cid, floor=floor)
+            sweep(size, need=cid, floor=floor, via="minimum")
 
     # Still short: relax the caps one lineup at a time, a cap you TYPED last,
     # and never silently — the caller checks the finished set against them.
@@ -562,7 +615,7 @@ def select(lineups, n, *, player_cap=None, player_caps=None, max_overlap=None,
                     used.get(p.dk_id, 0) >= caps[p.dk_id] + slack
                     for p in lu.players if p.dk_id in caps):
                 continue
-            take(lu)
+            take(lu, "any")
 
     if len(chosen) < n and caps:
         for slack in range(0, n + 1):
@@ -581,13 +634,18 @@ def vendor_arm(field, n, **kw):
     dupe_scale = kw.pop("dupe_scale", 1.0)
     cands = []
     for lu in field:
-        d = expected_copies(1.0 + lu.metrics.get("vdupes", 0.0), dupe_scale)
+        # The salary-left factor too, as on our own lineups (Thorough Review
+        # 10-27 found it missing here).
+        d = expected_copies(1.0 + lu.metrics.get("vdupes", 0.0), dupe_scale) \
+            * leftover_factor(lu)
         lu.source = "vendor"
         lu.metrics.update({"dupes": round(d, 2),
                            "score": (lu.metrics.get("top10", 0.0) or 0.0)
                                     / (1.0 + d) ** DUPE_EXP})
         cands.append(lu)
     cands.sort(key=lambda l: -l.metrics["score"])
+    for i, lu in enumerate(cands):
+        lu.metrics["depth"] = i + 1
     return select(cands, n, **kw)
 
 

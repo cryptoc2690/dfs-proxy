@@ -80,7 +80,19 @@ Classic or showdown is read from the DK file's slot header (`PG … UTIL` or
 `--split` runs NFL's A/B: that many lineups from our builder and the rest
 re-ranked out of Stokastic's pool, in the same contest, tagged in the log.
 
-## Neutral build (default, classic)
+## The slate decides (classic)
+
+The tool sets two things from the game count, so there's nothing to click (`engine.slate_rules`, from `NBA Thorough Review Report 10-27.md`):
+
+| Games | Neutral build | Pool round-out |
+|---|---|---|
+| 2–4 | off | off |
+| 5–7 | on | on |
+| 8+ | off | on |
+
+Slot 1 shows the choice next to the games, and the check line repeats it. Both settings are **Auto** on the page; On and Off override, and the build says "set by hand". Late swap follows the same rule. Cores are plain pool players either way; only a hand-set Off brings back the old core floor.
+
+## Neutral build (5–7 games)
 
 Built the way NFL showdown is: field ownership is shown, never steers.
 - **Main game rotated:** each lineup's biggest game block is rotated evenly across the slate's games.
@@ -88,14 +100,15 @@ Built the way NFL showdown is: field ownership is shown, never steers.
 - **Team limit, sized by slate:** none at 2 games; 1.25× the even share at 3–7 games (63% of entries at 6); 1.5× at 8+ (47% at 11). The even share is 1 − (1 − 1/2G)^8.
 - **Stokastic's half:** dropped at 2–4 games; kept at 5+ and held to the same rules.
 - **Cores** are plain pool players. With no pool typed, they carry nothing.
-- **8+ games:** candidates are generated with team quotas, so the limit can be reached.
+- **8+ games (only when set On by hand):** candidates are generated with team quotas, so the limit can be reached.
+- **20-max:** no lineup from past the 1,000th candidate; a short slot is filled inside it, under the caps first.
 
-The check line says what was applied: `neutral: 6 games · main game rotated, sides 50/50 · team limit 63% · both arms`. Untick "Neutral build" (`--no-neutral`) for the old build. Sizes come from `NBA Neutral Build Report 10-24.md`, which has one slate per group at 5–7 and 8+, so grade the next few against the old build.
+The check line says what was applied, with the arm split as built: `neutral: 6 games · main game rotated, sides 50/50 · team limit 63% · 75/75 ours/Stokastic`. `--neutral on|off|auto` and `--pool-adds on|off|auto` on the command line.
 
 ## Settings
 
 Pool and cores (type-ahead or pasted lists), players allowed off the pool, a
-per-player cap list (`Name 20`, one per line), a **minimum-lineups** list
+per-player cap list (`Name 20` = at most 20 lineups, `Name 20%` = a percentage; one per line), a **minimum-lineups** list
 (`Andre Drummond 2` — a number of lineups, not a percentage; the player is added to
 the pool and weighted like a core in construction so the minimum is reachable), late scratches to remove, the
 ownership lean (neutral by default), contest size, and the minimum projection
@@ -121,8 +134,8 @@ swap** (or `python3 nba/app.py --lateswap --proj … --dk … --standings …`).
 
 The WNBA tool's rules, NBA's files (`nba/lateswap.py` has the reasoning):
 
-- Locked players never move, and stay in their exact slot. In neutral mode (the
-  default) cores are ordinary pool players.
+- Locked players never move, and stay in their exact slot. Cores are ordinary
+  pool players.
 - **Bad news reopens a lineup:** a player ruled out (or typed as a late scratch), a
   projection cut of 25% and 5+ points against your build, or a move to the bench
   where his projection or minutes moved **8%+**. Good news (projection up, moved

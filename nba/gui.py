@@ -185,15 +185,18 @@ INDEX_HTML = r"""<!doctype html>
       <label>How many are OURS (rest come from their pool)</label>
       <input id="split" type="number" value="75" min="0" max="150">
       <div class="hint">Splitting inside one contest is the only way to compare
-        the two without slate luck. Both arms are tagged in the log. In neutral
-        mode on a 2–4 game slate every lineup is ours.</div>
-      <label style="display:flex;gap:8px;align-items:center;margin-top:12px">
-        <input type="checkbox" id="neutral" checked style="width:auto">
-        Neutral build</label>
-      <div class="hint">Like NFL showdown: each lineup's main game rotated across the
-        slate, the two teams in it held 50/50, and no team in too many lineups
-        (sized by slate). Field ownership never steers it. Cores just join the pool.
-        Untick for the old build.</div>
+        the two without slate luck. Both arms are tagged in the log. On a
+        20-max of 5–7 games it is 15 ours / 5 theirs.</div>
+      <label style="margin-top:12px">Neutral build</label>
+      <select id="neutral">
+        <option value="auto" selected>Auto — the slate decides (on at 5–7 games)</option>
+        <option value="on">On</option>
+        <option value="off">Off — the old build, cores keep a floor</option>
+      </select>
+      <div class="hint">Leave it on Auto. Each lineup's main game rotated across the
+        slate, the two teams in it held 50/50, and no team in too many lineups.
+        It paid on 5–7 games and cost on 2–4 and 8+ (Thorough Review 10-27), so
+        the tool switches it from the game count. Slot 1 says what it chose.</div>
     </div>
     <div>
       <label>Ownership lean — <span id="lv">+0.00</span>
@@ -230,10 +233,14 @@ INDEX_HTML = r"""<!doctype html>
       <div class="picknote">Paste the whole sheet at once — names separated by
         commas, or one per line. Anything that matches nobody is named back to
         you rather than dropped quietly.</div>
-      <label style="display:flex;gap:8px;align-items:center;margin-top:12px">
-        <input type="checkbox" id="pooladds" checked style="width:auto">
-        Round out the pool automatically</label>
-      <div class="picknote">Adds the 5 best points-per-$1,000 players off your sheet at
+      <label style="margin-top:12px">Round out the pool</label>
+      <select id="pooladds">
+        <option value="auto" selected>Auto — the slate decides (on at 5+ games)</option>
+        <option value="on">On</option>
+        <option value="off">Off</option>
+      </select>
+      <div class="picknote">Leave it on Auto: the adds hurt on 2–4 games and
+        helped on 5+. Adds the 5 best points-per-$1,000 players off your sheet at
         $4,500 or less, and 5 more from $4,600 to $7,500, all projected 14+. They become
         legal, not forced. Plus the 3 highest-projected studs above $7,500 under 10%
         owned, each in at least 2x his projected ownership. Cap a name at 0 to drop
@@ -259,8 +266,8 @@ INDEX_HTML = r"""<!doctype html>
       <div class="chips" id="corechips"></div>
       <div class="picknote">Type a few letters, click or press Enter — or paste a
         comma-separated list. Cores count as in-pool automatically. Click a chip
-        to remove it. In neutral mode a core is just a pool player — no
-        guaranteed share.</div>
+        to remove it. A core is just a pool player — no guaranteed
+        share — unless Neutral build is set to Off by hand.</div>
       <label>Late scratch — remove players</label>
       <textarea id="remove" rows="2" spellcheck="false"
                 placeholder="Stephon Castle"></textarea>
@@ -272,9 +279,10 @@ INDEX_HTML = r"""<!doctype html>
     <div>
       <label>Cap individual players <span id="capwho" class="muted">— none set</span></label>
       <textarea id="capplayers" rows="4" spellcheck="false"
-                placeholder="Jalen Johnson 40&#10;Daniss Jenkins 25"></textarea>
-      <div class="picknote">One player and one percentage per line. Your number
-        is the final word on that player — it overrides the board-wide exposure
+                placeholder="Jalen Johnson 60&#10;Daniss Jenkins 25%"></textarea>
+      <div class="picknote">One player per line and a NUMBER OF LINEUPS, the same
+        as the minimum box ("Reed Sheppard 50" = at most 50 lineups). Add % for a
+        percentage ("Reed Sheppard 33%"). Your number is the final word on that player — it overrides the board-wide exposure
         cap (which is off by default: heavy exposure is reported, not capped). Leave a
         player out and nothing changes for him. The build says which caps it
         applied and warns about any name it could not find.</div>
@@ -651,14 +659,14 @@ $('#lean').addEventListener('input', e => {
 $('#fillpct').addEventListener('input', e => { $('#fv').textContent = e.target.value; });
 
 // Per-player caps: echo back what the server will read, and flag a line that is
-// missing its percentage before the build spends two minutes ignoring it.
+// missing its number before the build spends two minutes ignoring it.
 $('#capplayers').addEventListener('input', e => {
   const lines = e.target.value.split(/[\n;]+/).map(s => s.trim()).filter(Boolean);
   const good = [], bad = [];
-  lines.forEach(l => (/^.*?[\s,:=]+\d{1,3}(\.\d+)?\s*%?$/.test(l) ? good : bad).push(l));
+  lines.forEach(l => (/^.*?[\s,:=]+\d{1,4}(\.\d+)?\s*%?$/.test(l) ? good : bad).push(l));
   $('#capwho').textContent = !lines.length ? '— none set'
     : '— ' + good.length + ' capped'
-      + (bad.length ? ', ' + bad.length + ' line(s) need a percentage' : '');
+      + (bad.length ? ', ' + bad.length + ' line(s) need a number of lineups' : '');
   $('#capwho').style.color = bad.length ? 'var(--warn, #e0a030)' : '';
 });
 setFmt('showdown', false);
@@ -685,8 +693,8 @@ $('#go').addEventListener('click', async () => {
           minProj: num('#minproj', 2),
           remove: $('#remove').value,
           floorPlayers: $('#floorplayers').value,
-          poolAdds: $('#pooladds').checked ? 'on' : 'off',
-          neutral: $('#neutral').checked ? 'on' : 'off',
+          poolAdds: $('#pooladds').value,
+          neutral: $('#neutral').value,
           fileNames: fileNames,
           fieldCap: num('#cap',0), fillPct: num('#fillpct',100),
           maxOffPool: $('#offpool').value,
@@ -973,7 +981,7 @@ $('#ls').addEventListener('click', async () => {
     const res = await fetch('/api/lateswap', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({proj: files.proj, dk: files.dk, standings: files.standings,
-        options: {neutral: $('#neutral').checked ? 'on' : 'off',
+        options: {neutral: $('#neutral').value,
                   noNewsSwaps: $('#nonews').checked ? 'on' : 'off',
                   pool: [...sel.pool].join('\n'), cores: [...sel.core].join('\n'),
                   remove: $('#remove').value}})

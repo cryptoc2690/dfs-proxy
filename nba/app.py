@@ -82,15 +82,20 @@ def _share(v, d):
     return x / 100.0 if x > 1.0 else x
 
 
-_CAP_LINE = re.compile(r"^(.*?)[\s,:=]+(\d{1,3}(?:\.\d+)?)\s*%?$")
+_CAP_LINE = re.compile(r"^(.*?)[\s,:=]+(\d{1,4}(?:\.\d+)?)\s*(%?)$")
 
 
-def _player_caps(text, players):
-    """-> ({dk_id: share}, [unmatched lines], [unreadable lines]). An unmatched
-    name is reported, never dropped: silently ignoring a cap you typed is the
-    failure this control exists to prevent."""
+def _player_caps(text, players, n=None):
+    """-> ({dk_id: share}, [unmatched lines], [unreadable lines], [too big]).
+
+    "Reed Sheppard 50" = at most 50 LINEUPS, the same as the minimum box;
+    "Reed Sheppard 33%" = a percentage. Thorough Review 10-27: caps were typed as
+    lineup counts on three nights while the box read percentages (Booker "2" was
+    2%, 3 of 150). A count bigger than the set caps nothing and is named back.
+    An unmatched name is reported, never dropped: silently ignoring a cap you
+    typed is the failure this control exists to prevent."""
     by_name = {normalize_name(p.name): p for p in players}
-    caps, missing, bad = {}, [], []
+    caps, missing, bad, big = {}, [], [], []
     for raw in re.split(r"[\r\n;]+", text or ""):
         line = raw.strip()
         if not line:
@@ -107,8 +112,17 @@ def _player_caps(text, players):
         if p is None:
             missing.append(line)
             continue
-        caps[p.dk_id] = min(1.0, max(0.0, float(m.group(2)) / 100.0))
-    return caps, missing, bad
+        v = float(m.group(2))
+        if m.group(3):
+            if v > 100:
+                bad.append(line)
+                continue
+            caps[p.dk_id] = v / 100.0
+        elif n and v > n:
+            big.append(line)
+        else:
+            caps[p.dk_id] = v / n if n else min(1.0, v / 100.0)
+    return caps, missing, bad, big
 
 
 _FLOOR_LINE = re.compile(r"^(.*?)[\s,:=]+(\d{1,3})$")
@@ -359,6 +373,7 @@ SMALL_SPLIT = 0.75          # 15 of 20 ours on 5+ games
 SMALL_TIER_CAP = 0.5
 TIER_SALARY = 600
 TIER_MATES = 10
+SMALL_DEPTH = 1000
 
 
 def _stud_adds(players, n, skip=()):
@@ -920,7 +935,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
             say("warn", f"{len(no_elig)} player(s) have no slot they can fill: "
                         + ", ".join(no_elig[:6]))
 
-    games = sorted({p.game for p in players if p.game and p.proj > 0})
+    games = sorted({p.game for p in players if "@" in (p.game or "") and p.proj > 0})
 
     # LineStar, if given: Vegas, its projection and its starting status, all
     # LOGGED and none of it used — see sources.read_linestar for why, and for
@@ -990,14 +1005,28 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
     # build-arounds, so in neutral mode they are ordinary pool players — no floor,
     # no construction weight. With no pool typed the whole slate is the pool and
     # they carry nothing.
-    plan = (E.neutral_plan(len(games)) if fmt == "classic"
-            and str(o.get("neutral", "on")) != "off" else None)
+    # Since Oct 27 the slate decides (engine.slate_rules, Thorough Review 10-27):
+    # neutral only on 5-7 games, the round-out adds only on 5+. "on"/"off" in the
+    # options still override. Cores stay plain pool players either way (your
+    # call); only a hand-set "off" brings back the old core floor.
+    rules = E.slate_rules(len(games))
+    use_neutral = fmt == "classic" and E.resolve(o.get("neutral"), rules["neutral"])
+    use_adds = fmt == "classic" and E.resolve(o.get("poolAdds"), rules["adds"])
+    plan = E.neutral_plan(len(games)) if use_neutral else None
+    if fmt == "classic":
+        say("info", f"Slate: {len(games)} games, so neutral "
+                    f"{'on' if plan else 'off'} and pool round-out "
+                    f"{'on' if use_adds else 'off'}"
+                    + ("" if (bool(plan), use_adds) == (rules["neutral"], rules["adds"])
+                       else " (set by hand)") + ".", "check",
+            f"{len(games)} games: neutral {'on' if plan else 'off'}, "
+            f"round-out {'on' if use_adds else 'off'}")
 
     # Pool and cores. Marked before removal, so a removed core is a known name.
     pool_names = read_sharp(o.get("pool") or "")
     core_names = read_sharp(o.get("cores") or "")
     typed = pool_names | core_names
-    if plan:
+    if fmt == "classic" and str(o.get("neutral") or "auto").lower() != "off":
         if pool_names:
             pool_names |= core_names
         core_names = set()
@@ -1110,7 +1139,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
     min_proj = _f(o.get("minProj"), E.MIN_PROJ)
     adds = {"cheap": [], "mid": [], "stud": [], "studFloors": {}}
     studs = []
-    if pool_names and fmt == "classic" and str(o.get("poolAdds", "on")) != "off":
+    if pool_names and use_adds:
         zero = {pid for pid, c in _player_caps(o.get("capPlayers"), players)[0].items()
                 if c <= 0}
         studs = _stud_adds(players, n, zero)
@@ -1177,11 +1206,15 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                           "to guarantee he is used.")
 
     caps = {"player_cap": _share(o.get("playerCap"), E.PLAYER_CAP)}
-    pcaps, cap_missing, cap_bad = _player_caps(o.get("capPlayers"), players)
+    pcaps, cap_missing, cap_bad, cap_big = _player_caps(o.get("capPlayers"), players, n)
     if pcaps:
         caps["player_caps"] = pcaps
         say("info", "Per-player caps in force — " + ", ".join(
-            f"{p.name} {round(pcaps[p.dk_id] * 100)}%" for p in players if p.dk_id in pcaps))
+            f"{p.name} {round(pcaps[p.dk_id] * n)} of {n}" for p in players
+            if p.dk_id in pcaps))
+    if cap_big:
+        say("warn", f"These caps are more lineups than the {n} being built, so they cap "
+                    f"nothing: " + "; ".join(cap_big) + ". Add % for a percentage.")
     # 20-max (Follow-up Report 10-25, 11 contests x 5 seeds): on 3+ games, a pool
     # player with 10+ tier-mates (within $600, projected at least half his) is
     # held to half the set; the freed lineups go to his tier. On 5-7 games the
@@ -1207,8 +1240,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
         say("warn", "No player on this slate matches these caps, so they are NOT in "
                     "force: " + "; ".join(cap_missing))
     if cap_bad:
-        say("warn", "These cap lines need a name and a percentage — ignored: "
-                    + "; ".join(cap_bad))
+        say("warn", "These cap lines need a name and a number of lineups (or a "
+                    "percentage up to 100%) — ignored: " + "; ".join(cap_bad))
     pfloors, floor_missing, floor_bad = _player_floors(o.get("floorPlayers"), players)
     if floor_missing:
         say("warn", "No player on this slate matches these minimums, so they are NOT "
@@ -1241,6 +1274,10 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
     if plan and plan["vendor"] and n <= SMALL_SET:
         n_mine = max(0, min(n, round(SMALL_SPLIT * n)))
     n_vendor = n - n_mine
+    # 20-max: nothing from past the 1,000th candidate (Thorough Review 10-27; it
+    # is what removes Oct 26's O'Neale lineup, and moved no score in tests).
+    if plan and n <= SMALL_SET:
+        plan["depth"] = SMALL_DEPTH
     chosen, cands = [], []
     core_ids = [p.dk_id for p in players if p.core and p.proj > 0]
     floors = {cid: max(1, -(-n_mine // (len(core_ids) + 1))) for cid in core_ids} \
@@ -1332,8 +1369,10 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                 # Stokastic's half is fixed rosters, and on big slates our own
                 # candidates run short of room: say how close the set got.
                 lim += f" (reached {top_t} {round(100 * top_c / len(chosen))}%)"
+        got_v = sum(1 for lu in chosen if lu.source == "vendor")
         label = (f"neutral: {plan['games']} games · main game rotated, sides 50/50{lim} · "
-                 + (f"{n_mine}/{n_vendor} ours/Stokastic" if n_vendor else "ours only")
+                 + (f"{len(chosen) - got_v}/{got_v} ours/Stokastic" if n_vendor
+                    else "ours only")
                  + (f" · tier cap 50% on {len(tier_capped)}" if tier_capped else "")
                  + (" · cores in pool" if read_sharp(o.get("cores") or "")
                     and read_sharp(o.get("pool") or "") else ""))
@@ -1347,19 +1386,26 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
         say("warn", f"Only {len(chosen)} distinct lineups for {n} entries — the rest "
                     f"will have no lineup and score zero.")
 
-    # Checked on the finished set, never assumed: caps, core floors, duplicates.
-    if pcaps:
+    # Checked on the finished set, never assumed: caps (yours and the tier cap),
+    # core floors, duplicates.
+    all_caps = caps.get("player_caps") or {}
+    tier_over = []
+    if all_caps:
         real = {}
         for lu in chosen:
             for p in lu.players:
                 real[p.dk_id] = real.get(p.dk_id, 0) + 1
-        over = [(p, real.get(p.dk_id, 0), int(round(pcaps[p.dk_id] * len(chosen))))
-                for p in players if p.dk_id in pcaps
-                and real.get(p.dk_id, 0) > int(round(pcaps[p.dk_id] * len(chosen)))]
+        over = [(p, real.get(p.dk_id, 0), int(round(all_caps[p.dk_id] * len(chosen))))
+                for p in players if p.dk_id in all_caps
+                and real.get(p.dk_id, 0) > int(round(all_caps[p.dk_id] * len(chosen)))]
+        tier_over = [f"{p.name} {g} of {len(chosen)}" for p, g, w in over
+                     if p.dk_id not in (pcaps or {})]
         if over:
-            say("warn", "The board could not fill the set under your caps, so these ran "
-                        "over: " + ", ".join(f"{p.name} {g} of {len(chosen)} against {w}"
-                                             for p, g, w in over))
+            say("warn", "The board could not fill the set under the caps, so these ran "
+                        "over: " + ", ".join(
+                            f"{p.name} {g} of {len(chosen)} against {w}"
+                            + ("" if p.dk_id in (pcaps or {}) else " (tier cap)")
+                            for p, g, w in over))
     if pfloors:
         short = []
         for p in players:
@@ -1423,6 +1469,15 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                 "playerCap": caps["player_cap"], "captainCap": caps.get("captain_cap"),
                 "minProj": min_proj, "maxLeftover": max_leftover,
                 "maxOffPool": off_pool, "cores": sorted(core_names), "neutral": plan,
+                "slateRules": {"games": len(games), "neutral": bool(plan),
+                               "adds": use_adds, "auto": rules},
+                "arms": {"ours": sum(1 for lu in chosen if lu.source != "vendor"),
+                         "vendor": sum(1 for lu in chosen if lu.source == "vendor")},
+                "filledBy": {v: sum(1 for lu in chosen if lu.metrics.get("via") == v)
+                             for v in {lu.metrics.get("via") for lu in chosen}},
+                "tierOver": tier_over,
+                "capLines": {"typed": o.get("capPlayers") or "",
+                             "tooBig": cap_big},
                 "pool": sorted(pool_names), "capPlayers": o.get("capPlayers") or "",
                 "poolAdds": adds,
                 "floorPlayers": {p.name: pfloors[p.dk_id] for p in players
@@ -1550,6 +1605,7 @@ def _lineup_payload(lu, roster, fmt, slots):
         "proj": lu.proj, "ownSum": lu.own_sum,
         "win": round(lu.metrics.get("win", 0.0), 5),
         "dupes": round(lu.metrics.get("dupes", 0.0), 2),
+        "depth": lu.metrics.get("depth"), "via": lu.metrics.get("via"),
         "players": [{"slot": s, "name": p.name, "team": p.team, "pos": p.pos,
                      "salary": p.cpt_salary() if s == "CPT" else p.salary,
                      "proj": round(p.proj * (1.5 if s == "CPT" else 1.0), 1),
@@ -1770,6 +1826,12 @@ def grade(standings_text, slate=None, ladder=None, log_path=None):
 
 
 # ---------------- file checks for the page ----------------
+def _rules_note(games):
+    r = E.slate_rules(games)
+    return (f" → neutral {'on' if r['neutral'] else 'off'}, "
+            f"round-out {'on' if r['adds'] else 'off'}")
+
+
 def _describe(kind, text):
     """Read a dropped file just far enough to say what it is."""
     if not (text or "").strip():
@@ -1797,7 +1859,9 @@ def _describe(kind, text):
                            + (" @ ".join(teams) if len(teams) <= 2
                               else f"{len(teams) // 2} games: "
                                    + ", ".join(sorted({p.game for p in live
-                                                       if "@" in (p.game or "")})))}
+                                                       if "@" in (p.game or "")}))
+                                   + _rules_note(len({p.game for p in live
+                                                      if "@" in (p.game or "")})))}
         if kind == "field":
             _e, rep = read_field(text)
             if rep.get("error"):
@@ -1947,11 +2011,13 @@ def main(argv=None):
     ap.add_argument("--caps", help="per-player caps, 'Name 20; Name 40'")
     ap.add_argument("--floors", help="minimum lineups per player, 'Name 2; Name 3'")
     ap.add_argument("--etr", help="ETR projections export — logged only")
-    ap.add_argument("--no-pool-adds", action="store_true",
-                    help="do not round out the pool automatically")
-    ap.add_argument("--no-neutral", action="store_true",
-                    help="the old build: no game rotation, sides or team limit; "
+    ap.add_argument("--pool-adds", choices=("auto", "on", "off"), default="auto",
+                    help="round out the pool: auto = on at 5+ games")
+    ap.add_argument("--no-pool-adds", action="store_true", help="same as --pool-adds off")
+    ap.add_argument("--neutral", choices=("auto", "on", "off"), default="auto",
+                    help="neutral build: auto = on at 5-7 games; off = the old build, "
                          "cores keep their floor")
+    ap.add_argument("--no-neutral", action="store_true", help="same as --neutral off")
     ap.add_argument("--n", type=int, default=150)
     ap.add_argument("--split", type=int, default=None,
                     help="entries from OUR builder; the rest come from Stokastic's "
@@ -2029,8 +2095,8 @@ def main(argv=None):
     res = run_build(_read(a.proj), _read(a.field), _read(a.dk), {
         "pool": _read(a.pool), "cores": _read(a.cores), "remove": a.remove or "",
         "capPlayers": a.caps or "", "floorPlayers": a.floors or "",
-        "poolAdds": "off" if a.no_pool_adds else "on",
-        "neutral": "off" if a.no_neutral else "on",
+        "poolAdds": "off" if a.no_pool_adds else a.pool_adds,
+        "neutral": "off" if a.no_neutral else a.neutral,
         "fileNames": {k: os.path.basename(v) for k, v in (
             ("proj", a.proj), ("field", a.field), ("dk", a.dk),
             ("linestar", a.linestar), ("etr", a.etr)) if v},

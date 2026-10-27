@@ -2,6 +2,47 @@
 
 Newest first. One entry per change, in plain words: what changed and why.
 
+## Oct 27, 2026
+
+From `NBA Thorough Review Report 10-27.md` (8 slates, 23 contests, about 7,000 rebuilds on the same seeds).
+
+**The slate decides: nothing to remember**
+- **Neutral build:** on at 5–7 games, off at 2–4 and at 8+.
+  - 2–4 games, 150-max: top 0.1% went 3 → 19 with it off, and lineups in the field's bottom 10% went 18.5 → 7.
+  - 8+ games: money went $97 → $159 with it off.
+- **Pool round-out adds:** off under 5 games, on at 5+. On 2–4 games they hurt, and they were behind most "nobody would do this" exposures. On 5+ they helped.
+- **Slot 1 says what the slate gets**, e.g. "7 games … → neutral on, round-out on". The check line says it again after the build.
+- **Late swap follows the same rule**, so the set is only held neutral when it was built neutral.
+- Both settings are now **Auto** on the page. On and Off still override, and the build says "set by hand".
+- **Cores stay plain pool players either way.** Only a hand-set Off brings back the old core floor.
+
+**20-max: no lineup from past the 1,000th candidate**
+- Oct 26's near-last And-One lineup (O'Neale) was candidate 3,966 of 4,000, taken by the "filled by score" fallback.
+- A short slot is now filled inside the top 1,000: inside the caps first, then anything. It goes deeper only if nothing inside fits.
+- Minimums may still go deeper.
+- In tests this changed no scores; it removes that kind of lineup.
+
+**Caps are lineups now**
+- "Reed Sheppard 50" means at most 50 lineups, the same as the minimum box. Add % for a percentage ("Reed Sheppard 33%").
+- Three nights of caps had been typed as counts while the box read percentages; for example, Booker "2" was 2%, 3 of 150.
+- A count bigger than the set caps nothing and is named back. A percentage over 100 is refused rather than quietly set to 100%.
+
+**The check line tells the truth**
+- **Arm split:** shows the ours/Stokastic split as built, not as planned.
+- **Tier cap:** the finished-set check now covers the 20-max tier cap too, and names any overrun.
+
+**Bugs fixed**
+- **Late swap:** a swap DK refused stayed in the set's team and side counts. Now it's only counted once DK's rules pass.
+- **Rotation, short sets:** with fewer lineups than games (a 5-lineup Stokastic arm on 7 games), the spare main games went to the first games alphabetically, and the gap was counted as "could not fit". Now the spares go to whichever games reach them first.
+- **Salary-left factor:** it was missing from the Stokastic half's duplicate estimate.
+- **Game count:** only counts real "A@B" games.
+
+**Logged per build:** the slate rules; each arm's actual size; how each lineup was taken (rules, minimum, fill, any); its place in the scored list; tier-cap overruns; and cap lines too big for the set.
+
+**Not built, per the report:** a new generator for 5+ games, and the candidate limit on the 150-max. Both were tested and neither helped. Late swap stays as built.
+
+**What would change it:** two more 5–7 slates where neutral off beats neutral on (top 1% and the tail) moves 5–7 to off. A second 11-game slate where neutral wins reopens 8+.
+
 ## Oct 26, 2026
 
 **Late swap: news swaps may add a team at its limit** (`NBA Review Report 10-26.md`)

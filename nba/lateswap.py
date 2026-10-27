@@ -286,7 +286,7 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
             p.start = rec.get("start") or ""
         by_norm[normalize_name(p.name)] = p
     locked = {n for n, rec in dk["pool"].items() if rec.get("locked")}
-    games = sorted({p.game for p in players if p.game and p.proj > 0})
+    games = sorted({p.game for p in players if "@" in (p.game or "") and p.proj > 0})
 
     # Late scratches typed on the page: zero them (WNBA removal), same as a build.
     from app import apply_removals          # one removal, shared with the build
@@ -305,9 +305,9 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
             say("info", f"Pool and cores taken from your build at "
                         f"{(base_row.get('ts') or '')[11:16]}: {len(pool_names | core_names)} "
                         f"names, {len(core_names)} cores.")
-    # Neutral by default, as the build: a core is a pool player (when there is a
-    # pool) and is opened for swaps like anyone else.
-    if str(o.get("neutral", "on")) != "off":
+    # As the build: a core is a pool player (when there is a pool) and is opened
+    # for swaps like anyone else, unless neutral was set off by hand.
+    if str(o.get("neutral") or "auto").lower() != "off":
         if pool_names:
             pool_names |= core_names
         core_names = set()
@@ -351,7 +351,10 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
     # limit, or tips its main game's sides past the running 50/50, is skipped for
     # the next-best roster that fits. Oct 24: every one of the 14 no-news swaps
     # added DAL while DAL sat at 107 of 150, and they lost 217 points.
-    plan = (E.neutral_plan(len(games)) if str(o.get("neutral", "on")) != "off" else None)
+    # The slate decides, as the build does (engine.slate_rules): the set was only
+    # built neutral on 5-7 games, so only there is it held neutral.
+    plan = (E.neutral_plan(len(games))
+            if E.resolve(o.get("neutral"), E.slate_rules(len(games))["neutral"]) else None)
     by_contest = {}
     for e in dk["entries"]:
         by_contest.setdefault(e["contest_id"] or e["contest"], []).append(e)
@@ -721,8 +724,6 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
             for i, p in zip(open_idx, filled):
                 slotted[i] = p
             out_cells = [{"name": p.name, "dk_id": p.dk_id} for p in slotted]
-            changed += 1
-            commit(slotted, lineup, cid)
         else:
             out_cells = [{"name": c["name"], "dk_id": c["dk_id"]} for c in e["cells"]]
             slotted = list(lineup)
@@ -732,7 +733,11 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
                         f"so it is left as entered.")
             out_cells = [{"name": c["name"], "dk_id": c["dk_id"]} for c in e["cells"]]
             slotted, pick = list(lineup), None
-            changed -= 1
+        elif pick:
+            # Counted into the set only once DK's rules pass (Thorough Review
+            # 10-27: a refused swap stayed in the team and side counts).
+            changed += 1
+            commit(slotted, lineup, cid)
         why_news = [f"{p.name}: {bad_news[normalize_name(p.name)]}"
                     for i, p in enumerate(lineup) if i in news_here]
         rec.update({

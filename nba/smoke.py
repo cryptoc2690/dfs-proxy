@@ -982,6 +982,64 @@ check("20-max: the tier cap is on at 5 games and no player passes 10 of 20",
 check("grading tracks each team's starter and bench residuals",
       isinstance(g.get("teams"), list), str(g.get("teams"))[:120])
 
+
+print("\n-- the slate decides (Thorough Review 10-27) --")
+check("slate rules: 3 games off/off, 6 on/on, 11 neutral off with adds on",
+      E.slate_rules(3) == {"neutral": False, "adds": False}
+      and E.slate_rules(6) == {"neutral": True, "adds": True}
+      and E.slate_rules(11) == {"neutral": False, "adds": True})
+GAMES3 = GAMES5[:3]
+R3 = slate(GAMES3, seed=3)
+PROJ3, FIELD3, DK3 = proj_csv(R3), field_csv(R3), dk_classic(R3, GAMES3)
+_pool3 = "\n".join(x["Player"] for i, x in enumerate(R3) if i % 2 == 0)
+r3 = app.run_build(PROJ3, FIELD3, DK3, {"n": 40, "sims": 400, "seed": 0, "split": 40,
+                                         "fieldCap": 47000, "pool": _pool3})
+_l3 = [json.loads(l) for l in open(app.LOG_PATH, encoding="utf-8")][-1]["settings"]
+check("3 games on auto: neutral off and no round-out adds, said in the check line",
+      _l3["neutral"] is None and not (_l3["poolAdds"]["cheap"] or _l3["poolAdds"]["stud"])
+      and "3 games: neutral off, round-out off" in r3["info"]["checks"],
+      f"{r3['info']['checks']}")
+check("slot 1 says what the slate will get",
+      app._describe("proj", PROJ3)["msg"].endswith("→ neutral off, round-out off")
+      and app._describe("proj", PROJ5)["msg"].endswith("→ neutral on, round-out on"))
+r3h = app.run_build(PROJ3, FIELD3, DK3, {"n": 40, "sims": 400, "seed": 0, "split": 40,
+                                          "fieldCap": 47000, "pool": _pool3,
+                                          "neutral": "on", "poolAdds": "on"})
+_l3h = [json.loads(l) for l in open(app.LOG_PATH, encoding="utf-8")][-1]["settings"]
+check("on/off by hand still overrides, and the build says so",
+      _l3h["neutral"] and _l3h["poolAdds"]["cheap"]
+      and any("set by hand" in x["text"] for x in r3h["notes"]))
+check("the log carries the slate rules, the arms as built and how each pick was filled",
+      _l3["slateRules"]["games"] == 3 and sum(_l3["arms"].values()) == 40
+      and sum(_l3["filledBy"].values()) == 40, f"{_l3['arms']} {_l3['filledBy']}")
+_cpl = app._player_caps("Nikola Jokić 50\nDEN Player1 33%\nDEN Player2 200",
+                        S.read_projections(PROJ5)[0], 150)
+_jid = next(p.dk_id for p in pl if p.name == "Nikola Jokić")
+check("caps: a bare number is lineups, % is a percentage, a count over the set is named back",
+      abs(_cpl[0][_jid] - 50 / 150) < 1e-9 and 0.33 in _cpl[0].values()
+      and _cpl[3] == ["DEN Player2 200"], str(_cpl))
+_rc = build(capPlayers="Nikola Jokić 3")
+check("caps: 'Jokic 3' holds him to 3 of 40 lineups",
+      sum(1 for l in _rc["lineups"] for p in l["players"] if p["name"] == "Nikola Jokić") <= 3)
+check("20-max on 5-7 games: nothing past the 1,000th candidate",
+      all(l["depth"] <= app.SMALL_DEPTH or l["via"] in ("minimum", "deep")
+          for l in _r20["lineups"]), str(sorted(l["depth"] for l in _r20["lineups"])[-3:]))
+_c5 = C.build_candidates(S.read_projections(PROJ5)[0], 2000, rng=random.Random(1))
+for _i, _lu in enumerate(_c5):
+    _lu.metrics = {"score": 1.0 / (_i + 1)}
+_p5 = E.neutral_plan(5)
+_s3 = E.select_neutral(_c5, 3, _p5)
+check("rotation with fewer lineups than games: no false 'could not fit'",
+      _p5["short"] == 0 and len({E._main_games(l)[0] for l in _s3}) == 3,
+      f"short {_p5['short']}")
+_vf = [l for l in _c5[:50]]
+for _lu in _vf:
+    _lu.metrics["vdupes"] = 3.0
+_va = E.vendor_arm(_vf, 5)
+check("Stokastic's half gets the salary-left factor too",
+      all(abs(l.metrics["dupes"] - round(E.expected_copies(4.0, 1.0)
+                                         * E.leftover_factor(l), 2)) < 0.02 for l in _va))
+
 # The summary and exit MUST stay last — appending a new section after them
 # silently skips it and the suite still reports a clean pass.
 print(f"\n{'=' * 56}\n  {ok} passed, {fail} failed\n{'=' * 56}")
