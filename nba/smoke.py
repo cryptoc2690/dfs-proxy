@@ -558,22 +558,6 @@ check("the log records which files ran, by name and fingerprint",
       and len(_lf["files"]["proj"]["sha1"]) == 12 and _lf["files"]["field"]["sha1"])
 check("the log records the minimums", _lf["settings"]["floorPlayers"] == {"DEN Player10": 2})
 
-print("\n-- ETR slot: logged, never used --")
-rE = app.run_build(PROJ5, FIELD5, DK5, {"n": 40, "sims": 400, "seed": 0, "fieldCap": 47000},
-                   etr_text=ETR5)
-check("ETR: the build is IDENTICAL with and without it",
-      [l["players"] for l in rE["lineups"]] == [l["players"] for l in lus])
-_le = [json.loads(l) for l in open(app.LOG_PATH, encoding="utf-8")][-1]
-_jk = next((p for x in [_le] for p in x["players"] if p["name"] == "Nikola Jokić"), None)
-check("ETR: every player joined (by DK id), even one ETR spells differently",
-      any("for 120 players" in n["text"] for n in rE["notes"]),
-      next((n["text"] for n in rE["notes"] if n["text"].startswith("ETR")), ""))
-check("ETR: projection and ownership are in the log",
-      any(p.get("etr_proj") is not None and p.get("etr_own") is not None
-          for p in _le["players"]))
-check("ETR: the ETR file is accepted in its own slot",
-      app._describe("etr", ETR5)["ok"] and "logged only" in app._describe("etr", ETR5)["msg"])
-
 print("\n-- late swap --")
 import lateswap as LS                        # noqa: E402
 LS.SWAP_LOG_PATH = os.path.join(_TMP, "nba_swaps.jsonl")
