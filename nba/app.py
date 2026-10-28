@@ -735,6 +735,37 @@ def _check_upload(entries, rosters, slots, fmt, dk):
     return bad
 
 
+# DK keeps about 16% of entry fees, so a contest's max entries is its prize pool
+# over the fee over 0.84. Checked against 23 NBA standings files, Oct 20-27: the
+# count matched within 0.5% on 22 (e.g. $30K mini-MAX at $0.50 -> 71,343; $20K
+# And-One at $1 -> 23,781). The one miss (opening night And-One, 84% full) was a
+# contest that did not fill.
+DK_PAYOUT = 0.8406
+AUTO_SMALL_OURS = 11        # a 20-max is 11 ours / 9 Stokastic (15/5 on 5-7 games)
+
+
+def contest_size(name, fee):
+    """-> max entries from a DK contest name ('NBA $30K mini-MAX') and fee
+    ('$0.50'), or 0 when either can't be read."""
+    m = re.search(r"\$\s*([\d.,]+)\s*([KkMm]?)", name or "")
+    f = re.search(r"([\d.]+)", (fee or "").replace(",", ""))
+    if not m or not f:
+        return 0
+    try:
+        prize = float(m.group(1).replace(",", "")) * {"k": 1e3, "m": 1e6}.get(
+            m.group(2).lower(), 1.0)
+        fee_v = float(f.group(1))
+    except ValueError:
+        return 0
+    return int(prize / fee_v / DK_PAYOUT) if fee_v > 0 else 0
+
+
+def auto_ours(n):
+    """Our arm when the page leaves it to the tool: half of a big set, 11 of a
+    20-max (the build itself makes that 15/5 on 5-7 games)."""
+    return min(n, AUTO_SMALL_OURS) if n <= SMALL_SET else n // 2
+
+
 def _contests(entries):
     """Split a DK export into its contests, in file order. One download carries
     several — a real NBA export held three, including a $0 free contest."""
@@ -1083,15 +1114,22 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
 
     sims = _i(o.get("sims"), SIMS)
     seed = _i(o.get("seed"), 0)
-    n = max(1, _i(o.get("n"), 150))
+    auto_n = str(o.get("n") or "").lower() == "auto"
+    auto_split = str(o.get("split") or "").lower() == "auto"
+    n = 150 if auto_n else max(1, _i(o.get("n"), 150))
     split = o.get("split")
-    split = None if split in (None, "") else _i(split, 0)
+    split = None if split in (None, "") or auto_split else _i(split, 0)
+    contest = None
     if dk and dk.get("entries"):
         per = {}
         for e in dk["entries"]:
             per[e["contest_id"]] = per.get(e["contest_id"], 0) + 1
         biggest = max(per.values())
-        if biggest < n:
+        contest = max((c for c in dk["entries"] if per[c["contest_id"]] == biggest),
+                      key=lambda c: contest_size(c.get("contest"), c.get("fee")))
+        if auto_n:
+            n = biggest
+        elif biggest < n:
             say("warn", f"The biggest contest in the DK file holds {biggest} entries, so "
                         f"building {biggest} lineups, not {n}.")
             if split:
@@ -1099,6 +1137,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
             n = biggest
             if split is not None:
                 split = min(split, n)
+    if auto_split:
+        split = auto_ours(n)
 
     mat = E.simulate(players, sims=sims, seed=seed)
     bar_w = None
@@ -1120,7 +1160,18 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
         if field else (None, 0)
     idx = E.dupe_index(field) if field else {}
     modelled = E.field_size(field) if field else 0
-    field_cap = _i(o.get("fieldCap"), 0)
+    size_auto = str(o.get("fieldCap") or "").lower() == "auto"
+    field_cap = contest_size(contest.get("contest"), contest.get("fee")) \
+        if size_auto and contest else _i(o.get("fieldCap"), 0)
+    if auto_n or auto_split or size_auto:
+        said = [f"{n} lineups"]
+        if size_auto:
+            said.append(f"about {field_cap:,} entries in the contest" if field_cap else
+                        "contest size not readable from its name — type it in Settings")
+        say("good" if (field_cap or not size_auto) else "warn",
+            ((contest.get("contest") or "").strip() + ": " if contest else "")
+            + ", ".join(said) + " (from the DK file).", "check",
+            f"{n} lineups" + (f", ~{field_cap:,} entries" if field_cap else ""))
     fill_pct = min(max(_f(o.get("fillPct"), 100.0), 1.0), 100.0)
     expect = _i(o.get("expectEntries"), 0) or int(round(field_cap * fill_pct / 100.0))
     dupe_scale = max(1.0, expect / modelled) if (modelled and expect) else 1.0
@@ -1472,6 +1523,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
     start_of = (lambda p: p.start or "") if dk else None
     rostered_all = [_roster(lu, fmt, start_of) for lu in chosen]
     settings = {"n": n, "split": split, "sims": sims, "seed": seed, "format": fmt,
+                "fieldCap": field_cap, "expectEntries": expect,
+                "auto": {"n": auto_n, "split": auto_split, "size": size_auto},
                 "ownLean": _f(o.get("ownLean"), E.OWN_LEAN),
                 "playerCap": caps["player_cap"], "captainCap": caps.get("captain_cap"),
                 "minProj": min_proj, "maxLeftover": max_leftover,
@@ -1992,11 +2045,20 @@ def _describe(kind, text):
                 return {"ok": False, "msg": f"{len(dk['pool'])} players but no entries — "
                                             f"enter the contest on DK first"}
             sd = dk["slots"][0] == "CPT"
+            per = {}
+            for e in dk["entries"]:
+                per[e["contest_id"]] = per.get(e["contest_id"], 0) + 1
+            big = max(per.values())
+            c = max((e for e in dk["entries"] if per[e["contest_id"]] == big),
+                    key=lambda e: contest_size(e.get("contest"), e.get("fee")))
+            size = contest_size(c.get("contest"), c.get("fee"))
             return {"ok": True, "format": "showdown" if sd else "classic",
                     "teams": sorted({r["team"] for r in dk["pool"].values() if r.get("team")}),
-                    "msg": f"{len(dk['entries'])} entries, {len(dk['pool'])} players "
-                           f"({'showdown' if sd else 'classic'}), "
-                           f"{len(_contests(dk['entries']))} contest(s)"}
+                    "n": big, "ours": auto_ours(big), "size": size,
+                    "msg": f"{(c.get('contest') or '').strip()} — {big} lineups"
+                           + (f", ~{size:,} entries" if size else "")
+                           + (f" · {len(per)} contests" if len(per) > 1 else "")
+                           + f" ({'showdown' if sd else 'classic'})"}
         if kind == "linestar":
             _ls, rep = read_linestar(text)
             if rep.get("error"):

@@ -175,16 +175,16 @@ INDEX_HTML = r"""<!doctype html>
 </div>
 
 <details id="setwrap">
-  <summary>Settings — pool, late scratches, caps, contest size</summary>
+  <summary>Settings — pool, late scratches, caps</summary>
   <div class="setgrid">
     <div>
       <label>Lineups</label>
-      <input id="n" type="number" value="150" min="1" max="150">
+      <input id="n" type="number" min="1" max="150" placeholder="auto — from the DK file">
       <label>How many are OURS (rest come from their pool)</label>
-      <input id="split" type="number" value="75" min="0" max="150">
-      <div class="hint">Splitting inside one contest is the only way to compare
-        the two without slate luck. Both arms are tagged in the log. On a
-        20-max of 5–7 games it is 15 ours / 5 theirs.</div>
+      <input id="split" type="number" min="0" max="150" placeholder="auto — half, 11 of a 20-max">
+      <div class="hint">Leave both blank: lineups is the contest's entry count in
+        the DK file, ours is half of a 150-max and 11 of a 20-max (15 of 20 on
+        5–7 games). Type a number only to override.</div>
       <label style="margin-top:12px">Neutral build</label>
       <select id="neutral">
         <option value="auto" selected>Auto — the slate decides (on at 5–7 games)</option>
@@ -208,14 +208,13 @@ INDEX_HTML = r"""<!doctype html>
     </div>
     <div>
       <label>Contest size — max entries</label>
-      <input id="cap" type="number" placeholder="e.g. 47000">
+      <input id="cap" type="number" placeholder="auto — from the contest name">
       <label>How full it will get — <span id="fv">100</span>%</label>
       <input id="fillpct" type="range" min="10" max="100" value="100"
              style="width:100%">
-      <div class="hint">Off the DK contest page. Assumed to fill. The $0.50
-        150-max main slate has run 47,000-71,000 entries. NBA classic duplicates
-        (the pool of real scorers is small), so without this number duplication
-        is measured against a field several times too small.</div>
+      <div class="hint">Leave blank: worked out from the contest's prize and fee
+        in the DK file (prize ÷ fee ÷ 0.84 matched DK's real counts on 22 of 23
+        contests). Assumed to fill. Type a number only to override.</div>
       <label>Min projection for a roster spot</label>
       <input id="minproj" type="number" value="2" step="0.5">
     </div>
@@ -359,7 +358,6 @@ function setFmt(f, fromDk){
   // for the projection floor: a main-slate roster spot needs 3.0, showdown
   // 2.0, and sending the showdown value for both meant the page and the
   // command line built different main-slate lineups from the same files.
-  $('#cap').placeholder = f === 'showdown' ? 'e.g. 30000' : 'e.g. 47000';
 }
 
 // The browser must not navigate away when a file is dropped anywhere else.
@@ -670,7 +668,7 @@ $('#go').addEventListener('click', async () => {
       body: JSON.stringify({
         proj: files.proj, field: files.field, dk: files.dk, linestar: files.linestar,
         options: {
-          n: num('#n',150), split: num('#split',75),
+          n: num('#n','auto'), split: num('#split','auto'),
           // Deliberately NOT sending the format. The server works it out from
           // the files and says which signal it used; the page's own guess only
           // decides which settings to show.
@@ -681,7 +679,7 @@ $('#go').addEventListener('click', async () => {
           poolAdds: $('#pooladds').value,
           neutral: $('#neutral').value,
           fileNames: fileNames,
-          fieldCap: num('#cap',0), fillPct: num('#fillpct',100),
+          fieldCap: num('#cap','auto'), fillPct: num('#fillpct',100),
           maxOffPool: $('#offpool').value,
           pool: [...sel.pool].join('\n'), cores: [...sel.core].join('\n'),
           capPlayers: $('#capplayers').value

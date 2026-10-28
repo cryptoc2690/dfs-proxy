@@ -4,6 +4,12 @@ Newest first. One entry per change, in plain words: what changed and why.
 
 ## Oct 28, 2026
 
+**Lineups, ours and contest size fill themselves in from the DK file**
+- Lineups: the biggest contest's entry count in the DK file.
+- Ours: half of a 150-max, 11 of a 20-max (still 15/5 on 5–7 games).
+- Contest size: prize ÷ entry fee ÷ 0.84, read from the contest name and fee in the DK file. Against the real standings, Oct 20–27, it matched within 0.5% on 22 of 23 contests (e.g. $30K mini-MAX $0.50 → 71,343 real). The one miss was opening night's And-One, which didn't fill.
+- Slot 3 says it when the file is dropped, e.g. "NBA $20K mini-MAX — 150 lineups, ~47,585 entries". The boxes are still there to override. The contest size is now in the build log too.
+
 One build from three reviews: `NBA ETR Deep Dive Report 10-28.md`, `NBA Recency Ownership Report 10-28.md` and `NBA Bar Field And Ranges Report 10-28.md`.
 
 **Even ranges for players projected 10+**

@@ -1085,6 +1085,29 @@ check("ETR is gone: no slot, no reader",
       not hasattr(S, "read_etr") and "s_etr" not in open(
           os.path.join(os.path.dirname(app.__file__), "gui.py"), encoding="utf-8").read())
 
+print("\n-- the DK file fills in lineups, ours and contest size --")
+check("contest size from the name: $30K mini-MAX at $0.50 is ~71,300 (real 71,343)",
+      abs(app.contest_size("NBA $30K mini-MAX [150 Entry Max]", "$0.50") - 71343) < 400,
+      str(app.contest_size("NBA $30K mini-MAX [150 Entry Max]", "$0.50")))
+check("contest size: $20K And-One at $1 ~23,800; $50K Four Point Play at $4 ~14,900",
+      abs(app.contest_size("NBA $20K And-One", "$1") - 23781) < 150
+      and abs(app.contest_size("NBA $50K Four Point Play [20 Entry Max]", "$4") - 14863) < 100)
+check("contest size: an unreadable name gives 0, not a guess",
+      app.contest_size("NBA Free Contest", "$0") == 0 and app.contest_size("", "") == 0)
+check("ours: half of 150, 11 of a 20-max", app.auto_ours(150) == 75 and app.auto_ours(20) == 11)
+_ra = app.run_build(PROJ5, FIELD5, DK5, {"n": "auto", "split": "auto", "fieldCap": "auto",
+                                         "sims": 200})
+_sa = [json.loads(l) for l in open(app.LOG_PATH, encoding="utf-8")][-1]["settings"]
+check("blank boxes: lineups, ours and contest size all come from the DK file",
+      not _ra.get("error") and _sa["n"] == 150 and _sa["split"] == 75
+      and abs(_sa["fieldCap"] - 35688) < 200 and _sa["auto"] == {"n": True, "split": True,
+                                                                   "size": True},
+      f"{_sa['n']} {_sa['split']} {_sa['fieldCap']}")
+check("the check line says it", any("from the DK file" in n["text"] for n in _ra["notes"]))
+_d = app._describe("dk", DK5)
+check("slot 3 shows the contest, its lineups and its size",
+      _d["ok"] and _d["n"] == 150 and _d["size"] > 30000 and "lineups" in _d["msg"], _d["msg"])
+
 # The summary and exit MUST stay last — appending a new section after them
 # silently skips it and the suite still reports a clean pass.
 print(f"\n{'=' * 56}\n  {ok} passed, {fail} failed\n{'=' * 56}")

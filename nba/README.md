@@ -114,8 +114,14 @@ Pool (type-ahead or pasted list; cores are no longer on the page — the sheet's
 per-player cap list (`Name 20` = at most 20 lineups, `Name 20%` = a percentage; one per line), a **minimum-lineups** list
 (`Andre Drummond 2` — a number of lineups, not a percentage; the player is added to
 the pool and weighted like a core in construction so the minimum is reachable), late scratches to remove, the
-ownership lean (neutral by default), contest size, and the minimum projection
-for a roster spot.
+ownership lean (neutral by default), and the minimum projection for a roster spot.
+
+**Lineups, ours and contest size are automatic on the page.** Left blank, lineups is
+the biggest contest's entry count in the DK file, ours is half (11 of a 20-max, which
+the build makes 15/5 on 5–7 games), and contest size is the contest's prize ÷ fee ÷ 0.84
+(DK's real counts matched within 0.5% on 22 of 23 contests, Oct 20–27). Slot 3 shows
+them as soon as the DK file is dropped; typing a number overrides. The command line
+still takes `--n`, `--split` and `--field-cap` as typed.
 
 **Rounding out the pool** (classic, on by default, `--no-pool-adds` turns it off).
 It adds three groups of players who aren't on your sheet:
