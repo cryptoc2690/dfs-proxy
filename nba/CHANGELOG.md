@@ -17,8 +17,6 @@ Newest first. One entry per change, in plain words: what changed and why.
 - **Cores typed under the slate rule** now read back as "3 cores read, treated as pool players", not "0 cores".
 - Builds before Oct 28 have no ranges or bar logged, so they grade without them.
 
-**ETR removed** (subscription ended). Its slot, reader and log fields are gone; contest standings is now slot 5. The only measured slate (Oct 20, `NBA Review Report 10-20.md`) found its point projections indistinguishable from Stokastic's and its ownership worse (r 0.915 vs 0.986). Slot 1 still refuses an ETR file by name.
-
 **Cores removed from the page.** Since Oct 24 a core has been a plain pool player, and the sheet's pool already lists them. The build and late swap still read cores from the command line (and the old core floor with neutral set Off), but the page no longer asks.
 
 ## Oct 27, 2026

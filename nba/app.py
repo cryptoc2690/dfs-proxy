@@ -36,7 +36,7 @@ import engine as E
 from dk import (CLASSIC_SIZE, CLASSIC_SLOTS, SALARY_CAP, SD_ROSTER_SIZE,
                 ShowdownLineup, normalize_name, positions_of, slots_for)
 from gui import INDEX_HTML
-from sources import (read_dk_entries, read_field, read_linestar,
+from sources import (read_dk_entries, read_etr, read_field, read_linestar,
                      read_projections, read_sharp, stokastic_problem,
                      read_standings, payout_ladder, _roster_key)
 
@@ -807,6 +807,7 @@ def _log(lineups, rosters, meta):
                                  "cpt_own": p.cpt_own if fmt == "showdown" else None,
                                  "minutes": p.minutes, "starting": p.starting,
                                  "ls_proj": p.ls_proj, "ls_status": p.ls_status,
+                                 "etr_proj": p.etr_proj, "etr_own": p.etr_own,
                                  "core": p.core, "pool": p.in_pool,
                                  "added": p.added or None}
                                 for s, p in zip(meta.get("slots") or [], ps)],
@@ -837,7 +838,8 @@ def _log(lineups, rosters, meta):
 
 
 # ---------------- the build ----------------
-def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=""):
+def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text="",
+              etr_text=""):
     """The whole build. Returns plain dicts, so the CLI and the page share it."""
     o = options or {}
     notes = []
@@ -869,7 +871,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
     names = o.get("fileNames") or {}
     files = {k: {"name": names.get(k), "sha1": _fingerprint(t)}
              for k, t in (("proj", proj_text), ("field", field_text), ("dk", dk_text),
-                          ("linestar", linestar_text))
+                          ("linestar", linestar_text), ("etr", etr_text))
              if (t or "").strip()}
     say("info", f"Projections: {rep['players']} players. Columns — "
                 + ", ".join(f"{k} from “{v}”" for k, v in rep["matched"].items()),
@@ -985,6 +987,24 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                             "projects them: " + ", ".join(
                                 f"{p.name} ({p.proj:.1f})" for p in zeroed[:10])
                             + ". If one is a real scratch, put him in Late scratch.")
+
+    # ETR, if given: projection and ownership LOGGED beside Stokastic's, never
+    # used. Joined by DK id where both sides carry one, so ETR's spellings
+    # ("DeAaron Fox") cannot break it.
+    if (etr_text or "").strip():
+        etr, erep = read_etr(etr_text)
+        if erep.get("error"):
+            say("warn", f"ETR file: {erep['error']}")
+        else:
+            got = 0
+            for p in players:
+                rec = etr.get(p.dk_id) or etr.get(normalize_name(p.name))
+                if rec:
+                    p.etr_proj, p.etr_own = rec["proj"], rec["own"]
+                    got += 1
+            say("info", f"ETR: projection and ownership for {got} players logged "
+                        f"beside Stokastic's. Not used in the build.", "check",
+                "ETR (logged only)")
 
     # Neutral by default on classic (user's call, Oct 24): see engine.neutral_plan.
     # The sharp's "cores" are the plays he expects the field on in cash games, not
@@ -1989,6 +2009,11 @@ def _describe(kind, text):
                                             "with the DK standings instead"}
             return {"ok": True, "msg": f"{rep['players']} players, Vegas for "
                                        f"{len(rep['teams'])} teams (logged only)"}
+        if kind == "etr":
+            _e, rep = read_etr(text)
+            if rep.get("error"):
+                return {"ok": False, "msg": f"not an ETR export ({rep['error']})"}
+            return {"ok": True, "msg": f"ETR — {rep['players']} players (logged only)"}
         if kind == "standings":
             rows, rep = read_standings(text)
             if rep.get("error"):
@@ -2057,7 +2082,8 @@ class Handler(BaseHTTPRequestHandler):
                                                             "projections CSV first."}))
             result = run_build(p.get("proj") or "", p.get("field") or "",
                                p.get("dk") or "", p.get("options") or {},
-                               linestar_text=p.get("linestar") or "")
+                               linestar_text=p.get("linestar") or "",
+                               etr_text=p.get("etr") or "")
             self._send(400 if result.get("error") else 200, json.dumps(result))
         except Exception as exc:                             # noqa: BLE001
             self._send(500, json.dumps({"error": str(exc)}))
@@ -2103,6 +2129,7 @@ def main(argv=None):
     ap.add_argument("--remove", help="late scratches, comma-separated names")
     ap.add_argument("--caps", help="per-player caps, 'Name 20; Name 40'")
     ap.add_argument("--floors", help="minimum lineups per player, 'Name 2; Name 3'")
+    ap.add_argument("--etr", help="ETR projections export — logged only")
     ap.add_argument("--pool-adds", choices=("auto", "on", "off"), default="auto",
                     help="round out the pool: auto = on at 5+ games")
     ap.add_argument("--no-pool-adds", action="store_true", help="same as --pool-adds off")
@@ -2200,13 +2227,13 @@ def main(argv=None):
         "neutral": "off" if a.no_neutral else a.neutral,
         "fileNames": {k: os.path.basename(v) for k, v in (
             ("proj", a.proj), ("field", a.field), ("dk", a.dk),
-            ("linestar", a.linestar)) if v},
+            ("linestar", a.linestar), ("etr", a.etr)) if v},
         "n": a.n, "split": a.split, "sims": a.sims,
         "seed": a.seed, "format": a.format, "ownLean": a.own_lean,
         "playerCap": a.player_cap, "captainCap": a.captain_cap,
         "maxLeftover": a.max_leftover, "minProj": a.min_proj,
         "maxOffPool": a.max_off_pool, "fieldCap": a.field_cap, "fillPct": a.fill_pct},
-        linestar_text=_read(a.linestar))
+        linestar_text=_read(a.linestar), etr_text=_read(a.etr))
     for note in res.get("notes", []):
         print(f"  [{note['type']}] {note['text']}")
     if res.get("error"):

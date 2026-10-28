@@ -29,7 +29,8 @@ python3 nba/app.py --proj proj.csv --field lineups.csv --dk DKEntries.csv \
 | 2 | Stokastic **lineups** export | Strongly recommended — it is the opponent field |
 | 3 | Your **DK entries** export | Yes, for an uploadable file |
 | 4 | **LineStar** export | Optional — Vegas, its projection and starting status, logged only |
-| 5 | DK **contest standings** | After the slate, to grade the build |
+| 5 | **ETR** export | Optional — its projection and ownership, logged only |
+| 6 | DK **contest standings** | After the slate, to grade the build |
 
 **Slot 1 takes Stokastic's projections and nothing else.** A file with no Std Dev
 column, or with ETR's columns (FPTS, ProjOwn, DKSlateID), is refused by name and
@@ -128,7 +129,7 @@ is better when there is time.
 ## Late swap (mid-slate, classic)
 
 Drop a **fresh Stokastic projections** pull in slot 1, your **current DK entries
-export** in slot 3 and the **live contest standings** in slot 5, then press **Late
+export** in slot 3 and the **live contest standings** in slot 6, then press **Late
 swap** (or `python3 nba/app.py --lateswap --proj … --dk … --standings …`).
 
 The WNBA tool's rules, NBA's files (`nba/lateswap.py` has the reasoning):
@@ -182,7 +183,7 @@ python3 nba/app.py --grade contest-standings-123.csv \
   --prize-pool 15000 --first-prize 2000 --paid-from 3000 --paid-to 9900
 ```
 
-or drop the standings into slot 5. It finds the build you actually entered (the
+or drop the standings into slot 6. It finds the build you actually entered (the
 one whose rosters match what DK holds for your Entry IDs), then reports ranks,
 cashes, real duplication, results by arm and by shape, and every player you
 used: projected vs actual points, projected vs real ownership, your exposure.

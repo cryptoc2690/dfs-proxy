@@ -170,7 +170,9 @@ INDEX_HTML = r"""<!doctype html>
     <span class="fstate">needed to upload — drop or click</span></div>
   <div class="fslot" id="s_ls"><b>4 · LineStar <span style="opacity:.6">(optional)</span></b>
     <span class="fstate">Vegas + a second projection, logged only</span></div>
-  <div class="fslot" id="s_st"><b>5 · DK contest standings <span style="opacity:.6">(live or final)</span></b>
+  <div class="fslot" id="s_etr"><b>5 · ETR <span style="opacity:.6">(optional)</span></b>
+    <span class="fstate">projection + ownership, logged only</span></div>
+  <div class="fslot" id="s_st"><b>6 · DK contest standings <span style="opacity:.6">(live or final)</span></b>
     <span class="fstate">grade last night's build — drop or click</span></div>
 </div>
 
@@ -316,13 +318,14 @@ INDEX_HTML = r"""<!doctype html>
     <p>4, LineStar, is optional: its Vegas lines, its projection and its
       starting status are logged beside Stokastic's and not used. It also warns
       if LineStar has someone at 0 whom Stokastic still projects.</p>
-    <p>Slot 1 refuses any file that is not Stokastic's projections export.</p>
+    <p>5, ETR, is optional and logged only — never slot 1. Slot 1 refuses any
+      file that is not Stokastic's projections export.</p>
     <p><b>Late swap</b> (mid-slate): put a FRESH Stokastic pull in 1, your CURRENT DK
-      entries export in 3 and the live contest standings in 5, then press Late swap.
+      entries export in 3 and the live contest standings in 6, then press Late swap.
       It moves a lineup on news (+8 simulated points) or without news only when
       the gain is big (+14), never touches a locked player, and shows each change
       so you can untick it.</p>
-    <p>5 is for the morning after: drop DK's contest standings and grade the
+    <p>6 is for the morning after: drop DK's contest standings and grade the
       build you logged against the real field.</p>
   </div>
   <div id="out"></div>
@@ -330,7 +333,7 @@ INDEX_HTML = r"""<!doctype html>
 
 <script>
 const $ = s => document.querySelector(s);
-const files = {proj:null, field:null, dk:null, linestar:null, standings:null};
+const files = {proj:null, field:null, dk:null, linestar:null, etr:null, standings:null};
 const fileNames = {};
 let result = null, roster = [], fmt = 'showdown', fmtFromDk = false;
 // Which teams each file covers, and the slots themselves, so the projections
@@ -442,6 +445,7 @@ slot('proj', $('#s_proj'));
 slot('field', $('#s_field'));
 slot('dk', $('#s_dk'));
 slot('linestar', $('#s_ls'));
+slot('etr', $('#s_etr'));
 slot('standings', $('#s_st'));
 
 // Projections and DK entries must be the same night. Either can be the stale
@@ -669,6 +673,7 @@ $('#go').addEventListener('click', async () => {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
         proj: files.proj, field: files.field, dk: files.dk, linestar: files.linestar,
+        etr: files.etr,
         options: {
           n: num('#n',150), split: num('#split',75),
           // Deliberately NOT sending the format. The server works it out from
