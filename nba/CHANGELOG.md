@@ -4,6 +4,28 @@ Newest first. One entry per change, in plain words: what changed and why.
 
 ## Oct 28, 2026
 
+One build from three reviews: `NBA ETR Deep Dive Report 10-28.md`, `NBA Recency Ownership Report 10-28.md` and `NBA Bar Field And Ranges Report 10-28.md`.
+
+**Even ranges for players projected 10+**
+- The simulation drew every player from a right-skewed range (big nights stretch further than bad ones). Real nights don't look like that: across 811 players who played, Oct 20–27, they reached further down and slightly less far up.
+- 14% landed under their simulated 10th percentile, against 10%. With an even (normal) range it's 10.9%, and the fix held on 8 of 9 nights left out of the fit. Studs went from 21% to 15%.
+- Players projected under 10 keep the skewed range.
+- Rebuilds: top 0.1% finishes 34 → 39 in the 150-max (a reseed gave 32). Who the build plays didn't change.
+- Not done: lowering every projection (it needed twice the measured gap and broke the top of the range) and a "short night" chance (it pushed the bar up and did nothing).
+- Still true: cheap chalk and players on the losing side of a 20+ blowout land low far too often (cheap chalk 27% → 15%). Their whole range sits 4–7 points high, which a range change can't fix.
+
+**The bar's field leans to Stokastic's projected ownership where the two differ by 5+ points** (classic)
+- The bar is built from Stokastic's lineups file, which runs about 5 points light on players coming off good games. Stokastic's projected ownership is closer on them.
+- Where a player's share of the file is 5+ points off his projected ownership, the file is re-weighted so his share matches it. Everyone else is left alone. Example: Achiuwa, Oct 27, 35% of the file → 48% (real 52.5%).
+- The page lists who was moved, under "All build details".
+- Rebuilds: top 1% finishes 266 → 296 in the 150-max, mostly on 2–4 games (reseed 264), worst-10% slightly better. Matching everyone fully or halfway cost the 2–4 game tail, so only the 5+ gap version is in.
+- Together with the even ranges: top 0.1% 41 against 34, top 1% 301 against 266.
+
+**Each player's share of Stokastic's lineups file is logged** in the build log and `nba_slates.jsonl` (`file_share`). The Recency review needed it and it existed only inside the build.
+
+**ETR removed** (subscription ended). Its slot, reader and log fields are gone; contest standings is now slot 5. Slot 1 still refuses an ETR file by name.
+- Why, over seven nights: its projections were slightly better than Stokastic's (0.2 points a player, mostly bench players), its ownership was two to three times worse at the chalk end every night, and building on it alone lost at the top end on 5+ game slates. A 50/50 blend was inside the noise.
+
 **20,000 simulations per build** (was 4,000)
 - 4,000 came over from NFL and WNBA and was never tested on NBA.
 - Oct 27, same candidate lineups, two different random draws: the 75 lineups chosen matched 37 of 75 at 4,000, 46 at 10,000 and 52 at 20,000. Player exposures were stable at all three, so this sharpens which exact lineups are picked; it doesn't change who is played.

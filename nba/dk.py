@@ -79,8 +79,7 @@ class Player:
     start: str = ""          # ISO tip time from the DK file, "" if unknown
     ls_proj: object = None   # LineStar's projection — logged, never used
     ls_status: str = ""      # LineStar StartingStatus — logged, never used
-    etr_proj: object = None  # ETR's projection — logged, never used
-    etr_own: object = None   # ETR's ownership — logged, never used
+    file_share: object = None  # % of Stokastic's lineups file holding him — logged
     # The classic slots this player may fill. Set from DK's own Roster Position
     # column when the entries export is loaded — that is the authority on
     # eligibility — and from the projections' position otherwise.

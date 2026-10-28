@@ -100,6 +100,12 @@ def _calibrate(row, mean_t, sd_t):
 # alone there (NBA Range Of Outcomes Report 10-23).
 LOW_PROJ = 10.0
 LOW_PROJ_SD_FLOOR = 6.0
+# At 10+ projected the draw is a normal, not the gamma. On 811 players who
+# played across Oct 20-27, real nights reached 1.35 SD below the projection and
+# 1.29 above; the gamma reached 1.17 down and 1.34 up, so 14% landed under its
+# p10 against 10%. The normal takes that to 10.9% and held on 8 of 9 nights
+# left out of the fit (NBA Bar Field And Ranges Report 10-28, Part B). Under
+# 10 the gamma stays: that night is mostly minutes that may not come.
 
 
 def player_sd(p):
@@ -121,7 +127,10 @@ def simulate(players, sims=4000, seed=0):
             out[p.dk_id] = [0.0] * sims
             continue
         sd = player_sd(p)
-        row = [_gamma_draw(p.proj, sd, rng) for _ in range(sims)]
+        if p.proj >= LOW_PROJ:
+            row = [max(0.0, rng.gauss(p.proj, sd)) for _ in range(sims)]
+        else:
+            row = [_gamma_draw(p.proj, sd, rng) for _ in range(sims)]
         if p.game in game_f:
             row = [x * m for x, m in zip(row, game_f[p.game])]
         out[p.dk_id] = _calibrate(row, p.proj, sd)
@@ -156,19 +165,88 @@ BAR_SAMPLE = 2000
 BAR_WEIGHTED = True
 
 
-def field_bar(field, mat, sims, sample=None, seed=0, quantile=None, weighted=None):
+def field_shares(field, weights=None):
+    """-> {dk_id: % of the field's weight holding him}. Weighted 1 + Dupes, the
+    way the bar samples, unless `weights` (aligned with `field`) is given."""
+    w = weights or [1.0 + lu.metrics.get("vdupes", 0.0) for lu in field]
+    tot = sum(w) or 1.0
+    out = {}
+    for lu, x in zip(field, w):
+        for i in {p.dk_id for p in lu.players}:
+            out[i] = out.get(i, 0.0) + x
+    return {i: 100.0 * v / tot for i, v in out.items()}
+
+
+# The lineups file runs light on players coming off good games (about 5 points
+# on hot players); Stokastic's own projected ownership is closer on them. Where
+# the two differ by BAR_OWN_GAP points or more, the bar's sample is raked so
+# that player's share lands on the projected number; everyone else is left to
+# the file. Only the gap version held up: the full and half matches cost the
+# 2-4 game tail (NBA Bar Field And Ranges Report 10-28, Part A). Classic only.
+BAR_OWN_GAP = 5.0
+RAKE_LIMITS = (0.2, 5.0)
+RAKE_ROUNDS = 60
+RAKE_TOL = 0.2
+
+
+def field_weights(field, players, gap=BAR_OWN_GAP):
+    """-> (weights aligned with `field`, [(player, file %, projected %, raked %)]).
+    The 1 + Dupes weight is kept underneath; a player's cumulative factor on the
+    lineups that hold him (and on those that don't) stays inside RAKE_LIMITS."""
+    base = [1.0 + lu.metrics.get("vdupes", 0.0) for lu in field]
+    have = field_shares(field, base)
+    targets = {p.dk_id: (p, have.get(p.dk_id, 0.0), p.ownership) for p in players
+               if p.proj > 0 and not p.removed and 0 < p.ownership < 100
+               and 0 < have.get(p.dk_id, 0.0) < 100
+               and abs(p.ownership - have.get(p.dk_id, 0.0)) >= gap}
+    if not targets:
+        return base, []
+    rows = {i: [k for k, lu in enumerate(field)
+                if any(p.dk_id == i for p in lu.players)] for i in targets}
+    lo, hi = RAKE_LIMITS
+    f_in = {i: 1.0 for i in targets}
+    f_out = {i: 1.0 for i in targets}
+    w = list(base)
+    for _ in range(RAKE_ROUNDS):
+        worst = 0.0
+        for i, (_p, _f, t) in targets.items():
+            tot = sum(w)
+            s_in = sum(w[k] for k in rows[i])
+            s = 100.0 * s_in / tot
+            worst = max(worst, abs(s - t))
+            if s <= 0 or s >= 100:
+                continue
+            a = min(hi, max(lo, f_in[i] * t / s)) / f_in[i]
+            b = min(hi, max(lo, f_out[i] * (100 - t) / (100 - s))) / f_out[i]
+            f_in[i] *= a
+            f_out[i] *= b
+            if b != 1.0:
+                w = [x * b for x in w]
+            for k in rows[i]:
+                w[k] *= a / b
+        if worst <= RAKE_TOL:
+            break
+    got = field_shares(field, w)
+    return w, [(p, f, t, got.get(i, 0.0)) for i, (p, f, t) in targets.items()]
+
+
+def field_bar(field, mat, sims, sample=None, seed=0, quantile=None, weighted=None,
+              weights=None):
     """-> ([bar per sim], lineups sampled). `field` is vendor lineups (either
-    format). Scored in chunks and merged per sim, so the sample x sims matrix
-    never exists at once."""
+    format); `weights`, aligned with it, replaces the 1 + Dupes sampling weight.
+    Scored in chunks and merged per sim, so the sample x sims matrix never exists
+    at once."""
     rng = random.Random(seed + 11)
-    usable = [lu for lu in field if all(p.dk_id in mat for p in lu.players)]
+    w_all = weights or [1.0 + lu.metrics.get("vdupes", 0.0) for lu in field]
+    pairs = [(lu, x) for lu, x in zip(field, w_all)
+             if all(p.dk_id in mat for p in lu.players)]
+    usable = [lu for lu, _x in pairs]
     if not usable:
         return None, 0
     sample = sample or BAR_SAMPLE
     q = BAR_QUANTILE if quantile is None else quantile
     if BAR_WEIGHTED if weighted is None else weighted:
-        picks = rng.choices(usable, weights=[1.0 + lu.metrics.get("vdupes", 0.0)
-                                             for lu in usable], k=sample)
+        picks = rng.choices(usable, weights=[x for _lu, x in pairs], k=sample)
     else:
         picks = usable if len(usable) <= sample else rng.sample(usable, sample)
     keep = max(1, int(round((1.0 - q) * len(picks))))

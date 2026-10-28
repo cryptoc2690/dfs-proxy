@@ -558,22 +558,6 @@ check("the log records which files ran, by name and fingerprint",
       and len(_lf["files"]["proj"]["sha1"]) == 12 and _lf["files"]["field"]["sha1"])
 check("the log records the minimums", _lf["settings"]["floorPlayers"] == {"DEN Player10": 2})
 
-print("\n-- ETR slot: logged, never used --")
-rE = app.run_build(PROJ5, FIELD5, DK5, {"n": 40, "sims": 400, "seed": 0, "fieldCap": 47000},
-                   etr_text=ETR5)
-check("ETR: the build is IDENTICAL with and without it",
-      [l["players"] for l in rE["lineups"]] == [l["players"] for l in lus])
-_le = [json.loads(l) for l in open(app.LOG_PATH, encoding="utf-8")][-1]
-_jk = next((p for x in [_le] for p in x["players"] if p["name"] == "Nikola Jokić"), None)
-check("ETR: every player joined (by DK id), even one ETR spells differently",
-      any("for 120 players" in n["text"] for n in rE["notes"]),
-      next((n["text"] for n in rE["notes"] if n["text"].startswith("ETR")), ""))
-check("ETR: projection and ownership are in the log",
-      any(p.get("etr_proj") is not None and p.get("etr_own") is not None
-          for p in _le["players"]))
-check("ETR: the ETR file is accepted in its own slot",
-      app._describe("etr", ETR5)["ok"] and "logged only" in app._describe("etr", ETR5)["msg"])
-
 print("\n-- late swap --")
 import lateswap as LS                        # noqa: E402
 LS.SWAP_LOG_PATH = os.path.join(_TMP, "nba_swaps.jsonl")
@@ -1048,6 +1032,58 @@ _va = E.vendor_arm(_vf, 5)
 check("Stokastic's half gets the salary-left factor too",
       all(abs(l.metrics["dupes"] - round(E.expected_copies(4.0, 1.0)
                                          * E.leftover_factor(l), 2)) < 0.02 for l in _va))
+
+
+print("\n-- bar field and ranges (Bar Field And Ranges Report 10-28) --")
+from dataclasses import replace as _rep  # noqa: E402
+from dk import Player as _PP  # noqa: E402
+
+
+def _skew(row):
+    m = sum(row) / len(row)
+    sd = (sum((x - m) ** 2 for x in row) / len(row)) ** 0.5
+    return sum(((x - m) / sd) ** 3 for x in row) / len(row)
+
+
+_pz = [_PP("Big", "b1", "C", "AAA", "BBB", 8000, 30.0, 8.0, sd=8.0),
+       _PP("Small", "s1", "PG", "AAA", "BBB", 3500, 5.0, 1.0, sd=6.0)]
+_mz = E.simulate(_pz, sims=20000, seed=3)
+check("ranges: 10+ projected draws are even (normal), not right-skewed",
+      abs(_skew(_mz["b1"])) < 0.1, f"skew {_skew(_mz['b1']):.2f}")
+check("ranges: the mean and SD still land on Stokastic's numbers",
+      abs(sum(_mz["b1"]) / 20000 - 30.0) < 0.05
+      and abs((sum((x - 30.0) ** 2 for x in _mz["b1"]) / 20000) ** 0.5 - 8.0) < 0.1)
+check("ranges: under 10 projected keeps the right-skewed gamma",
+      _skew(_mz["s1"]) > 1.0, f"skew {_skew(_mz['s1']):.2f}")
+
+_fl, _ = app._field_lineups(fe, "classic")
+_sh = E.field_shares(_fl)
+_pb = [_rep(p, ownership=_sh.get(p.dk_id, 0.0)) for p in pl]
+_wb, _rk = E.field_weights(_fl, _pb)
+check("bar field: nobody 5+ points off, nothing is raked",
+      _rk == [] and _wb == [1.0 + l.metrics.get("vdupes", 0.0) for l in _fl])
+_mid_id = next(i for i, v in sorted(_sh.items(), key=lambda kv: -kv[1]) if 15 < v < 40)
+_near_id = next(i for i, v in _sh.items() if i != _mid_id and 10 < v < 60)
+_pc = [_rep(p, ownership=_sh[p.dk_id] + 12.0) if p.dk_id == _mid_id
+       else _rep(p, ownership=_sh.get(p.dk_id, 0.0) + 3.0) if p.dk_id == _near_id
+       else _rep(p, ownership=_sh.get(p.dk_id, 0.0)) for p in pl]
+_wc, _rk = E.field_weights(_fl, _pc)
+_after = E.field_shares(_fl, _wc)
+check("bar field: a player 12 points light in the file is raked to his projected ownership",
+      len(_rk) == 1 and _rk[0][0].dk_id == _mid_id
+      and abs(_after[_mid_id] - (_sh[_mid_id] + 12.0)) < 0.5,
+      f"{_sh[_mid_id]:.1f} -> {_after[_mid_id]:.1f}, target {_sh[_mid_id] + 12:.1f}")
+check("bar field: a player only 3 points off is not a target",
+      all(r[0].dk_id != _near_id for r in _rk))
+_rb = app.run_build(PROJ5, FIELD5, DK5, {"n": 10, "sims": 200})
+_lb = [json.loads(l) for l in open(app.LOG_PATH, encoding="utf-8")][-1]
+_sb = [json.loads(l) for l in open(app._side_log("nba_slates.jsonl"), encoding="utf-8")][-1]
+check("each player's share of Stokastic's lineups file is logged (build and slate logs)",
+      all(p.get("file_share") is not None for p in _lb["players"])
+      and all("file_share" in p for p in _sb["players"]))
+check("ETR is gone: no slot, no reader",
+      not hasattr(S, "read_etr") and "s_etr" not in open(
+          os.path.join(os.path.dirname(app.__file__), "gui.py"), encoding="utf-8").read())
 
 # The summary and exit MUST stay last — appending a new section after them
 # silently skips it and the suite still reports a clean pass.

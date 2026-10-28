@@ -618,39 +618,6 @@ def read_linestar(text):
                  "is_results": scored >= 5, "matched": cols, "loose": loose}
 
 
-ETR_COLUMNS = {
-    "name": ["dkname", "player", "name"], "proj": ["fpts", "projection"],
-    "own": ["projown", "ownership"], "ceil": ["ceiling"], "dk_id": ["dkslateid"],
-}
-
-
-def read_etr(text):
-    """ETR's export, LOGGED ONLY. -> ({dk id or norm name: {...}}, report)
-
-    Keyed by DK id where the file carries one (DKSlateID is DK's player id), so
-    ETR's spellings ("DeAaron Fox", "Ron Holland II") cannot break the join.
-    """
-    rows = list(csv.DictReader(io.StringIO((text or "").lstrip("\ufeff"))))
-    if not rows:
-        return {}, {"error": "empty file"}
-    cols, _m, _l = _match_columns(rows[0].keys(), ETR_COLUMNS)
-    if not {"name", "proj", "own"} <= set(cols):
-        return {}, {"error": "no player / FPTS / ProjOwn columns — not an ETR export"}
-    out = {}
-    for r in rows:
-        name = (r.get(cols["name"]) or "").strip()
-        if not name:
-            continue
-        rec = {"name": name, "proj": _f(r.get(cols["proj"])),
-               "own": _f(r.get(cols["own"])),
-               "ceil": _f(r.get(cols["ceil"])) if "ceil" in cols else None}
-        pid = (r.get(cols["dk_id"]) or "").strip() if "dk_id" in cols else ""
-        if pid:
-            out[pid] = rec
-        out[normalize_name(name)] = rec
-    return out, {"players": len(rows)}
-
-
 # --- 7. The sharp's sheet -------------------------------------------------
 SHARP_SKIP = {"pg", "sg", "sf", "pf", "c", "g", "f", "util", "cpt", "pos",
               "position", "team", "salary", "sal", "name", "player", "core",
