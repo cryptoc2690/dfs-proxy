@@ -375,6 +375,12 @@ TIER_SALARY = 600
 TIER_MATES = 10
 SMALL_DEPTH = 1000
 
+# Simulated nights per build. 4,000 came over from NFL and WNBA untested. Oct 27,
+# same candidates, two draws: the chosen 75 matched 37 of 75 at 4,000, 46 at
+# 10,000 and 52 at 20,000 (player exposures were stable at all three). 20,000
+# costs about 25 seconds a build.
+SIMS = 20000
+
 
 def _stud_adds(players, n, skip=()):
     """-> [(player, minimum lineups)]: the top STUD_N by projection off the sheet,
@@ -1090,7 +1096,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                     f"confirmed from a real file, so check this against it.", "check",
             f"ownership {tot_own:.0f}% + {cpt_tot:.0f}% captain")
 
-    sims = _i(o.get("sims"), 4000)
+    sims = _i(o.get("sims"), SIMS)
     seed = _i(o.get("seed"), 0)
     n = max(1, _i(o.get("n"), 150))
     split = o.get("split")
@@ -2022,7 +2028,7 @@ def main(argv=None):
     ap.add_argument("--split", type=int, default=None,
                     help="entries from OUR builder; the rest come from Stokastic's "
                          "re-ranked pool. Omitted = all ours, 0 = all theirs.")
-    ap.add_argument("--sims", type=int, default=4000)
+    ap.add_argument("--sims", type=int, default=SIMS)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--format", choices=("showdown", "classic"), default=None)
     ap.add_argument("--own-lean", type=float, default=None)

@@ -2,6 +2,13 @@
 
 Newest first. One entry per change, in plain words: what changed and why.
 
+## Oct 28, 2026
+
+**20,000 simulations per build** (was 4,000)
+- 4,000 came over from NFL and WNBA and was never tested on NBA.
+- Oct 27, same candidate lineups, two different random draws: the 75 lineups chosen matched 37 of 75 at 4,000, 46 at 10,000 and 52 at 20,000. Player exposures were stable at all three, so this sharpens which exact lineups are picked; it doesn't change who is played.
+- Costs about 25 seconds a build. Late swap keeps its own count.
+
 ## Oct 27, 2026
 
 From `NBA Thorough Review Report 10-27.md` (8 slates, 23 contests, about 7,000 rebuilds on the same seeds).
