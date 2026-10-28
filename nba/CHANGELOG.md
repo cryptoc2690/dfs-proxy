@@ -17,6 +17,8 @@ Newest first. One entry per change, in plain words: what changed and why.
 - **Cores typed under the slate rule** now read back as "3 cores read, treated as pool players", not "0 cores".
 - Builds before Oct 28 have no ranges or bar logged, so they grade without them.
 
+**Cores removed from the page.** Since Oct 24 a core has been a plain pool player, and the sheet's pool already lists them. The build and late swap still read cores from the command line (and the old core floor with neutral set Off), but the page no longer asks.
+
 ## Oct 27, 2026
 
 From `NBA Thorough Review Report 10-27.md` (8 slates, 23 contests, about 7,000 rebuilds on the same seeds).

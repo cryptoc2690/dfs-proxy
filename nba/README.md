@@ -107,7 +107,7 @@ The check line says what was applied, with the arm split as built: `neutral: 6 g
 
 ## Settings
 
-Pool and cores (type-ahead or pasted lists), players allowed off the pool, a
+Pool (type-ahead or pasted list; cores are no longer on the page — the sheet's pool already lists them), players allowed off the pool, a
 per-player cap list (`Name 20` = at most 20 lineups, `Name 20%` = a percentage; one per line), a **minimum-lineups** list
 (`Andre Drummond 2` — a number of lineups, not a percentage; the player is added to
 the pool and weighted like a core in construction so the minimum is reachable), late scratches to remove, the

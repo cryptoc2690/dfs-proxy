@@ -177,7 +177,7 @@ INDEX_HTML = r"""<!doctype html>
 </div>
 
 <details id="setwrap">
-  <summary>Settings — pool &amp; cores, late scratches, caps, contest size</summary>
+  <summary>Settings — pool, late scratches, caps, contest size</summary>
   <div class="setgrid">
     <div>
       <label>Lineups</label>
@@ -191,7 +191,7 @@ INDEX_HTML = r"""<!doctype html>
       <select id="neutral">
         <option value="auto" selected>Auto — the slate decides (on at 5–7 games)</option>
         <option value="on">On</option>
-        <option value="off">Off — the old build, cores keep a floor</option>
+        <option value="off">Off — the old build</option>
       </select>
       <div class="hint">Leave it on Auto. Each lineup's main game rotated across the
         slate, the two teams in it held 50/50, and no team in too many lineups.
@@ -257,17 +257,6 @@ INDEX_HTML = r"""<!doctype html>
         a shortlist instead of a filter, and the build says so.</div>
     </div>
     <div>
-      <label>Sharp's cores</label>
-      <div class="pick">
-        <input id="corein" type="text" autocomplete="off" disabled
-               placeholder="drop the projections file first">
-        <div class="menu" id="coremenu"></div>
-      </div>
-      <div class="chips" id="corechips"></div>
-      <div class="picknote">Type a few letters, click or press Enter — or paste a
-        comma-separated list. Cores count as in-pool automatically. Click a chip
-        to remove it. A core is just a pool player — no guaranteed
-        share — unless Neutral build is set to Off by hand.</div>
       <label>Late scratch — remove players</label>
       <textarea id="remove" rows="2" spellcheck="false"
                 placeholder="Stephon Castle"></textarea>
@@ -478,7 +467,7 @@ function crossCheck(){
 function clearRoster(){
   roster = [];
   $('#slate').textContent = '';
-  ['poolin','corein'].forEach(id => {
+  ['poolin'].forEach(id => {
     const el = $('#'+id);
     el.disabled = true;
     el.placeholder = 'drop tonight\'s Stokastic projections first';
@@ -486,6 +475,8 @@ function clearRoster(){
 }
 
 // ---- type-ahead pickers, enabled once the slate is known ----
+// Cores are gone from the page (Oct 28: in the build they are plain pool
+// players, and the sheet's pool already lists them). sel.core stays empty.
 const sel = {pool:new Set(), core:new Set()};
 
 async function loadRoster(text){
@@ -502,10 +493,10 @@ async function loadRoster(text){
     ['pool','core'].forEach(k => [...sel[k]].forEach(n => {
       if(!roster.some(p => p.name === n)) sel[k].delete(n);
     }));
-    if(pickers.pool){ pickers.pool.draw(); pickers.core.draw(); }
+    if(pickers.pool) pickers.pool.draw();
     if(d.format) setFmt(d.format, false);
     $('#slate').textContent = slateLabel(d.teams||[]);
-    ['poolin','corein'].forEach(id => {
+    ['poolin'].forEach(id => {
       const el = $('#'+id);
       el.disabled = false;
       el.placeholder = 'type a name — ' + roster.length + ' players';
@@ -644,7 +635,6 @@ function picker(kind, inputId, menuId, chipsId){
 }
 const pickers = {};
 pickers.pool = picker('pool', 'poolin', 'poolmenu', 'poolchips');
-pickers.core = picker('core', 'corein', 'coremenu', 'corechips');
 
 function slateLabel(teams){
   if(fmt === 'showdown') return teams.join(' @ ') + ' · showdown';
@@ -929,7 +919,7 @@ function render(d){
   const nOff = (d.exposure && d.exposure.players || []).filter(p => p.off).length;
   if(nOff) h += '<div class="picknote" style="margin:8px 0"><span class="offsheet">'
     + 'name</span> = not on your sheet (' + nOff + ' of them below)'
-    + ' · <span class="coremark">name</span> = a core.</div>';
+    + '</div>';
   h += '<div class="tblwrap"><table><thead><tr>'
      + '<th>#</th><th>arm</th><th>shape</th><th>roster, in DK slot order</th>'
      + '<th class="num">salary</th><th class="num">proj</th>'
