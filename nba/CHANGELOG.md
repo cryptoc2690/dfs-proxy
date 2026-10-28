@@ -9,6 +9,14 @@ Newest first. One entry per change, in plain words: what changed and why.
 - Oct 27, same candidate lineups, two different random draws: the 75 lineups chosen matched 37 of 75 at 4,000, 46 at 10,000 and 52 at 20,000. Player exposures were stable at all three, so this sharpens which exact lineups are picked; it doesn't change who is played.
 - Costs about 25 seconds a build. Late swap keeps its own count.
 
+**Logging for the next reviews** (`NBA Review Report 10-28.md`, items 2–4)
+- **Each player's range against what he scored.** Every build logs each player's simulated p10 / median / p90, with salary, ownership and the game's spread (from LineStar). Grading writes it against the actual score, real ownership, favorite or underdog, starter and minutes to `nba/logs/nba_player_ranges.jsonl`.
+  - Why: cheap chalk has landed under its p10 31% of the time, against 10% expected, and blowout games are rare. This is the record that will show whether it's a pattern.
+- **The bar against the real lines.** Every build logs the bar it ranked against. Grading writes it next to the contest's real top-1%, top-0.1% and first-place scores in `nba/logs/nba_bar_lines.jsonl`.
+  - Why: the bar ran about +21 over the real top-1% line on 2–4 games and −22 under it on 11.
+- **Cores typed under the slate rule** now read back as "3 cores read, treated as pool players", not "0 cores".
+- Builds before Oct 28 have no ranges or bar logged, so they grade without them.
+
 ## Oct 27, 2026
 
 From `NBA Thorough Review Report 10-27.md` (8 slates, 23 contests, about 7,000 rebuilds on the same seeds).

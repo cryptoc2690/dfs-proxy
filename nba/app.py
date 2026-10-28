@@ -1032,6 +1032,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
     pool_names = read_sharp(o.get("pool") or "")
     core_names = read_sharp(o.get("cores") or "")
     typed = pool_names | core_names
+    typed_cores = set(core_names)
     if fmt == "classic" and str(o.get("neutral") or "auto").lower() != "off":
         if pool_names:
             pool_names |= core_names
@@ -1046,9 +1047,12 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
     if missed:
         say("warn", f"{len(missed)} name(s) on your sheet match no player on this slate "
                     f"and were ignored: " + ", ".join(missed[:12]))
-    if pool_names or core_names:
-        say("info", f"Sharp's sheet: {sum(1 for p in players if p.core)} cores, "
-                    f"{sum(1 for p in players if p.in_pool)} in pool.", "hide")
+    if pool_names or core_names or typed_cores:
+        as_pool = len(typed_cores & known) if typed_cores and not core_names else 0
+        say("info", f"Sharp's sheet: "
+                    + (f"{as_pool} cores read, treated as pool players"
+                       if as_pool else f"{sum(1 for p in players if p.core)} cores")
+                    + f", {sum(1 for p in players if p.in_pool)} in pool.", "hide")
 
     # Late scratches — the WNBA removal.
     removed, rem_missing = apply_removals(players, read_sharp(o.get("remove") or ""))
@@ -1474,7 +1478,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                 "ownLean": _f(o.get("ownLean"), E.OWN_LEAN),
                 "playerCap": caps["player_cap"], "captainCap": caps.get("captain_cap"),
                 "minProj": min_proj, "maxLeftover": max_leftover,
-                "maxOffPool": off_pool, "cores": sorted(core_names), "neutral": plan,
+                "maxOffPool": off_pool, "cores": sorted(core_names),
+                "coresTyped": sorted(typed_cores), "neutral": plan,
                 "slateRules": {"games": len(games), "neutral": bool(plan),
                                "adds": use_adds, "auto": rules},
                 "arms": {"ours": sum(1 for lu in chosen if lu.source != "vendor"),
@@ -1500,7 +1505,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                               "expect_entries": expect or None,
                               "vendor_field_modelled": modelled,
                               "dupe_scale": round(dupe_scale, 3),
-                              "vegas": vegas}}
+                              "vegas": vegas,
+                              "bar": _bar_summary(bar)}}
     dk_csv, log_lus, log_rosters = None, chosen, rostered_all
     if dk and dk.get("entries"):
         if len(slots) != len(rostered_all[0]):
@@ -1545,7 +1551,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
     meta["overweights"] = overweights
     meta["zeroes"] = [z["name"] for z in zeroes]
     err = _log(log_lus, log_rosters, meta)
-    _log_slate(players, meta)
+    _log_slate(players, meta, mat, sims, vegas)
     if err:
         say("warn", err + " Grading reads that log, so this night will not be gradable.")
 
@@ -1632,13 +1638,42 @@ def _side_log(name, log_path=None):
     return os.path.join(os.path.dirname(log_path or LOG_PATH), name)
 
 
-def _log_slate(players, meta):
+def _bar_summary(bar):
+    if not bar:
+        return None
+    b = sorted(bar)
+    q = lambda f: round(b[min(len(b) - 1, int(f * len(b)))], 1)
+    return {"p10": q(0.10), "median": q(0.50), "p90": q(0.90)}
+
+
+def _range(row):
+    """-> (p10, median, p90) of one player's simulated points."""
+    s = sorted(row)
+    q = lambda f: round(s[min(len(s) - 1, int(f * len(s)))], 1)
+    return q(0.10), q(0.50), q(0.90)
+
+
+def _log_slate(players, meta, mat=None, sims=0, vegas=None):
+    """The slate's projected players, each with the simulated range the build
+    used and the game's spread. Grading sets these against what happened
+    (Review Report 10-28: cheap chalk lands under its simulated p10 31% of the
+    time against 10%; this is the record that settles it)."""
     try:
+        rows = []
+        for p in players:
+            if p.proj <= 0:
+                continue
+            r = {"name": p.name, "team": p.team, "proj": round(p.proj, 2),
+                 "sd": round(E.player_sd(p), 2), "starting": p.starting,
+                 "salary": p.salary, "own": round(p.ownership, 1),
+                 "minutes": p.minutes,
+                 "spread": ((vegas or {}).get(p.team) or {}).get("spread")}
+            if mat and p.dk_id in mat:
+                r["p10"], r["p50"], r["p90"] = _range(mat[p.dk_id])
+            rows.append(r)
         rec = {"ts": datetime.now().astimezone().isoformat(timespec="seconds"),
                "slate": meta.get("slate"), "games": meta.get("games"),
-               "players": [{"name": p.name, "team": p.team, "proj": round(p.proj, 2),
-                            "sd": round(E.player_sd(p), 2), "starting": p.starting}
-                           for p in players if p.proj > 0]}
+               "sims": sims, "players": rows}
         with open(_side_log("nba_slates.jsonl"), "a", encoding="utf-8") as fh:
             fh.write(json.dumps(rec) + "\n")
     except OSError:
@@ -1687,6 +1722,81 @@ def _team_residuals(slate, games, actual, log_path=None):
     except (OSError, ValueError):
         pass
     return out
+
+
+def _append_once(name, key_of, rows, log_path=None):
+    path = _side_log(name, log_path)
+    try:
+        seen = set()
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as fh:
+                seen = {key_of(json.loads(l)) for l in fh if l.strip()}
+        with open(path, "a", encoding="utf-8") as fh:
+            for r in rows:
+                if key_of(r) not in seen:
+                    fh.write(json.dumps(r) + "\n")
+    except (OSError, ValueError):
+        pass
+
+
+def _range_record(slate, games, actual, real_own, log_path=None):
+    """Every projected player on the graded slate: the simulated range the build
+    used against what he scored, with salary, ownership (projected and real),
+    spread, favorite or underdog, starter and minutes. Appended once per slate
+    to nba_player_ranges.jsonl. -> {"players", "under_p10", "over_p90"}"""
+    rec = None
+    try:
+        with open(_side_log("nba_slates.jsonl", log_path), encoding="utf-8") as fh:
+            for line in fh:
+                r = json.loads(line)
+                if r.get("slate") == slate and sorted(r.get("games") or []) == sorted(games or []):
+                    rec = r
+    except (OSError, ValueError):
+        return None
+    if not rec:
+        return None
+    out = []
+    for p in rec["players"]:
+        k = normalize_name(p["name"])
+        if k not in actual or p.get("p10") is None:
+            continue
+        sp = p.get("spread")
+        out.append({"slate": slate, "games": sorted(games or []), "name": p["name"],
+                    "team": p["team"], "salary": p.get("salary"), "proj": p["proj"],
+                    "p10": p["p10"], "p50": p["p50"], "p90": p["p90"],
+                    "actual": actual[k], "under_p10": actual[k] < p["p10"],
+                    "over_p90": actual[k] > p["p90"],
+                    "own_proj": p.get("own"),
+                    "own_real": round(real_own[k], 1) if k in real_own else None,
+                    "spread": sp, "side": (None if sp is None else
+                                           "favorite" if sp < 0 else
+                                           "underdog" if sp > 0 else "even"),
+                    "starting": p.get("starting"), "minutes": p.get("minutes")})
+    _append_once("nba_player_ranges.jsonl",
+                 lambda r: (r.get("slate"), tuple(r.get("games") or []), r.get("name")),
+                 out, log_path)
+    n = len(out) or 1
+    return {"players": len(out),
+            "under_p10": round(100.0 * sum(r["under_p10"] for r in out) / n, 1),
+            "over_p90": round(100.0 * sum(r["over_p90"] for r in out) / n, 1)}
+
+
+def _line_record(pick, spts, log_path=None):
+    """The bar the build used against the contest's real top-1% and top-0.1%
+    lines (Review Report 10-28: the bar ran about +21 over the real top-1% line
+    on 2-4 games and -22 under it on 11). Appended to nba_bar_lines.jsonl."""
+    q = lambda f: spts[min(len(spts) - 1, int(f * len(spts)))]
+    r0 = pick[0]
+    bar = (r0.get("contest_state") or {}).get("bar")
+    row = {"slate": r0.get("slate"), "games": sorted(r0.get("games") or []),
+           "build_id": r0.get("build_id"), "entries": len(pick), "field": len(spts),
+           "bar": bar, "top1": q(0.99), "top01": q(0.999), "first": spts[-1]}
+    if bar:
+        row["bar_minus_top1"] = round(bar["median"] - row["top1"], 1)
+    _append_once("nba_bar_lines.jsonl",
+                 lambda r: (r.get("build_id"), r.get("field"), r.get("first")),
+                 [row], log_path)
+    return row
 
 
 def grade(standings_text, slate=None, ladder=None, log_path=None):
@@ -1826,6 +1936,9 @@ def grade(standings_text, slate=None, ladder=None, log_path=None):
         "by_shape": {k: stat(v) for k, v in sorted(shapes.items())},
         "players": players,
         "teams": _team_residuals(pick[0].get("slate"), pick[0].get("games"), actual, log_path),
+        "ranges": _range_record(pick[0].get("slate"), pick[0].get("games"), actual,
+                                srep["ownership"], log_path),
+        "lines": _line_record(pick, spts, log_path),
         "top": graded[:5],
         "unscored": sorted(unknown)[:8],
     }
@@ -2069,6 +2182,15 @@ def main(argv=None):
                 print(f"    {str(k):<18} n={v['n']:<4} best #{v['best_rank']:,}  "
                       f"median {v['median_pct']:.0f}%  copies {v['copies_median']}/"
                       f"{v['copies_max']}{money}")
+        ln = g.get("lines") or {}
+        if ln:
+            print(f"  lines: top 1% {ln['top1']}, top 0.1% {ln['top01']}, first {ln['first']}"
+                  + (f"; the build's bar {ln['bar']['median']} "
+                     f"({ln['bar_minus_top1']:+} against the top 1%)" if ln.get("bar") else ""))
+        rg = g.get("ranges") or {}
+        if rg:
+            print(f"  ranges: {rg['players']} players, {rg['under_p10']}% under their "
+                  f"simulated p10 (10% expected), {rg['over_p90']}% over their p90")
         print("  players (exposure · proj → actual · proj own → real own):")
         for p in g["players"][:20]:
             print(f"    {p['name'][:22]:<23}{p['exposure']:>5.0f}%  "

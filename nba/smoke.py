@@ -979,6 +979,15 @@ _pc20 = _co.Counter(p["name"] for l in _r20["lineups"] for p in l["players"])
 _cap20 = [c for c in _r20["info"]["checks"] if "tier cap" in c]
 check("20-max: the tier cap is on at 5 games and no player passes 10 of 20",
       _cap20 and max(_pc20.values()) <= 10, f"{_cap20} {_pc20.most_common(2)}")
+check("grading logs each player's simulated range against what he scored",
+      (g.get("ranges") or {}).get("players", 0) > 50
+      and os.path.exists(os.path.join(_TMP, "nba_player_ranges.jsonl")), str(g.get("ranges")))
+check("grading logs the build's bar against the real top-1% and top-0.1% lines",
+      (g.get("lines") or {}).get("top1") is not None
+      and os.path.exists(os.path.join(_TMP, "nba_bar_lines.jsonl")), str(g.get("lines")))
+_rcore = build(cores="Nikola Jokić")
+check("cores typed under the slate rule are read back, not '0 cores'",
+      any("1 cores read, treated as pool players" in n["text"] for n in _rcore["notes"]))
 check("grading tracks each team's starter and bench residuals",
       isinstance(g.get("teams"), list), str(g.get("teams"))[:120])
 
