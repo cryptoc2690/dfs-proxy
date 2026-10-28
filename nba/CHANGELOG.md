@@ -4,6 +4,8 @@ Newest first. One entry per change, in plain words: what changed and why.
 
 ## Oct 28, 2026
 
+**Settings page tidied.** The settings that run themselves (lineups, ours, contest size, neutral build, round-out, ownership lean, how full, minimum projection) sit under a closed "Advanced" fold. The main settings are now just the pool, players off the pool, late scratches, caps and minimums.
+
 **Lineups, ours and contest size fill themselves in from the DK file**
 - Lineups: the biggest contest's entry count in the DK file.
 - Ours: half of a 150-max, 11 of a 20-max (still 15/5 on 5–7 games).

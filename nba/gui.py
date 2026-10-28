@@ -50,6 +50,9 @@ INDEX_HTML = r"""<!doctype html>
   .setgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
     gap:20px;padding:6px 22px 20px}
   .setgrid label:first-child{margin-top:0}
+  #advwrap{grid-column:1/-1;border-top:1px solid var(--line);padding-top:10px}
+  #advwrap>summary{cursor:pointer;color:var(--muted);font-size:12.5px}
+  #advwrap>.setgrid{padding:12px 0 0}
   .hint{font-size:11.5px;color:var(--muted);margin-top:5px;line-height:1.45}
 
   main{padding:18px 22px;max-width:1180px}
@@ -178,47 +181,6 @@ INDEX_HTML = r"""<!doctype html>
   <summary>Settings — pool, late scratches, caps</summary>
   <div class="setgrid">
     <div>
-      <label>Lineups</label>
-      <input id="n" type="number" min="1" max="150" placeholder="auto — from the DK file">
-      <label>How many are OURS (rest come from their pool)</label>
-      <input id="split" type="number" min="0" max="150" placeholder="auto — half, 11 of a 20-max">
-      <div class="hint">Leave both blank: lineups is the contest's entry count in
-        the DK file, ours is half of a 150-max and 11 of a 20-max (15 of 20 on
-        5–7 games). Type a number only to override.</div>
-      <label style="margin-top:12px">Neutral build</label>
-      <select id="neutral">
-        <option value="auto" selected>Auto — the slate decides (on at 5–7 games)</option>
-        <option value="on">On</option>
-        <option value="off">Off — the old build</option>
-      </select>
-      <div class="hint">Leave it on Auto. Each lineup's main game rotated across the
-        slate, the two teams in it held 50/50, and no team in too many lineups.
-        It paid on 5–7 games and cost on 2–4 and 8+ (Thorough Review 10-27), so
-        the tool switches it from the game count. Slot 1 says what it chose.</div>
-    </div>
-    <div>
-      <label>Ownership lean — <span id="lv">+0.00</span>
-        <span style="color:var(--muted)">(&minus; fade · + consensus)</span></label>
-      <input id="lean" type="range" min="-100" max="100" value="0" style="width:100%">
-      <div class="hint">Neutral by default, on three sports' evidence: WNBA
-        picked 0 on all 23 held-out folds and fading cost 11-14 cashes; NFL
-        returned the same money at +0.35, 0 and -0.35; and the old NBA chats saw
-        Stokastic's leverage number fade chalk that won. The lever still works —
-        move it if your read says so.</div>
-    </div>
-    <div>
-      <label>Contest size — max entries</label>
-      <input id="cap" type="number" placeholder="auto — from the contest name">
-      <label>How full it will get — <span id="fv">100</span>%</label>
-      <input id="fillpct" type="range" min="10" max="100" value="100"
-             style="width:100%">
-      <div class="hint">Leave blank: worked out from the contest's prize and fee
-        in the DK file (prize ÷ fee ÷ 0.84 matched DK's real counts on 22 of 23
-        contests). Assumed to fill. Type a number only to override.</div>
-      <label>Min projection for a roster spot</label>
-      <input id="minproj" type="number" value="2" step="0.5">
-    </div>
-    <div>
       <label>Sharp's pool</label>
       <div class="pick">
         <input id="poolin" type="text" autocomplete="off" disabled
@@ -230,18 +192,6 @@ INDEX_HTML = r"""<!doctype html>
       <div class="picknote">Paste the whole sheet at once — names separated by
         commas, or one per line. Anything that matches nobody is named back to
         you rather than dropped quietly.</div>
-      <label style="margin-top:12px">Round out the pool</label>
-      <select id="pooladds">
-        <option value="auto" selected>Auto — the slate decides (on at 5+ games)</option>
-        <option value="on">On</option>
-        <option value="off">Off</option>
-      </select>
-      <div class="picknote">Leave it on Auto: the adds hurt on 2–4 games and
-        helped on 5+. Adds the 5 best points-per-$1,000 players off your sheet at
-        $4,500 or less, and 5 more from $4,600 to $7,500, all projected 14+. They become
-        legal, not forced. Plus the 3 highest-projected studs above $7,500 under 10%
-        owned, each in at least 2x his projected ownership. Cap a name at 0 to drop
-        him. The build names them all.</div>
       <label>Players from outside the pool, per lineup</label>
       <select id="offpool">
         <option value="0" selected>0 — build only from the pool</option>
@@ -280,6 +230,66 @@ INDEX_HTML = r"""<!doctype html>
         added to the pool if he is not on it. The build says if a minimum could
         not be met.</div>
     </div>
+    <details id="advwrap">
+      <summary>Advanced — automatic, leave alone unless overriding</summary>
+      <div class="setgrid">
+    <div>
+      <label>Lineups</label>
+      <input id="n" type="number" min="1" max="150" placeholder="auto — from the DK file">
+      <label>How many are OURS (rest come from their pool)</label>
+      <input id="split" type="number" min="0" max="150" placeholder="auto — half, 11 of a 20-max">
+      <div class="hint">Leave both blank: lineups is the contest's entry count in
+        the DK file, ours is half of a 150-max and 11 of a 20-max (15 of 20 on
+        5–7 games). Type a number only to override.</div>
+      <label style="margin-top:12px">Neutral build</label>
+      <select id="neutral">
+        <option value="auto" selected>Auto — the slate decides (on at 5–7 games)</option>
+        <option value="on">On</option>
+        <option value="off">Off — the old build</option>
+      </select>
+      <div class="hint">Leave it on Auto. Each lineup's main game rotated across the
+        slate, the two teams in it held 50/50, and no team in too many lineups.
+        It paid on 5–7 games and cost on 2–4 and 8+ (Thorough Review 10-27), so
+        the tool switches it from the game count. Slot 1 says what it chose.</div>
+        </div>
+        <div>
+      <label>Ownership lean — <span id="lv">+0.00</span>
+        <span style="color:var(--muted)">(&minus; fade · + consensus)</span></label>
+      <input id="lean" type="range" min="-100" max="100" value="0" style="width:100%">
+      <div class="hint">Neutral by default, on three sports' evidence: WNBA
+        picked 0 on all 23 held-out folds and fading cost 11-14 cashes; NFL
+        returned the same money at +0.35, 0 and -0.35; and the old NBA chats saw
+        Stokastic's leverage number fade chalk that won. The lever still works —
+        move it if your read says so.</div>
+        </div>
+        <div>
+      <label>Contest size — max entries</label>
+      <input id="cap" type="number" placeholder="auto — from the contest name">
+      <label>How full it will get — <span id="fv">100</span>%</label>
+      <input id="fillpct" type="range" min="10" max="100" value="100"
+             style="width:100%">
+      <div class="hint">Leave blank: worked out from the contest's prize and fee
+        in the DK file (prize ÷ fee ÷ 0.84 matched DK's real counts on 22 of 23
+        contests). Assumed to fill. Type a number only to override.</div>
+      <label>Min projection for a roster spot</label>
+      <input id="minproj" type="number" value="2" step="0.5">
+        </div>
+        <div>
+          <label>Round out the pool</label>
+          <select id="pooladds">
+            <option value="auto" selected>Auto — the slate decides (on at 5+ games)</option>
+            <option value="on">On</option>
+            <option value="off">Off</option>
+          </select>
+          <div class="picknote">Leave it on Auto: the adds hurt on 2–4 games and
+            helped on 5+. Adds the 5 best points-per-$1,000 players off your sheet at
+            $4,500 or less, and 5 more from $4,600 to $7,500, all projected 14+. They become
+            legal, not forced. Plus the 3 highest-projected studs above $7,500 under 10%
+            owned, each in at least 2x his projected ownership. Cap a name at 0 to drop
+            him. The build names them all.</div>
+        </div>
+      </div>
+    </details>
   </div>
 </details>
 
