@@ -151,13 +151,12 @@ The WNBA tool's rules, NBA's files (`nba/lateswap.py` has the reasoning):
   into the lineup) is listed but reopens nothing. A move under 8% is a role
   change, not news. With no build to compare against, a held bench player with a
   cheaper starter at his position projecting 1.5x also counts.
-- **Every open slot is open.** For each lineup it builds the best lineup it can from
-  all open slots on the fresh projections — nothing in the lineup is kept for its
-  own sake.
-- **Bars** (WNBA's x1.4): if the lineup holds a player with bad news, swap when the
-  best lineup beats what is entered by **+8** simulated points. **No-news swaps
-  (+14) are off by default.** Across five nights they went 4 for 15, −198 points.
-  Tick "allow no-news swaps" to turn them back on.
+- **A news swap takes the news player out.** It may change one other open player
+  too, and it needs **+8** simulated points. Any other move is a **no-news swap**,
+  even in a lineup holding the news player: it needs **+14**, and only happens with
+  "allow no-news swaps" ticked (off by default; across five nights they went 4
+  for 15, −198 points). Oct 28: Capela's bench news let 25 lineups keep Capela
+  and sell Curry at +8.
 - **Neutral across the set:** a swap that adds a team already at the team limit,
   or tips its main game's sides past 50/50, is skipped for the next-best roster
   that fits. A ruled-out player is still always replaced.
@@ -172,8 +171,7 @@ The WNBA tool's rules, NBA's files (`nba/lateswap.py` has the reasoning):
   and the field alike — instead of reading a live score as a final.
 - DK's standings are the final word on who has tipped; an entries file that
   disagrees is left alone and named.
-- The narrow alternative (move only the news player plus one spare) is logged
-  beside every decision in `nba/logs/nba_swaps.jsonl`, so each night grades both.
+- Every decision is logged in `nba/logs/nba_swaps.jsonl` with its gain.
 
 The page lists every lineup with its live score, minutes left, projected final and
 why it moved or held; untick any swap and the download keeps that entry as entered.

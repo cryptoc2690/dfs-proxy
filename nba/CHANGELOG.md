@@ -2,6 +2,14 @@
 
 Newest first. One entry per change, in plain words: what changed and why.
 
+## Oct 29, 2026
+
+**Late swap: a news swap has to take the news player out.**
+- Before, bad news on one player opened the whole lineup at the +8 bar, so the tool could keep the news player and swap anyone else. Oct 28: Capela moved to the bench, and 25 of 27 swaps kept Capela and sold Curry, the night's top scorer, for LaMelo and Amen Thompson.
+- Now a news swap must take the news player out (plus one other player at most) and clear +8. Every other move is a no-news swap: +14, and only with "allow no-news swaps" ticked. That applies even in a lineup holding the news player.
+- A ruled-out player is still always replaced, now with one spare at most unless nothing that narrow is legal.
+- Oct 28 replayed: no Capela swap clears +8. With the box ticked, 4 lineups move on +14; unticked, none do.
+
 ## Oct 28, 2026
 
 **Settings page tidied.** The settings that run themselves (lineups, ours, contest size, neutral build, round-out, ownership lean, how full, minimum projection) sit under a closed "Advanced" fold. The main settings are now just the pool, players off the pool, late scratches, caps and minimums.

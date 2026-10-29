@@ -669,8 +669,15 @@ check("swap: every lineup holding the ruled-out player is moved",
       _holding and all(not s["keep"] and _out_nm in s["out"] for s in _holding),
       f"{sum(1 for s in _holding if not s['keep'])} of {len(_holding)}")
 check("swap: news moves are marked as news", all(s["forced"] for s in _holding if not s["keep"]))
-check("swap: news reopens the whole lineup — moves beat what was entered by +8",
+check("swap: news moves beat what was entered by +8",
       all(s["gain"] >= LS.SWAP_NEWS_GAIN for s in s1["swaps"] if not s["keep"] and s["forced"]))
+_nn = lambda s: {n.split(":")[0] for n in s["news"]}
+check("swap: a news move takes the news player out, plus one spare at most",
+      all(_nn(s) & set(s["out"]) and len(set(s["out"]) - _nn(s)) <= 1
+          for s in s1["swaps"] if not s["keep"] and s["forced"]))
+check("swap: a move that keeps the news player is a no-news move (+14)",
+      all(not s["forced"] and s["gain"] >= LS.SWAP_DISC_GAIN for s in s1["swaps"]
+          if not s["keep"] and s["news"] and not _nn(s) & set(s["out"])))
 check("swap: a lineup with no news moves only on +14",
       all(s["gain"] >= LS.SWAP_DISC_GAIN for s in s1["swaps"] if not s["keep"] and not s["forced"]))
 check("swap: the narrow news-only choice is still logged beside it",

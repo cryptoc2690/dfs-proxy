@@ -28,10 +28,9 @@ What is NBA's own here, and unmeasured:
 Default policy is FREE (the user's call for the start of the season, when
 projections move a lot, and again on Oct 21): for every lineup, build the best
 lineup from ALL its open slots on the fresh projections, and swap if it beats
-what is entered by +8 when the lineup holds a player with news, or by +14 when it
-does not. News changes the slate, so the whole lineup is open, not just the news
-player's slot. The narrow news-only policy (the news player plus one spare) is
-evaluated on every run and logged beside it, so each night grades both.
+what is entered by +8 when the move takes a bad-news player out (plus one spare at
+most). Every other move, even in a lineup holding a news player, is a no-news
+move: +14, and only with no-news swaps ticked (off by default). Oct 29.
 """
 
 from __future__ import annotations
@@ -637,13 +636,10 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
         scored = sorted(((swap_score(r, aggr), r) for r in rosters.values()),
                         key=lambda t: -t[0])
 
-        # News in this lineup reopens the WHOLE lineup at the low bar: the
-        # user's call (Oct 21) — news changes the slate, so the structure built
-        # before it may not be the best one now, and nothing in it is sacred.
-        # Without news, the best lineup from the open slots must beat what is
-        # there by the high bar. Either way it is the best lineup that wins, not
-        # the smallest change.
-        lineup_news = bool(news_here)
+        # A news move takes the news player out (plus one spare) and needs +8.
+        # A move that keeps him is a no-news move: +14, only with the box ticked
+        # (the user, Oct 29: "a swap without swapping Capela, which is the news,
+        # is a no news late swap").
         # A player ruled out is a guaranteed 0. He is swapped EVERY time, with no
         # bar at all (the user, Oct 21: "why would I willingly take a 0?"): the
         # best lineup without him wins, whatever its gain, salary left or pool.
@@ -657,6 +653,12 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
             if dead_here:
                 alive = [(sc, r) for sc, r in scored
                          if not ({normalize_name(p.name) for p in r} & dead_here)]
+                # The ruled-out player plus one spare, same as any news move;
+                # a wider rebuild only if nothing that narrow is legal.
+                narrow = [(sc, r) for sc, r in alive
+                          if len(here - {normalize_name(p.name) for p in r}
+                                 - set(bad_news)) <= 1]
+                alive = narrow or alive
                 in_pool = [(sc, r) for sc, r in alive
                            if not sheet or all(n in pool_names for n in
                                                {normalize_name(p.name) for p in r} - here)]
@@ -672,18 +674,19 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
                 if names == here:
                     continue
                 out, inn = here - names, names - here
-                forced = any(n in bad_news for n in out | inn)
-                if news_only:
-                    out_news = [n for n in out if n in bad_news]
-                    if not out_news or len([n for n in out if n not in bad_news]) > 1:
-                        continue
-                    need = SWAP_NEWS_GAIN
-                else:
-                    forced = lineup_news
-                    # No-news swaps are off by default (Follow-up Report 10-25:
-                    # 15 made across five nights, 4 gained, -198 points).
-                    need = SWAP_NEWS_GAIN if lineup_news else (
-                        float("inf") if winning or not allow_free else SWAP_DISC_GAIN)
+                # A news move takes the news player OUT, plus one spare at most.
+                # Anything else is a no-news move, whatever news sits in the
+                # lineup (Oct 28: Capela's bench news reopened 27 lineups; 25 kept
+                # Capela and sold Curry, the night's top scorer, at the +8 bar).
+                out_news = [n for n in out if n in bad_news]
+                news_move = bool(out_news) and len(out) - len(out_news) <= 1
+                if news_only and not news_move:
+                    continue
+                forced = news_move
+                # No-news swaps are off by default (Follow-up Report 10-25:
+                # 15 made across five nights, 4 gained, -198 points).
+                need = SWAP_NEWS_GAIN if news_move else (
+                    float("inf") if winning or not allow_free else SWAP_DISC_GAIN)
                 gain = sc - cur_score
                 if gain < need:
                     continue
