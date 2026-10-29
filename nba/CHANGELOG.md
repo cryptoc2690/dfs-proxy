@@ -5,10 +5,12 @@ Newest first. One entry per change, in plain words: what changed and why.
 ## Oct 29, 2026
 
 **Late swap: a news swap has to take the news player out.**
-- Before, bad news on one player opened the whole lineup at the +8 bar, so the tool could keep the news player and swap anyone else. Oct 28: Capela moved to the bench, and 25 of 27 swaps kept Capela and sold Curry, the night's top scorer, for LaMelo and Amen Thompson.
-- Now a news swap must take the news player out (plus one other player at most) and clear +8. Every other move is a no-news swap: +14, and only with "allow no-news swaps" ticked. That applies even in a lineup holding the news player.
-- A ruled-out player is still always replaced, now with one spare at most unless nothing that narrow is legal.
-- Oct 28 replayed: no Capela swap clears +8. With the box ticked, 4 lineups move on +14; unticked, none do.
+- Before, bad news on one player opened the whole lineup at the +8 bar, so the tool could keep the news player and swap anyone else. Oct 28: Capela moved to the bench, and 25 of 27 swaps kept Capela and sold Curry, the night's top scorer.
+- Now a news swap must take the news player out and clear +8; the rest of the open lineup can change with him. Every other move is a no-news swap at +14, even in a lineup holding the news player.
+- No-news swaps are back ON by default (the user's call). Good news (bench to starting, projection up) comes in through them at +14. A lineup projecting top 1% still never takes one.
+- A ruled-out player is still always replaced.
+- New news: a starter who stays a starter but loses 25% and 5+ of his minutes.
+- Oct 28 replayed: 27 swaps → 9 (5 take Capela out at +8, 4 no-news at +14). Curry sold 25 times → 3.
 
 ## Oct 28, 2026
 

@@ -672,9 +672,8 @@ check("swap: news moves are marked as news", all(s["forced"] for s in _holding i
 check("swap: news moves beat what was entered by +8",
       all(s["gain"] >= LS.SWAP_NEWS_GAIN for s in s1["swaps"] if not s["keep"] and s["forced"]))
 _nn = lambda s: {n.split(":")[0] for n in s["news"]}
-check("swap: a news move takes the news player out, plus one spare at most",
-      all(_nn(s) & set(s["out"]) and len(set(s["out"]) - _nn(s)) <= 1
-          for s in s1["swaps"] if not s["keep"] and s["forced"]))
+check("swap: a news move takes the news player out",
+      all(_nn(s) & set(s["out"]) for s in s1["swaps"] if not s["keep"] and s["forced"]))
 check("swap: a move that keeps the news player is a no-news move (+14)",
       all(not s["forced"] and s["gain"] >= LS.SWAP_DISC_GAIN for s in s1["swaps"]
           if not s["keep"] and s["news"] and not _nn(s) & set(s["out"])))
@@ -947,17 +946,24 @@ _bm = _st("Moved Guy", 5000, 27.0, 5.0, starting=False); _bm.minutes = 28.0
 _mv = []
 _nw = LS.news_names([_bm], {"moved guy": {"proj": 28.0, "starting": True, "minutes": 29.0}},
                     set(), {"moved guy"}, _mv)
+_mc = _st("Minutes Guy", 6000, 30.0, 5.0, starting=True); _mc.minutes = 24.0
+check("swap news: a starter's minutes cut 25%+ and 5+ is news",
+      "minutes guy" in LS.news_names([_mc], {"minutes guy": {"proj": 31.0, "starting": True,
+                                                            "minutes": 33.0}}, set(), {"minutes guy"}))
+check("swap news: a small minutes dip is not",
+      not LS.news_names([_mc], {"minutes guy": {"proj": 31.0, "starting": True,
+                                                "minutes": 27.0}}, set(), {"minutes guy"}))
 check("swap: a move to the bench under 8% is a role change, not news",
       not _nw and _mv and _mv[0]["counted"] is False, str(_mv))
 _bm.proj = 25.0
 _nw = LS.news_names([_bm], {"moved guy": {"proj": 28.0, "starting": True, "minutes": 29.0}},
                     set(), {"moved guy"}, [])
 check("swap: a move to the bench with the projection down 8%+ is news", "moved guy" in _nw)
-check("swap: no-news swaps are off by default",
-      s0["noNewsSwaps"] is False and all(x.get("news") for x in s0["swaps"] if not x["keep"]))
-_s6 = LS.run_late_swap(PROJ5, _mid, _stand, {"noNewsSwaps": "on"}, log_path=LS_LOG)
-check("swap: no-news swaps can be switched back on", _s6["noNewsSwaps"] is True
-      and _s6["bars"]["noNews"] == LS.SWAP_DISC_GAIN)
+check("swap: no-news swaps are on by default, at +14",
+      s0["noNewsSwaps"] is True and s0["bars"]["noNews"] == LS.SWAP_DISC_GAIN)
+_s6 = LS.run_late_swap(PROJ5, _mid, _stand, {"noNewsSwaps": "off"}, log_path=LS_LOG)
+check("swap: no-news swaps can be switched off",
+      _s6["noNewsSwaps"] is False and all(x["forced"] for x in _s6["swaps"] if not x["keep"]))
 check("swap: each run saves its input files for replay",
       any(os.path.exists(os.path.join(_TMP, "swap_inputs", d, "dk.csv"))
           for d in os.listdir(os.path.join(_TMP, "swap_inputs"))))

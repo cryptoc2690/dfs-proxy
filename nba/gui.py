@@ -300,8 +300,8 @@ INDEX_HTML = r"""<!doctype html>
     <button id="ls" class="alt" disabled title="needs a fresh Stokastic pull (1), your current DK entries export (3), and ideally the live standings (6)">&#8635; Late swap</button>
     <button id="lsdl" class="alt" style="display:none">&#11015; Download late-swap file</button>
     <label style="display:inline-flex;gap:6px;align-items:center;margin:0 4px;font-size:12.5px;color:var(--muted)"
-           title="Swaps with no news behind them, at +14. Off by default: across five nights they went 4 for 15, -198 points.">
-      <input type="checkbox" id="nonews" style="width:auto"> allow no-news swaps</label>
+           title="Any swap that keeps the news player, or a lineup with no news: needs +14. A top-1% lineup never takes one.">
+      <input type="checkbox" id="nonews" style="width:auto" checked> allow no-news swaps</label>
     <span id="status" style="color:var(--muted);font-size:13px"></span>
   </div>
   <div class="row" id="graderow" style="display:none">
