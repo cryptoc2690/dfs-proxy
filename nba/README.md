@@ -152,14 +152,17 @@ The WNBA tool's rules, NBA's files (`nba/lateswap.py` has the reasoning):
   change, not news. With no build to compare against, a held bench player with a
   cheaper starter at his position projecting 1.5x also counts.
 - **A ruled-out player is always swapped out**, whatever the gain.
-- **A news swap takes the news player out** and needs **+8** simulated points; the
-  rest of the open lineup may change with him. Any other move is a **no-news
-  swap**, even in a lineup holding the news player: it needs **+14**. Good news
+- **A news swap takes the news player out** and needs **+8** simulated points.
+  Any other move is a **no-news swap**, even in a lineup holding the news player:
+  it needs **+14**. Good news
   (moved into the lineup, projection up) comes in this way. No-news swaps are on
   by default; untick "allow no-news swaps" to stop them. Oct 28: Capela's bench
   news let 25 lineups keep Capela and sell Curry at +8.
 - **Minutes cut:** a starter who stays a starter is news when his minutes drop
   25% and 5+.
+- **No swap moves more than two players**, news or not. A ruled-out player still
+  always goes, with at most one other player unless nothing that small is legal. Every saved swap night: two-player swaps +129 over 19, four-plus
+  player rebuilds −163 over 14.
 - **Neutral across the set:** a swap that adds a team already at the team limit,
   or tips its main game's sides past 50/50, is skipped for the next-best roster
   that fits. A ruled-out player is still always replaced.

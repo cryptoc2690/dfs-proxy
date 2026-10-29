@@ -4,6 +4,14 @@ Newest first. One entry per change, in plain words: what changed and why.
 
 ## Oct 29, 2026
 
+**Late swap: no swap moves more than two players.** From `NBA Late Swap Parameters Note 10-29.md`, every saved swap night replayed and graded on what the players scored:
+- Two-player swaps: 19 made, 13 gained, +129. Four or more: 14 made, 4 gained, −163, including all six of Oct 28's big losses (rebuilds around Capela).
+- Capping every swap at two: −64 → +118 over the saved nights. Oct 28 goes −366 → −24; Oct 26 gives back some (+249 → +104).
+- Applies to news and no-news swaps. A ruled-out player is still always swapped out.
+- Not changed: the +8 / +14 bars, the team limit, the aggression from rank, 1,500 sims. Watch: bench-move news (Allen +90, Holland −36, Capela −366) — decide after three more swap nights.
+- Oct 28 replayed: 2 swaps (both no-news, +14), Curry kept in every lineup.
+
+
 **Late swap: a news swap has to take the news player out.**
 - Before, bad news on one player opened the whole lineup at the +8 bar, so the tool could keep the news player and swap anyone else. Oct 28: Capela moved to the bench, and 25 of 27 swaps kept Capela and sold Curry, the night's top scorer.
 - Now a news swap must take the news player out and clear +8; the rest of the open lineup can change with him. Every other move is a no-news swap at +14, even in a lineup holding the news player.

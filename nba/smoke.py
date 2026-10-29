@@ -674,6 +674,9 @@ check("swap: news moves beat what was entered by +8",
 _nn = lambda s: {n.split(":")[0] for n in s["news"]}
 check("swap: a news move takes the news player out",
       all(_nn(s) & set(s["out"]) for s in s1["swaps"] if not s["keep"] and s["forced"]))
+check("swap: no swap moves more than two players",
+      all(len(s["out"]) <= LS.SWAP_MAX_MOVED for s in s1["swaps"] + s0["swaps"] if not s["keep"]),
+      str(max((len(s["out"]) for s in s1["swaps"] + s0["swaps"] if not s["keep"]), default=0)))
 check("swap: a move that keeps the news player is a no-news move (+14)",
       all(not s["forced"] and s["gain"] >= LS.SWAP_DISC_GAIN for s in s1["swaps"]
           if not s["keep"] and s["news"] and not _nn(s) & set(s["out"])))

@@ -28,9 +28,10 @@ What is NBA's own here, and unmeasured:
 Default policy is FREE (the user's call for the start of the season, when
 projections move a lot, and again on Oct 21): for every lineup, build the best
 lineup from ALL its open slots on the fresh projections, and swap if it beats
-what is entered by +8 when the move takes a bad-news player out (anything else
-open may change with him). Every other move, even in a lineup holding a news player, is a no-news
-move: +14 (on by default since Oct 29; a top-1% lineup never takes one).
+what is entered by +8 when the move takes a bad-news player out. Every other
+move, even in a lineup holding a news player, is a no-news move: +14 (on by
+default since Oct 29; a top-1% lineup never takes one). No swap moves more than
+two players (Oct 29).
 """
 
 from __future__ import annotations
@@ -60,6 +61,12 @@ SWAP_WIN_PCT = 1.0
 SWAP_CASH_PCT = 20.0
 SWAP_CHASE_PCT = 70.0
 SWAP_EARLY_PENALTY = 0.5    # tiny tiebreak against filling from the next game to tip
+# At most this many players leave a lineup in one swap, news or not. Late Swap
+# Parameters Note 10-29, every saved swap night: 2-player swaps 19 made, 13
+# gained, +129; 4+ player rebuilds 14 made, 4 gained, -163 (all six of Oct 28's
+# big losses). A mid-night rebuild on 1,500 sims was replacing a lineup the
+# full model chose at lock. Cap 2: -64 -> +118 over 46 swaps.
+SWAP_MAX_MOVED = 2
 
 # --- what counts as news (against the logged build of this slate) -------------
 SWAP_NEWS_PROJ_SHARE = 0.25  # a raw projection moving this share...
@@ -645,8 +652,8 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
         scored = sorted(((swap_score(r, aggr), r) for r in rosters.values()),
                         key=lambda t: -t[0])
 
-        # A news move takes the news player out and needs +8; the rest of the
-        # open lineup may change with him. A move that keeps him is a no-news
+        # A news move takes the news player out and needs +8; one more player
+        # may go with him (SWAP_MAX_MOVED). A move that keeps him is a no-news
         # move: +14, only with the box ticked
         # (the user, Oct 29: "a swap without swapping Capela, which is the news,
         # is a no news late swap").
@@ -663,6 +670,11 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
             if dead_here:
                 alive = [(sc, r) for sc, r in scored
                          if not ({normalize_name(p.name) for p in r} & dead_here)]
+                # Same cap as every swap; wider only if nothing that small is legal.
+                small = [(sc, r) for sc, r in alive
+                         if len(here - {normalize_name(p.name) for p in r})
+                         <= max(SWAP_MAX_MOVED, len(dead_here))]
+                alive = small or alive
                 in_pool = [(sc, r) for sc, r in alive
                            if not sheet or all(n in pool_names for n in
                                                {normalize_name(p.name) for p in r} - here)]
@@ -678,8 +690,9 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
                 if names == here:
                     continue
                 out, inn = here - names, names - here
-                # A news move takes the news player OUT; the rest of the open
-                # lineup may change with him. Anything else is a no-news move,
+                if len(out) > SWAP_MAX_MOVED:
+                    continue
+                # A news move takes the news player OUT. Anything else is a no-news move,
                 # whatever news sits in the
                 # lineup (Oct 28: Capela's bench news reopened 27 lineups; 25 kept
                 # Capela and sold Curry, the night's top scorer, at the +8 bar).
