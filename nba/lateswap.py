@@ -812,7 +812,11 @@ def _hold_reason(blocked, open_idx, winning, why_news, allow_free=True):
     if winning and not why_news:
         return "projecting to win — only news moves it"
     if why_news:
-        return f"news, but no move clears +{SWAP_NEWS_GAIN:.0f}"
+        who = ", ".join(w.split(":")[0] for w in why_news)
+        rest = ("nothing else is allowed (projecting to win)" if winning else
+                "no-news swaps are off" if not allow_free else
+                f"no other move clears +{SWAP_DISC_GAIN:.0f}")
+        return (f"no swap taking {who} out clears +{SWAP_NEWS_GAIN:.0f}; {rest}")
     return f"no news, and nothing clears +{SWAP_DISC_GAIN:.0f}"
 
 
