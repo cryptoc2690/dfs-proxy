@@ -967,6 +967,18 @@ check("swap: no-news swaps are on by default, at +14",
 _s6 = LS.run_late_swap(PROJ5, _mid, _stand, {"noNewsSwaps": "off"}, log_path=LS_LOG)
 check("swap: no-news swaps can be switched off",
       _s6["noNewsSwaps"] is False and all(x["forced"] for x in _s6["swaps"] if not x["keep"]))
+# Caps carry into the late swap (Nov 2): the most-held unlocked player capped
+# at 2 lineups is taken out of the rest, and nobody brings him back in.
+_cap_rows0 = [x for x in s0["swaps"] if x["contest"].startswith("NBA $15K")]
+_had = sum(1 for x in _cap_rows0 if any(_out_nm == b["name"] for b in x["before"]))
+_s7 = LS.run_late_swap(PROJ5, _mid, _stand, {"capPlayers": f"{_out_nm} 2"}, log_path=LS_LOG)
+_rows7 = [x for x in _s7["swaps"] if x["contest"].startswith("NBA $15K")]
+_after7 = sum(1 for x in _rows7 if any(_out_nm == a["name"] for a in x["after"]))
+check("swap: a typed cap trims a held player down to it",
+      _had > 2 and _after7 <= 2 and any("over your cap" in str(x["news"]) for x in _rows7),
+      f"held {_had}, after {_after7}")
+check("swap: the cap check names the player and the count",
+      any("Cap —" in nt["text"] and _out_nm in nt["text"] for nt in _s7["notes"]))
 check("swap: each run saves its input files for replay",
       any(os.path.exists(os.path.join(_TMP, "swap_inputs", d, "dk.csv"))
           for d in os.listdir(os.path.join(_TMP, "swap_inputs"))))

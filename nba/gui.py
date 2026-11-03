@@ -977,7 +977,8 @@ $('#ls').addEventListener('click', async () => {
         options: {neutral: $('#neutral').value,
                   noNewsSwaps: $('#nonews').checked ? 'on' : 'off',
                   pool: [...sel.pool].join('\n'), cores: [...sel.core].join('\n'),
-                  remove: $('#remove').value}})
+                  remove: $('#remove').value,
+                  capPlayers: $('#capplayers').value}})
     });
     swapResult = await res.json();
     renderSwap(swapResult);

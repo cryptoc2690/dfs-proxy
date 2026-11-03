@@ -2,6 +2,14 @@
 
 Newest first. One entry per change, in plain words: what changed and why.
 
+## Nov 2, 2026
+
+**Late swap: your player caps now carry into it.** The user: a starter listed on the bench, a DNP risk, in 28% of the mini-MAX — "limit that to 10-15%, eat the risk if he does play".
+- The late swap reads the "Cap individual players" box, per contest, the same way the build does ("Name 20" = 20 lineups, "Name 12%" = a share).
+- A capped player over his cap is taken out with no bar, as a late scratch is, until the contest is at the cap. The lineups where he costs least to replace go first. Still at most two players moved.
+- No swap brings a capped player in past his cap. A locked player can't be taken out, so the page says if he stays over.
+- The notes say each capped player's count before and after.
+
 ## Oct 29, 2026
 
 **Late swap: no swap moves more than two players.** From `NBA Late Swap Parameters Note 10-29.md`, every saved swap night replayed and graded on what the players scored:

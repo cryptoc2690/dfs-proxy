@@ -523,6 +523,89 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
                  "offPool": bool(sheet) and not p.in_pool}
                 for sl, p, lk in zip(slots, roster, locks)]
 
+    # Player caps typed on the page, read per contest exactly as the build reads
+    # them ("Name 20" = 20 lineups, "Name 12%" = a share). The user, Nov 2: a
+    # starter listed on the bench, a DNP risk, in 28% of the mini-MAX — "limit
+    # that to 10-15%, eat the risk if he does play". A capped player over his cap
+    # is taken out with no bar, as a late scratch is, from the lineups where he
+    # costs least to replace, until the contest is at the cap; no swap brings a
+    # capped player in past it. Counts run over current rosters, locked included.
+    pcap, pcount, trim = {}, {}, {}
+    cap_text = o.get("capPlayers") or ""
+    if cap_text.strip():
+        _c, cmiss, cbad, _b = app._player_caps(cap_text, players)
+        if cmiss:
+            say("warn", "Cap not on this slate, so NOT applied: " + ", ".join(cmiss))
+        if cbad:
+            say("warn", "Couldn't read this cap line: " + ", ".join(cbad))
+        by_id = {p.dk_id: p for p in players}
+        for cid, es in by_contest.items():
+            caps_c = app._player_caps(cap_text, players, len(es))[0]
+            if not caps_c:
+                continue
+            pcap[cid] = {i: max(0, int(round(v * len(es)))) for i, v in caps_c.items()}
+            cnt = {}
+            for e in es:
+                for c in e.get("cells") or []:
+                    q = by_norm.get(normalize_name(c["name"])) if c else None
+                    if q is not None and q.dk_id in pcap[cid]:
+                        cnt[q.dk_id] = cnt.get(q.dk_id, 0) + 1
+            pcount[cid] = cnt
+            for pid, lim in pcap[cid].items():
+                over = cnt.get(pid, 0) - lim
+                if over <= 0:
+                    continue
+                capped = by_id[pid]
+                cost = []
+                for e in es:
+                    if not e.get("cells") or not all(e["cells"]):
+                        continue
+                    lu = [by_norm.get(normalize_name(c["name"])) for c in e["cells"]]
+                    if any(q is None for q in lu) or capped not in lu:
+                        continue
+                    i = lu.index(capped)
+                    if e["cells"][i]["locked"] or normalize_name(capped.name) in locked:
+                        continue
+                    room = SALARY_CAP - sum(q.salary for q in lu) + capped.salary
+                    best = max((swap_score(lu[:i] + [q] + lu[i + 1:], 0.5)
+                                for q in players
+                                if q.proj > 0 and not q.removed and q not in lu
+                                and slots[i] in q.eligible and q.salary <= room
+                                and normalize_name(q.name) not in locked
+                                and q.dk_id not in pcap[cid]), default=None)
+                    loss = (swap_score(lu, 0.5) - best) if best is not None else float("inf")
+                    cost.append((loss, e["entry_id"]))
+                cost.sort()
+                for _, eid in cost[:over]:
+                    trim.setdefault(eid, set()).add(normalize_name(capped.name))
+                n_e = len([e for e in es if e.get("cells") and all(e["cells"])])
+                say("info", f"Cap — {capped.name}: in {cnt.get(pid, 0)} of {n_e} "
+                            f"({es[0]['contest']}), cap {lim}; taking him out of "
+                            f"{min(over, len(cost))} lineup(s), cheapest to replace first.")
+                if len(cost) < over:
+                    say("warn", f"Cap — {capped.name}: only {len(cost)} lineup(s) have him "
+                                f"unlocked, so he stays over his cap of {lim} "
+                                f"({es[0]['contest']}).")
+
+    def cap_ok(roster, cur, cid):
+        """None when no capped player comes in past his cap, else why not."""
+        caps_c = pcap.get(cid)
+        if not caps_c:
+            return None
+        have = {q.dk_id for q in cur}
+        for q in roster:
+            if q.dk_id in caps_c and q.dk_id not in have \
+                    and pcount[cid].get(q.dk_id, 0) >= caps_c[q.dk_id]:
+                return f"{q.name} is at your cap ({caps_c[q.dk_id]} lineups)"
+        return None
+
+    def cap_commit(roster, cur, cid):
+        if cid not in pcount:
+            return
+        a, b = {q.dk_id for q in cur}, {q.dk_id for q in roster}
+        for pid in pcap[cid]:
+            pcount[cid][pid] = pcount[cid].get(pid, 0) - (pid in a) + (pid in b)
+
     rng = random.Random(int(o.get("seed") or 0))
     results, lines = [], ["Entry ID,Contest Name,Contest ID,Entry Fee," + ",".join(slots)]
     stale, changed = [], 0
@@ -555,8 +638,12 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
                 continue
         news_here = {i for i, p in enumerate(lineup)
                      if not is_locked[i] and normalize_name(p.name) in bad_news}
+        trim_here = {normalize_name(p.name) for i, p in enumerate(lineup)
+                     if not is_locked[i]
+                     and normalize_name(p.name) in trim.get(e["entry_id"], ())}
         open_idx = [i for i, p in enumerate(lineup) if not is_locked[i]
-                    and not (p.core and p.proj > 0 and i not in news_here)]
+                    and not (p.core and p.proj > 0 and i not in news_here
+                             and normalize_name(p.name) not in trim_here)]
         # Where this lineup stands.
         pct = None
         aggr = 0.5
@@ -662,7 +749,7 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
         # best lineup without him wins, whatever its gain, salary left or pool.
         dead_here = {normalize_name(lineup[i].name) for i in news_here
                      if bad_news[normalize_name(lineup[i].name)] in
-                     ("ruled out", "removed by you (late scratch)")}
+                     ("ruled out", "removed by you (late scratch)")} | trim_here
         cid = e["contest_id"] or e["contest"]
 
         def choose(news_only):
@@ -675,6 +762,7 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
                          if len(here - {normalize_name(p.name) for p in r})
                          <= max(SWAP_MAX_MOVED, len(dead_here))]
                 alive = small or alive
+                alive = [t for t in alive if cap_ok(t[1], lineup, cid) is None] or alive
                 in_pool = [(sc, r) for sc, r in alive
                            if not sheet or all(n in pool_names for n in
                                                {normalize_name(p.name) for p in r} - here)]
@@ -724,7 +812,7 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
                                        f"+{gain_proj:.1f} proj but is off your pool; "
                                        f"that needs +{bar * len(off):.0f}")
                         continue
-                why_not = fits(r, lineup, cid, bool(forced))
+                why_not = cap_ok(r, lineup, cid) or fits(r, lineup, cid, bool(forced))
                 if why_not:
                     if blocked is None:
                         blocked = f"the best swap is held back: {why_not}"
@@ -761,8 +849,11 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
             # 10-27: a refused swap stayed in the team and side counts).
             changed += 1
             commit(slotted, lineup, cid)
+            cap_commit(slotted, lineup, cid)
         why_news = [f"{p.name}: {bad_news[normalize_name(p.name)]}"
-                    for i, p in enumerate(lineup) if i in news_here]
+                    for i, p in enumerate(lineup) if i in news_here] + [
+                    f"{p.name}: over your cap" for i, p in enumerate(lineup)
+                    if i not in news_here and normalize_name(p.name) in trim_here]
         rec.update({
             "keep": pick is None, "open": len(open_idx), "banked": banked,
             "timeLeft": live.get("time_left") if live else None,
@@ -787,6 +878,12 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
         results.append(rec)
         lines.append(rec["rowAfter"])
 
+    for cid, caps_c in pcap.items():
+        name_of = {p.dk_id: p.name for p in players}
+        cname = by_contest[cid][0]["contest"]
+        for pid, lim in caps_c.items():
+            say("info", f"Cap — {name_of.get(pid, pid)}: in {pcount[cid].get(pid, 0)} "
+                        f"lineup(s) after the swap, cap {lim} ({cname}).")
     if stale:
         say("warn", f"{len(stale)} entr(ies) left alone because DK's standings show a "
                     f"different tipped player than your entries file. Re-download the "
