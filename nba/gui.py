@@ -755,9 +755,10 @@ function renderGrade(g){
 // Exposure, shown against the field's projected ownership. A share on its own
 // says nothing — 40% is aggressive at 8% field and timid at 60% — so the gap
 // is the column worth reading, and it is the one that is coloured.
-function exposureHtml(e, n, sd){
+function exposureHtml(e, n, sd, label){
   if(!e || !e.players || !e.players.length) return '';
-  let h = '<details class="exp" open><summary>Exposure — who you are actually on</summary>';
+  let h = '<details class="exp" open><summary>Exposure — '
+        + esc(label || 'who you are actually on') + '</summary>';
   h += '<div class="expwrap">';
   h += '<div><div class="exptitle">Teams</div><div class="tblwrap"><table><thead><tr>'
      + '<th>team</th><th class="num">lineups</th><th class="num">share</th>'
@@ -892,7 +893,16 @@ function render(d){
      + (sd && s.topCaptains.length ? '<br>Top captains: '
         + s.topCaptains.map(c => esc(c[0])+' '+c[1]).join(' · ') : '')
      + '</div>';
-  h += exposureHtml(d.exposure, s.n, sd);
+  const views = d.exposures || [];
+  if(views.length > 1){
+    h += '<div style="margin:10px 0 4px;font-size:13px">Exposure for '
+      + '<select id="expsel" style="width:auto;display:inline-block">'
+      + views.map((v, i) => '<option value="'+i+'">'+esc(v.label)+'</option>').join('')
+      + '</select> <span class="muted">— "field" is Stokastic\'s projected ownership</span></div>';
+  }
+  h += '<div id="expbox">' + (views.length
+        ? exposureHtml(views[0].exposure, views[0].n, sd, views[0].label)
+        : exposureHtml(d.exposure, s.n, sd)) + '</div>';
   const nOff = (d.exposure && d.exposure.players || []).filter(p => p.off).length;
   if(nOff) h += '<div class="picknote" style="margin:8px 0"><span class="offsheet">'
     + 'name</span> = not on your sheet (' + nOff + ' of them below)'
@@ -920,6 +930,11 @@ function render(d){
   h += '</tbody></table></div>';
   if(d.info) h += detailsHtml(d);
   $('#out').innerHTML = h;
+  const es = $('#expsel');
+  if(es) es.addEventListener('change', () => {
+    const v = views[+es.value];
+    $('#expbox').innerHTML = exposureHtml(v.exposure, v.n, sd, v.label);
+  });
   if(d.dkCsv){
     $('#dl').style.display = '';
     $('#status').textContent = 'Logged '+d.lineups.length+' entries for later grading.';

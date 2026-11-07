@@ -1145,6 +1145,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
     if contests:
         ents, pairs = [], []
         next_chunk = 0
+        per_contest = []
         for cid, nm, es in contests:
             kind = "big" if len(es) > NB.SMALL_SET else "small"
             lus = chosen[kind]
@@ -1155,6 +1156,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
             if len(es) > len(lus):
                 say("warn", f"{nm or cid} has {len(es)} entries but only {len(lus)} "
                             f"lineups were built.")
+            per_contest.append((nm or cid, lus[:len(es)]))
             for e, lu, r in zip(es, lus, ros):
                 ents.append(e)
                 pairs.append((lu, r))
@@ -1188,6 +1190,18 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
     if err:
         say("warn", err + " Grading reads that log, so this night will not be gradable.")
 
+    exposure_views = []
+    if contests and log_lus:
+        exposure_views.append({"label": f"All entries ({len(log_lus)})",
+                               "n": len(log_lus), "exposure": _exposure(log_lus, "classic")})
+        for nm, lus in per_contest:
+            exposure_views.append({"label": f"{nm} ({len(lus)})", "n": len(lus),
+                                   "exposure": _exposure(lus, "classic")})
+    else:
+        for k, lus in chosen.items():
+            exposure_views.append({"label": f"{'150-max' if k == 'big' else '20-max'} "
+                                            f"({len(lus)})", "n": len(lus),
+                                   "exposure": _exposure(lus, "classic")})
     used = collections.Counter(p.dk_id for lu in show for p in lu.players)
     pct = lambda p: round(100.0 * used.get(p.dk_id, 0) / max(1, len(show)))
     zero_chalk = [p for p in active if p.ownership >= 15 and not used.get(p.dk_id)]
@@ -1223,6 +1237,9 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                                "exposure": _exposure(chosen["small"], "classic")}
                               if "small" in chosen and "big" in chosen else None)},
         "exposure": _exposure(show, "classic"),
+        # The exposure table's choices (Nov 7: "is that my total exposure, or one
+        # contest?"): every entry being submitted, then each contest on its own.
+        "exposures": exposure_views,
         "lineups": [_lineup_payload(lu, r, "classic", slots) for lu, r in zip(show, show_ros)],
         "dkCsv": dk_csv,
         "logPath": LOG_PATH,
