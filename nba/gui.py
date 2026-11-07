@@ -248,9 +248,8 @@ INDEX_HTML = r"""<!doctype html>
     <button id="dl" class="alt" style="display:none">&#11015; Download DK file</button>
     <button id="ls" class="alt" disabled title="needs a fresh Stokastic pull (1), your current DK entries export (3), and ideally the live standings (6)">&#8635; Late swap</button>
     <button id="lsdl" class="alt" style="display:none">&#11015; Download late-swap file</button>
-    <label style="display:inline-flex;gap:6px;align-items:center;margin:0 4px;font-size:12.5px;color:var(--muted)"
-           title="Late swap is outs only: it replaces players who are out (ruled out, removed, or over a typed cap) and moves nothing else. This box does nothing while outs only is on.">
-      <input type="checkbox" id="nonews" style="width:auto" checked disabled> allow no-news swaps (off: outs only)</label>
+    <span style="margin:0 4px;font-size:12.5px;color:var(--muted)"
+          title="Late swap replaces a player who is out (ruled out, removed, or over a typed cap) plus at most one more, by the fresh pull's projection. Nothing else moves.">Late swap: outs only</span>
     <span id="status" style="color:var(--muted);font-size:13px"></span>
   </div>
   <div class="row" id="graderow" style="display:none">
@@ -947,7 +946,7 @@ $('#ls').addEventListener('click', async () => {
     const res = await fetch('/api/lateswap', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({proj: files.proj, dk: files.dk, standings: files.standings,
-        options: {noNewsSwaps: $('#nonews').checked ? 'on' : 'off',
+        options: {
                   pool: [...sel.pool].join('\n'), cores: [...sel.core].join('\n'),
                   remove: $('#remove').value,
                   capPlayers: $('#capplayers').value}})

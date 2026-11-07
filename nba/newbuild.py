@@ -75,7 +75,7 @@ def plan(n, games, have_file):
     """-> (own lineups, file lineups, which draw, the rule in words)."""
     if n <= SMALL_SET:
         return n, 0, (OLD_DRAW if games >= 8 else NEW_DRAW), \
-            f"20-max: {n} from your pool, top three owned to 2x"
+            f"{n} from your pool, top three owned to 2x"
     if games <= 4:
         return n, 0, NEW_DRAW, f"{games} games: all {n} from your pool"
     if not have_file:
@@ -570,6 +570,8 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
     copies = 1 if big else max(1, int(copies))
     fc = file_candidates(field_lineups or [], active_ids, slotting) if big else []
     n_own, n_file, draw, rule = plan(n, games, bool(fc))
+    if not any(p.in_pool for p in players):
+        rule = rule.replace("your pool", "the whole slate (no pool typed)")
     notes.append(rule)
     B = blueprint(history, games) if draw["ranges"] else None
     if draw["ranges"] and not B:
