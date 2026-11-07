@@ -551,11 +551,14 @@ def tail_fix(rosters, by_id, min_count, keep=(), caps=None):
 
 # --- the build ---------------------------------------------------------------
 def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, seed=0,
-              history=None, slotting=None):
-    """One set (a 150 or a 20). -> dict(rosters, sources, notes, meta)
+              history=None, slotting=None, copies=1):
+    """One set (a 150 or a 20). -> dict(rosters, sources, chunks, notes, meta)
 
     players: every player with DK ids attached, pool flags set and removals
-    marked. caps / floors: {dk_id: lineups}. slotting: players -> slot order."""
+    marked. caps / floors: {dk_id: lineups}. slotting: players -> slot order.
+    copies (20-max only): how many different 20s. The second takes the next 20
+    in the pick order (Slate By Slate Calls report, 5C); each gets its own
+    top-3 raise. chunks = [(rosters, sources)] one per copy."""
     notes = []
     caps = dict(caps or {})
     floors = dict(floors or {})
@@ -564,6 +567,7 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
     by_id = {p.dk_id: p for p in players}
     active_ids = {p.dk_id for p in active}
     big = n > SMALL_SET
+    copies = 1 if big else max(1, int(copies))
     fc = file_candidates(field_lineups or [], active_ids, slotting) if big else []
     n_own, n_file, draw, rule = plan(n, games, bool(fc))
     notes.append(rule)
@@ -591,7 +595,7 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
 
     cap = CAP_BIG if big else CAP_SMALL
     cnt, taken = collections.Counter(), set()
-    own = select(cands, n_own, cap, n, cnt, taken, "proj", caps)
+    own = select(cands, n_own * copies, cap, n * copies, cnt, taken, "proj", caps)
     half = select(fc, n_file, cap, n, cnt, taken, "top10", caps) if n_file else []
     chosen = own + half
     sources = ["mine"] * len(own) + ["vendor"] * len(half)
@@ -602,42 +606,57 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
                          f"{len(more)} more came from your pool")
         chosen += more
         sources += ["mine"] * len(more)
-    if len(chosen) < n:
-        more = select(cands, n - len(chosen), 1.0, n, cnt, taken, "proj", caps)
+    if len(chosen) < n * copies:
+        more = select(cands, n * copies - len(chosen), 1.0, n * copies, cnt, taken,
+                      "proj", caps)
         if more:
             notes.append(f"{len(more)} lineup(s) only fit by going past the "
                          f"{cap:.0%} cap")
         chosen += more
         sources += ["mine"] * len(more)
-    rosters = [list(c["ps"]) for c in chosen]
-
-    targets = {}
-    for k, v in floors.items():
-        targets[k] = (min(v, len(rosters)), None)
-    for k, v in caps.items():
-        lo_, _ = targets.get(k, (None, None))
-        targets[k] = (lo_, v)
-    lean = []
-    if not big and rosters:
-        top3 = sorted(active, key=lambda p: -p.ownership)[:3]
-        for p in top3:
-            if p.ownership >= TOP3_MIN_OWN:
-                want = int(round(min(TOP3_K * p.ownership / 100.0, TOP3_CAP) * len(rosters)))
-                if p.dk_id in caps:
-                    want = min(want, caps[p.dk_id])
-                lo_, hi_ = targets.get(p.dk_id, (None, None))
-                targets[p.dk_id] = (max(lo_ or 0, want), hi_)
-                lean.append(f"{p.name} to {want} of {len(rosters)} "
-                            f"({p.ownership:.0f}% projected owned)")
+    allr = [list(c["ps"]) for c in chosen]
+    chunks = []
     cut = raised = 0
-    if targets and rosters:
-        cut, raised = retarget(rosters, targets, by_id)
+    lean = []
+    for ci in range(copies):
+        rosters = allr[ci * n:(ci + 1) * n]
+        csrc = sources[ci * n:(ci + 1) * n]
+        if not rosters:
+            break
+        targets = {}
+        for k, v in floors.items():
+            targets[k] = (min(v, len(rosters)), None)
+        for k, v in caps.items():
+            lo_, _ = targets.get(k, (None, None))
+            targets[k] = (lo_, v)
+        if not big:
+            top3 = sorted(active, key=lambda p: -p.ownership)[:3]
+            for p in top3:
+                if p.ownership >= TOP3_MIN_OWN:
+                    want = int(round(min(TOP3_K * p.ownership / 100.0, TOP3_CAP)
+                                     * len(rosters)))
+                    if p.dk_id in caps:
+                        want = min(want, caps[p.dk_id])
+                    lo_, hi_ = targets.get(p.dk_id, (None, None))
+                    targets[p.dk_id] = (max(lo_ or 0, want), hi_)
+                    if ci == 0:
+                        lean.append(f"{p.name} to {want} of {len(rosters)} "
+                                    f"({p.ownership:.0f}% projected owned)")
+        if targets:
+            c_, r_ = retarget(rosters, targets, by_id)
+            cut += c_
+            raised += r_
+        chunks.append((rosters, csrc))
     if lean:
         notes.append("Top three owned raised: " + "; ".join(lean))
+    if copies > 1:
+        notes.append(f"{len(chunks)} different sets of {n}: the second takes the next "
+                     f"{n} in the pick order")
+    rosters, sources = chunks[0] if chunks else ([], [])
     tail = 0
     if big and rosters:
         tail = tail_fix(rosters, by_id, MIN_LINEUPS, keep=set(floors), caps=caps)
-    return {"rosters": rosters, "sources": sources, "notes": notes,
+    return {"rosters": rosters, "sources": sources, "chunks": chunks, "notes": notes,
             "meta": {"rule": rule, "own": len(own), "file": len(half),
                      "fileUsable": len(fc), "candidates": len(cands),
                      "draw": "old" if draw is OLD_DRAW else "new",

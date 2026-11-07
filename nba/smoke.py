@@ -1265,6 +1265,24 @@ _mv = [json.loads(l) for d in os.listdir(_pd) if os.path.exists(os.path.join(_pd
        for l in open(os.path.join(_pd, d, "moves.jsonl"))]
 check("new build: a projection that moved between pulls is logged with both times",
       any(m["proj"][1] - m["proj"][0] >= 8 for m in _mv), str(_mv[-1:] if _mv else None))
+DK5b = dk_classic(R5, GAMES5, contests=((150, "NBA $15K mini-MAX", "900001", "$0.50"),
+                                        (20, "NBA $8K And-One", "900002", "$1"),
+                                        (20, "NBA $50K Four Point Play", "900004", "$4"),
+                                        (1, "NBA $10K Free Contest", "900003", "$0")))
+_k8 = _nlog()
+nb2 = app.run_build(PROJ5, FIELD5, DK5b, {"pool": _pool5})
+_r8 = _rows_of(_k8)
+_a1 = [frozenset(p["id"] for p in r["players"]) for r in _r8 if r["contest_id"] == "900002"]
+_a2 = [frozenset(p["id"] for p in r["players"]) for r in _r8 if r["contest_id"] == "900004"]
+_fr = [frozenset(p["id"] for p in r["players"]) for r in _r8 if r["contest_id"] == "900003"]
+_e2 = collections.Counter(p["name"] for r in _r8 if r["contest_id"] == "900004" for p in r["players"])
+check("new build: two 20-max contests get two different sets (the next 20 in the order)",
+      not nb2.get("error") and nb2.get("dkCsv") and len(_a1) == 20 and len(_a2) == 20
+      and len(set(_a1) & set(_a2)) < 20 and _fr and _fr[0] == _a1[0],
+      f"shared {len(set(_a1) & set(_a2))} of 20")
+check("new build: the second 20-max gets its own top-3 raise",
+      _e2[_top3[0]["Player"]] >= int(round(min(2 * _top3[0]["Ownership %"] / 100, 0.95) * 20)),
+      f"{_top3[0]['Player']} {_e2[_top3[0]['Player']]}/20")
 LS.SWAP_OUTS_ONLY = True
 _mid9 = dk_midslate(R5, GAMES5, _entries40)
 _sw = LS.run_late_swap(PROJ5, _mid9, _stand, {"remove": _out_nm, "noPullSave": True}, log_path=LS_LOG)

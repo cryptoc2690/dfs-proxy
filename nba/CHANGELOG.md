@@ -4,6 +4,10 @@ Newest first. One entry per change, in plain words: what changed and why.
 
 ## Nov 7, 2026
 
+**Two 20-max contests get two different sets.** From `NBA Slate By Slate Calls Report 11-07.md`, section 5C: on 17 nights with two 20-max contests, the next 20 in the pick order for the second contest gave 0.61 top-1% lineups a night (both contests) against 0.56 for the same 20, with a better best rank (396 against 428) and the mean within 0.2. Inside the noise on 17 nights; on the check list for 20 more.
+- One DK file with several 20-max contests: the first gets the top 20, the next the next 20 in the pick order (picked together under the 90% cap), and so on. Each set gets its own top-3 raise. A 1-entry contest takes the first lineup of the first set.
+- Nov 2's file (150 + Four Point Play + And-One + a 2-entry contest) built clean: the two 20-max sets share 0 of 20 lineups.
+
 **Late swap: the out player plus one, by projection.** From `NBA Slate By Slate Calls Report 11-07.md`, section 5B: on the 26 of our lineups that held an in-night out (Jerome Oct 31; Toppin, Z. Williams, Poeltl Nov 1), swapping the out player plus one more by the fresh pull's projection scored 282.1 real points against 269.1 one-for-one and 271.6 for the old swap.
 - A lineup with an out player (ruled out, removed, or over a typed cap) takes the roster with the most projected points from the fresh pull that drops him and moves at most one more unlocked player. No pool preference, no simulation. Typed caps still hold.
 - The search pairs his slot with each other open slot over the top 20 by projection and the top 20 by value, so the second move can spend the freed salary.

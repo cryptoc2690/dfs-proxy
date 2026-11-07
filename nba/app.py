@@ -1035,8 +1035,11 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
         floors = {k: min(v, n) for k, v in floors.items()}
         if (kind == "big" or not n_big) and (fmiss or fbad):
             say("warn", "Minimum lines not read: " + "; ".join(fmiss + fbad))
+        copies = 1
+        if kind == "small" and contests:
+            copies = max(1, sum(1 for _c, _n, es in contests if 1 < len(es) <= NB.SMALL_SET))
         res = NB.build_set(players, n, n_games, field, inj, caps, floors, seed, history,
-                           slotting=C.best_slotting)
+                           slotting=C.best_slotting, copies=copies)
         sets[kind] = res
         label = "150-max" if kind == "big" else "20-max"
         for t in res["notes"]:
@@ -1070,15 +1073,20 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                         for k, v in hits.items() if k in by_id))
 
     # Lineup objects, the upload file, the log.
-    def lineups_of(res):
+    def lineups_of(rosters, sources):
         out = []
-        for r, src in zip(res["rosters"], res["sources"]):
+        for r, src in zip(rosters, sources):
             lu = C.Lineup(r, slotting=r, source=src)
             lu.metrics = {"via": src}
             out.append(lu)
         return out
 
-    chosen = {k: lineups_of(v) for k, v in sets.items()}
+    # Each set as lineups; a 20-max build can hold several different 20s, one
+    # per 20-max contest in the DK file (the first gets the top 20, the next the
+    # next 20 in the pick order).
+    chunks = {k: [lineups_of(r, src) for r, src in v.get("chunks") or
+                  [(v["rosters"], v["sources"])]] for k, v in sets.items()}
+    chosen = {k: v[0] for k, v in chunks.items()}
     show = chosen.get("big") or chosen.get("small") or []
     for k, lus in chosen.items():
         for w in NB.after_build([lu.players for lu in lus], players):
@@ -1121,9 +1129,14 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
     dk_csv, log_lus, log_ros = None, [], []
     if contests:
         ents, pairs = [], []
+        next_chunk = 0
         for cid, nm, es in contests:
             kind = "big" if len(es) > NB.SMALL_SET else "small"
-            lus, ros = chosen[kind], rostered[kind]
+            lus = chosen[kind]
+            if kind == "small" and len(es) > 1 and len(chunks["small"]) > 1:
+                lus = chunks["small"][min(next_chunk, len(chunks["small"]) - 1)]
+                next_chunk += 1
+            ros = [_roster(lu, "classic", start_of) for lu in lus]
             if len(es) > len(lus):
                 say("warn", f"{nm or cid} has {len(es)} entries but only {len(lus)} "
                             f"lineups were built.")
