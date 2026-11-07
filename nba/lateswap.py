@@ -99,6 +99,7 @@ GOOD_NEWS = ("projection up", "was on the bench at lock, now starting")
 # --- breadth ------------------------------------------------------------------
 SWAP_TOP_PER_SLOT = 12
 SWAP_PAIR_TOP = 4
+SWAP_OUT_PAIR_TOP = 20     # out plus one: the wider list paired with an out player's slot
 SWAP_RANDOM_FILLS = 250
 SWAP_SIMS = 1500
 
@@ -667,6 +668,9 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
         trim_here = {normalize_name(p.name) for i, p in enumerate(lineup)
                      if not is_locked[i]
                      and normalize_name(p.name) in trim.get(e["entry_id"], ())}
+        dead_names = {normalize_name(lineup[i].name) for i in news_here
+                      if bad_news[normalize_name(lineup[i].name)] in
+                      ("ruled out", "removed by you (late scratch)")} | trim_here
         open_idx = [i for i, p in enumerate(lineup) if not is_locked[i]
                     and not (p.core and p.proj > 0 and i not in news_here
                              and normalize_name(p.name) not in trim_here)]
@@ -735,6 +739,31 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
                 + sorted((p for p in pool_c if p.salary <= afford),
                          key=lambda p: -p.proj / max(p.salary, 1))[:SWAP_PAIR_TOP * 2])
                 }.values())
+            # Out plus one (Nov 7): with an out player in the lineup, pair his slot
+            # with each other open slot over a wider list, so the second move can
+            # spend the freed salary well (Jerome's $8,400 -> a cheap riser + an upgrade).
+            dead_i = [i for i, p in enumerate(cur_open)
+                      if normalize_name(p.name) in dead_names]
+            if dead_i and SWAP_OUTS_ONLY:
+                wide = list({p.dk_id: p for p in (
+                    pool_c[:SWAP_OUT_PAIR_TOP]
+                    + sorted((p for p in pool_c if p.salary <= afford),
+                             key=lambda p: -p.proj / max(p.salary, 1))[:SWAP_OUT_PAIR_TOP])
+                    }.values())
+                for i in dead_i:
+                    for j in range(len(cur_open)):
+                        if j == i:
+                            continue
+                        for a in wide:
+                            if a in cur_open:
+                                continue
+                            for b in wide:
+                                if a is b or b in cur_open:
+                                    continue
+                                nxt = list(cur_open)
+                                nxt[i], nxt[j] = a, b
+                                if sum(p.salary for p in nxt) <= budget:
+                                    consider(nxt)
             for i in range(len(cur_open)):                  # pairs of swaps
                 for j in range(i + 1, len(cur_open)):
                     for a in top:
@@ -780,6 +809,24 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
 
         def choose(news_only):
             blocked = None
+            if dead_here and SWAP_OUTS_ONLY:
+                # Nov 7 (Slate By Slate Calls report, 5B): the out player plus at
+                # most one more, picked by the fresh pull's projection; no pool
+                # preference, no simulation. 26 lineups: 282.1 real points against
+                # 269.1 one-for-one and 271.6 for the old swap.
+                most = len(dead_here) + 1
+                best = None
+                for r in rosters.values():
+                    names = {normalize_name(p.name) for p in r}
+                    if names & dead_here or len(here - names) > most:
+                        continue
+                    if cap_ok(r, lineup, cid) is not None:
+                        continue
+                    key = (round(sum(p.proj for p in r), 3), sum(p.salary for p in r))
+                    if best is None or key > best[0]:
+                        best = (key, r)
+                if best:
+                    return best[1], round(best[0][0] - cur_proj, 2), True, None
             if dead_here:
                 alive = [(sc, r) for sc, r in scored
                          if not ({normalize_name(p.name) for p in r} & dead_here)]

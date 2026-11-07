@@ -1005,6 +1005,12 @@ check("swap, outs only: every lineup holding the removed player is moved, and on
       _oh and all(not x["keep"] and _out_nm in x["out"] for x in _oh)
       and all(_out_nm in x["out"] for x in _o1["swaps"] if not x["keep"]),
       f"{sum(1 for x in _oh if not x['keep'])} of {len(_oh)}")
+_mv1 = [x for x in _o1["swaps"] if not x["keep"]]
+check("swap, outs only: the out player plus at most one more, by the pull's projection",
+      _mv1 and all(len(x["out"]) <= 2 and _out_nm in x["out"] for x in _mv1)
+      and all(sum(c["proj"] for c in x["after"]) >= sum(c["proj"] for c in x["before"]
+                                                       if c["name"] != _out_nm) for x in _mv1),
+      str(collections.Counter(len(x["out"]) for x in _mv1)))
 _o7 = LS.run_late_swap(PROJ5, _mid, _stand, {"capPlayers": f"{_out_nm} 2"}, log_path=LS_LOG)
 _o7r = [x for x in _o7["swaps"] if x["contest"].startswith("NBA $15K")]
 check("swap, outs only: a typed cap still trims, and nothing else moves",

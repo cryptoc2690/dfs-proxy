@@ -4,6 +4,11 @@ Newest first. One entry per change, in plain words: what changed and why.
 
 ## Nov 7, 2026
 
+**Late swap: the out player plus one, by projection.** From `NBA Slate By Slate Calls Report 11-07.md`, section 5B: on the 26 of our lineups that held an in-night out (Jerome Oct 31; Toppin, Z. Williams, Poeltl Nov 1), swapping the out player plus one more by the fresh pull's projection scored 282.1 real points against 269.1 one-for-one and 271.6 for the old swap.
+- A lineup with an out player (ruled out, removed, or over a typed cap) takes the roster with the most projected points from the fresh pull that drops him and moves at most one more unlocked player. No pool preference, no simulation. Typed caps still hold.
+- The search pairs his slot with each other open slot over the top 20 by projection and the top 20 by value, so the second move can spend the freed salary.
+- Oct 31 replayed: all six lineups holding Jerome swapped him and one more for Cam Spencer (40.2 real) and an upgrade.
+
 **The new build.** From `NBA Before The Build Report 11-07.md` (the final spec) and the three reviews before it; the code is `newbuild.py`, ported from the prototype in `~/Downloads/NBA Results 1/Prototype/`.
 - **The 150 by slate size:** 2–4 games all from your pool; 5–7 games all from Stokastic's lineups (every file dropped, as one set, picked by their Top 10% figure); 8+ games 75 from Stokastic and 75 from your pool, drawn the old way (projection^3, up to $2,000 left, 4,000 candidates).
 - **Pool lineups:** projection^2.5, within $300 of the cap, kept inside the ranges the top-1% lineups fell in on earlier nights of the same slate size.
