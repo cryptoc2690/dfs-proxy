@@ -5,6 +5,30 @@ upload straight back to DK. Pure Python, no installs. The process is the NFL
 tool's; the construction thinking is WNBA's; nothing is carried over from the
 old Base44 tool except what its parsers knew about the file layouts.
 
+## The build (Nov 7, 2026)
+
+Rebuilt from four reviews of every saved night (Oct 20 - Nov 6); the code is
+`newbuild.py`, ported from `~/Downloads/NBA Results 1/Prototype/`. The old build
+(simulation, bar, win-rate score, neutral rules, pool adds) is `run_build_old`
+in `app.py`: kept for showdown and for after-the-fact replays only.
+
+| | 2-4 games | 5-7 games | 8+ games |
+|---|---|---|---|
+| 150 | all from your pool | all from Stokastic's lineups | 75 Stokastic / 75 pool (old draw) |
+| 20-max | from your pool, top three owned raised to 2x | same | same (old draw) |
+
+- Pool lineups: slot-first draw (projection^2.5, within $300 of the cap) kept inside
+  the winners' ranges from earlier nights of the same slate size (read from
+  `~/Downloads/NBA Results 1/Main`, or `NBA_HISTORY`). 8+ games: projection^3, up to
+  $2,000 left, 4,000 candidates, no ranges.
+- Stokastic's lineups: every legal one from every lineups file dropped, picked by
+  their Top 10% figure.
+- One cap (85% of a 150, 90% of a 20); a 150 has nobody in fewer than 4 lineups.
+- Removals shift nothing to teammates. Late swap is outs only.
+- Saved every night: each Stokastic file dropped (`logs/pulls/<date>/`, with
+  `moves.jsonl` of what changed between pulls), the build's inputs
+  (`logs/inputs/<date>/`), and the per-entry build log.
+
 ## Run it
 
 Double-click **`NBA-Optimizer.command`**, or:

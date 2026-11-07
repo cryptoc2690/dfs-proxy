@@ -4,6 +4,17 @@ Newest first. One entry per change, in plain words: what changed and why.
 
 ## Nov 7, 2026
 
+**The new build.** From `NBA Before The Build Report 11-07.md` (the final spec) and the three reviews before it; the code is `newbuild.py`, ported from the prototype in `~/Downloads/NBA Results 1/Prototype/`.
+- **The 150 by slate size:** 2–4 games all from your pool; 5–7 games all from Stokastic's lineups (every file dropped, as one set, picked by their Top 10% figure); 8+ games 75 from Stokastic and 75 from your pool, drawn the old way (projection^3, up to $2,000 left, 4,000 candidates).
+- **Pool lineups:** projection^2.5, within $300 of the cap, kept inside the ranges the top-1% lineups fell in on earlier nights of the same slate size.
+- **The 20-max** is its own set from your pool (not a slice of the 150), with the night's top three owned (15%+) raised to 2x their projected ownership, at most 95%.
+- **One cap:** 85% of a 150, 90% of a 20. A 150 has nobody in fewer than 4 lineups.
+- **Gone:** the simulation, the bar, the win-rate score and duplicate model, neutral rules, the tier cap, core floors, pool adds and stud floors. Removals no longer shift points to teammates (build and late swap).
+- **Kept:** your pool, removals, caps (a cap at 0 is a removal) and minimums; the DK readers, checks and upload writer; the build log.
+- **Saved every night:** each Stokastic projections file dropped, with its time, and what moved between pulls (`logs/pulls/`); the build's input files (`logs/inputs/`); the names the old add rule would have added; the late swap's risers it did not act on.
+- **Tested on 16 saved nights** with each night's pool, one seed, graded on the real standings: the 150 +12.9 a lineup against the field with 1.71% top 1%; the 20-max +15.4 with 2.81% (the prototype's six seeds: +12.1 / 1.38% and +12.2 / 1.40%; our real sets +6.9 / 1.25% and +7.5 / 1.03%).
+- Showdown still runs the old build. The old classic build is `run_build_old`, kept for after-the-fact replays.
+
 **Late swap: outs only.** From `NBA Where The Points Come From Report 11-07.md` and `NBA Full System Review And Prototype Report 11-07.md`:
 - The swap now replaces a player who is out (ruled out, removed by you, or over a typed cap) and moves nothing else. No news swaps at +8, no no-news swaps at +14.
 - Why: over 34 contests the old swaps added about a point a lineup and gave back top finishes, 42 top-1% lineups down to 36. Where a pre-swap export exists, our 20-max sets ran 2.27% top 1% before the swap and 1.03% after.

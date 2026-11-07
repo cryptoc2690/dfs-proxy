@@ -317,6 +317,25 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
         say("warn", "Not on this slate, so NOT removed: " + ", ".join(rem_missing))
 
     baseline, base_row = news_baseline(log_path or _build_log(), games)
+    try:
+        import newbuild
+        if not o.get("noPullSave"):
+            newbuild.save_pull(proj_text, "late swap")
+    except Exception:                          # never break a swap over logging
+        pass
+    # Risers the outs-only swap does NOT act on, logged so the riser step can be
+    # re-tested on new nights without building it (Before The Build, section 4).
+    risers = []
+    for p in players:
+        nm = normalize_name(p.name)
+        b = baseline.get(nm) if baseline else None
+        if nm in locked or not b or p.proj < 15:
+            continue
+        if (b.get("proj") and p.proj >= 1.2 * b["proj"]) or (
+                b.get("starting") is False and p.starting is True):
+            risers.append({"name": p.name, "team": p.team, "lockProj": b.get("proj"),
+                           "nowProj": p.proj, "own": p.ownership,
+                           "wasStarting": b.get("starting"), "nowStarting": p.starting})
     pool_names = read_sharp(o.get("pool") or "")
     core_names = read_sharp(o.get("cores") or "")
     if base_row and not pool_names and not core_names:
@@ -375,8 +394,8 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
     # added DAL while DAL sat at 107 of 150, and they lost 217 points.
     # The slate decides, as the build does (engine.slate_rules): the set was only
     # built neutral on 5-7 games, so only there is it held neutral.
-    plan = (E.neutral_plan(len(games))
-            if E.resolve(o.get("neutral"), E.slate_rules(len(games))["neutral"]) else None)
+    # Nov 7: no neutral team limits in the swap (the new build has none).
+    plan = None
     by_contest = {}
     for e in dk["entries"]:
         by_contest.setdefault(e["contest_id"] or e["contest"], []).append(e)
@@ -910,6 +929,7 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
            "winLine": win_line,
            "mode": "news" if str(o.get("swapMode") or "free") == "news" else "free",
            "noNewsSwaps": allow_free and not SWAP_OUTS_ONLY, "outsOnly": SWAP_OUTS_ONLY,
+           "risersNotActed": risers,
            "neutral": plan,
            "bars": {"news": SWAP_NEWS_GAIN, "noNews": SWAP_DISC_GAIN if allow_free else None,
                     "offPool": SWAP_OFF_POOL_GAIN},
@@ -994,7 +1014,7 @@ def _log_swap(out, players, baseline, games, options, inputs=None):
                "hadBaseline": bool(baseline), "news": out["news"],
                "benchMoves": out.get("benchMoves"), "noNewsSwaps": out.get("noNewsSwaps"),
                "neutral": out.get("neutral"), "inputs": saved,
-               "projectionsMoved": moved,
+               "projectionsMoved": moved, "risersNotActed": out.get("risersNotActed"),
                "swaps": [{k: v for k, v in s.items() if k not in ("rowBefore", "rowAfter", "before", "after")}
                          for s in out["swaps"]]}
         os.makedirs(os.path.dirname(SWAP_LOG_PATH), exist_ok=True)

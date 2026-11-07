@@ -1,11 +1,10 @@
 """NBA — server, builder and DK upload writer, for both DraftKings formats.
 
-Classic (PG/SG/SF/PF/C/G/F/UTIL, the main slate) and Showdown (CPT + 5 UTIL)
-share this file, the simulator, the readers and the page. The process is the
-NFL tool's, by the user's decision: Stokastic's projections, Stokastic's lineups
-export read as the opponent field, our own lineups ranked on beating that field,
-and a DK entries export filled and checked for upload. Which format a build is
-comes from the files — the DK export names its slots — and is said out loud.
+Classic builds run the Nov 7 build (newbuild.py: your pool and Stokastic's
+lineups by slate size, see README). Showdown, and after-the-fact replays of the
+old classic build, run run_build_old (simulation, bar, win-rate score). A DK
+entries export is filled and checked for upload. Which format a build is comes
+from the files — the DK export names its slots — and is said out loud.
 
     python3 nba/app.py                      # opens the drop-your-files page
 
@@ -14,12 +13,13 @@ comes from the files — the DK export names its slots — and is said out loud.
 
     python3 nba/app.py --grade contest-standings-123.csv   # after the slate
 
-Late swap is deliberately absent: it is paused pending its own discussion.
+Late swap: lateswap.py (outs only).
 """
 
 from __future__ import annotations
 
 import argparse
+import collections
 import bisect
 import json
 import os
@@ -221,8 +221,13 @@ REMOVE_CAP_SHARE = 0.40
 REMOVE_CAP_PTS = 8.0
 
 
-def apply_removals(players, names):
-    """-> ([{"name","proj","salary"}], [unmatched names])"""
+def apply_removals(players, names, redistribute=False):
+    """-> ([{"name","proj","salary"}], [unmatched names])
+
+    Since Nov 7 nothing is shifted to teammates unless `redistribute` is set (the
+    old build, kept for after-the-fact replays). 11-05 report: the Poeltl
+    removal bumped Barnes, Barrett, Murray-Boyles and Walter, and all four
+    landed under even their unbumped projection."""
     names = set(names or ())
     known = {normalize_name(p.name) for p in players}
     unmatched = sorted(n for n in names if n not in known)
@@ -232,7 +237,7 @@ def apply_removals(players, names):
         p.proj = 0.0
         p.removed = True
         p.notes.append("removed — ruled out after the projections")
-    for p, vac in removed:
+    for p, vac in (removed if redistribute else []):
         mates = [q for q in players if q.team == p.team and q.proj > 0 and not q.removed]
         if not mates:
             continue
@@ -870,7 +875,336 @@ def _log(lineups, rosters, meta):
 
 # ---------------- the build ----------------
 def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=""):
-    """The whole build. Returns plain dicts, so the CLI and the page share it."""
+    """The build (Nov 7 spec, newbuild.py). Showdown still goes to the old build.
+
+    `field_text` may be one Stokastic lineups file or a list of them: every file
+    saved for the night is read as one set (Before The Build, section 2)."""
+    import newbuild as NB
+    o = options or {}
+    fields = [t for t in (field_text if isinstance(field_text, list) else [field_text])
+              if (t or "").strip()]
+    fields += [t for t in (o.get("fieldMore") or []) if (t or "").strip()]
+    first_field = fields[0] if fields else ""
+    dk0 = read_dk_entries(dk_text) if (dk_text or "").strip() else None
+    players0, rep0 = read_projections(proj_text or "")
+    teams0 = sorted({p.team for p in players0 if p.team})
+    fmt0 = o.get("format") or (("showdown" if dk0["slots"][0] == "CPT" else "classic")
+                               if dk0 and dk0.get("entries") else
+                               ("showdown" if len(teams0) <= 2 else "classic"))
+    if fmt0 == "showdown" or o.get("oldBuild"):
+        return run_build_old(proj_text, first_field, dk_text, options, linestar_text)
+
+    notes = []
+
+    def say(kind, text, tag=None, label=None):
+        notes.append({"type": kind, "text": text, "tag": tag, "label": label})
+
+    players, rep = players0, rep0
+    if rep.get("error"):
+        return {"error": f"Projections file: {rep['error']}"}
+    why_not = stokastic_problem(rep)
+    if why_not and not o.get("allowNonStokastic"):
+        return {"error": f"Not building: the projections file in slot 1 is not "
+                         f"Stokastic's — {why_not}. Drop Stokastic's projections "
+                         f"export (DK_NBA_…_Pre_Contest_Projections.csv) there.",
+                "notes": notes}
+    old_day = None if o.get("allowOldSlate") else _old_slate(players)
+    if old_day:
+        return {"error": "Not building: " + _old_slate_msg(old_day, players), "notes": notes}
+    NB.save_pull(proj_text, "build")
+    names = o.get("fileNames") or {}
+    files = {k: {"name": names.get(k), "sha1": _fingerprint(t)}
+             for k, t in (("proj", proj_text), ("field", first_field), ("dk", dk_text),
+                          ("linestar", linestar_text)) if (t or "").strip()}
+    say("info", f"Projections: {rep['players']} players.", "check",
+        f"Stokastic projections ({rep['players']} players)")
+    if rep.get("loose"):
+        say("warn", "Columns matched by GUESS, not exact name — check these: "
+                    + ", ".join(f"{k} <- “{h}”" for k, h in rep["loose"]))
+    inj = NB.injury_tags(proj_text)
+
+    dk = dk0
+    if dk:
+        if not dk.get("pool"):
+            return {"error": "The DK file has entry rows but no player pool, so it is an "
+                             "upload file, not DK's export. Download the entries file "
+                             "again.", "notes": notes}
+        hit, miss, _no_cpt = _attach_dk(players, dk)
+        say("good", f"DK entries: {len(dk['entries'])} entries, {hit} player IDs matched.",
+            "check", f"DK entries ({len(dk['entries'])}, {hit} player IDs matched)")
+        live_miss = [p.name for p in players if p.name in miss and p.proj > 0]
+        if live_miss:
+            say("warn", f"{len(live_miss)} projected player(s) have no DK match by name "
+                        f"and cannot be used: " + ", ".join(live_miss[:10]))
+        if hit < 0.8 * (hit + len(miss)):
+            return {"error": f"Only {hit} of {hit + len(miss)} players matched the DK "
+                             f"entries file — almost certainly the wrong slate's export.",
+                    "notes": notes}
+        if tuple(dk["slots"]) != CLASSIC_SLOTS:
+            say("warn", f"The DK file's slots are {', '.join(dk['slots'])}, not DK's NBA "
+                        f"classic slots. Is this the right export?")
+        players = [p for p in players if str(p.dk_id).isdigit()]
+    games = sorted({p.game for p in players if "@" in (p.game or "") and p.proj > 0})
+    n_games = len(games)
+    say("info", f"{n_games} games ({NB.slate_group(n_games)}).", "check",
+        f"{n_games} games")
+
+    # LineStar: logged only; its one use is the 0-projection scratch check.
+    if (linestar_text or "").strip():
+        ls, lrep = read_linestar(linestar_text)
+        if not lrep.get("error") and not lrep.get("is_results"):
+            zeroed = []
+            for p in players:
+                rec = ls.get(normalize_name(p.name))
+                if rec:
+                    p.ls_proj = rec.get("proj")
+                    p.ls_status = rec.get("status") or ""
+                    if p.proj > 0 and p.ls_proj is not None and (p.ls_proj <= 0
+                                                                  or p.ls_status == "4"):
+                        zeroed.append(p)
+            if zeroed:
+                say("warn", "LineStar has these at 0 or out while Stokastic still projects "
+                            "them: " + ", ".join(f"{p.name} ({p.proj:.1f})" for p in zeroed[:10])
+                            + ". If one is a real scratch, put him in Late scratch.")
+
+    # Pool (cores are pool players), removals, caps and minimums.
+    pool_names = read_sharp(o.get("pool") or "") | read_sharp(o.get("cores") or "")
+    known = {normalize_name(p.name) for p in players}
+    for p in players:
+        p.in_pool = normalize_name(p.name) in pool_names
+        p._sheet = bool(pool_names)
+    missed = sorted(pool_names - known)
+    if missed:
+        say("warn", f"{len(missed)} name(s) on your sheet match no player on this slate "
+                    f"and were ignored: " + ", ".join(missed[:12]))
+    if pool_names:
+        say("info", f"Your pool: {sum(1 for p in players if p.in_pool)} players.", "check",
+            f"pool of {sum(1 for p in players if p.in_pool)}")
+    removed_names = read_sharp(o.get("remove") or "")
+    removed, rem_missing = apply_removals(players, removed_names)
+    if rem_missing:
+        say("warn", "Not on this slate, so NOT removed: " + ", ".join(rem_missing))
+    for r in removed:
+        say("info", f"Removed {r['name']} (was {r['proj']}). Nothing is shifted to his "
+                    f"teammates; a fresh Stokastic pull is the better fix when there is time.")
+
+    # Contests: a 20-entry (or smaller) contest gets the 20-max build, anything
+    # bigger the 150 build. One set per kind, shared by the contests of that kind.
+    contests = _contests(dk["entries"]) if dk and dk.get("entries") else []
+    if contests:
+        n_big = max([len(es) for _c, _n, es in contests if len(es) > NB.SMALL_SET] or [0])
+        n_small = max([len(es) for _c, _n, es in contests if len(es) <= NB.SMALL_SET] or [0])
+    else:
+        n_req = 150 if str(o.get("n") or "auto").lower() == "auto" else max(1, _i(o.get("n"), 150))
+        n_big, n_small = (n_req, 0) if n_req > NB.SMALL_SET else (0, n_req)
+
+    by_id = {p.dk_id: p for p in players}
+    by_name = {normalize_name(p.name): p for p in players}
+    field = []
+    for t in fields:
+        raw, frep = read_field(t, by_id=by_id, by_name=by_name)
+        if frep.get("error") or frep.get("format") != "classic":
+            say("warn", "A Stokastic lineups file could not be read as classic lineups "
+                        f"({frep.get('error') or frep.get('format')}) — skipped.")
+            continue
+        got, _bad = _field_lineups(raw, "classic")
+        field += got
+    if fields:
+        say("good", f"Stokastic lineups: {len(field):,} read from {len(fields)} file(s).",
+            "check", f"Stokastic lineups ({len(field):,})")
+
+    seed = _i(o.get("seed"), 0)
+    history = NB.load_history()
+    sets, all_notes = {}, []
+    for kind, n in (("big", n_big), ("small", n_small)):
+        if not n:
+            continue
+        pc, pmiss, pbad, pbig = _player_caps(o.get("capPlayers"), players, n)
+        caps = {k: int(round(v * n)) for k, v in pc.items()}
+        if kind == "big" or not n_big:
+            if pmiss:
+                say("warn", "No player on this slate matches these caps, so they are NOT "
+                            "in force: " + "; ".join(pmiss))
+            if pbad:
+                say("warn", "These cap lines need a name and a number of lineups (or a "
+                            "percentage) — ignored: " + "; ".join(pbad))
+            if pbig:
+                say("warn", "These caps are more lineups than the set, so they cap "
+                            "nothing: " + "; ".join(pbig))
+        floors, fmiss, fbad = _player_floors(o.get("floorPlayers"), players)
+        floors = {k: min(v, n) for k, v in floors.items()}
+        if (kind == "big" or not n_big) and (fmiss or fbad):
+            say("warn", "Minimum lines not read: " + "; ".join(fmiss + fbad))
+        res = NB.build_set(players, n, n_games, field, inj, caps, floors, seed, history,
+                           slotting=C.best_slotting)
+        sets[kind] = res
+        label = "150-max" if kind == "big" else "20-max"
+        for t in res["notes"]:
+            all_notes.append(f"{label}: {t}")
+        if not res["rosters"]:
+            return {"error": f"Built no legal lineups for the {label}. Check the pool, "
+                             f"salaries and positions.", "notes": notes}
+        if len(res["rosters"]) < n:
+            say("warn", f"{label}: only {len(res['rosters'])} distinct lineups for {n} "
+                        f"entries.")
+        if caps:
+            say("info", f"{label}: per-player caps — " + ", ".join(
+                f"{by_id[k].name} {v} of {n}" for k, v in caps.items() if k in by_id))
+    for t in all_notes:
+        say("info", t, "check", t)
+
+    active = [p for p in players if NB.is_active(p, inj)]
+    NM = NB.normals(history, players)
+    hits = NB.takeover(players, active, NM, inj)
+    for w in NB.before_build(players, active, NM, hits, removed_names, inj):
+        say("warn", w)
+    studs_off = NB.off_pool_studs(players, active) if pool_names else []
+    if studs_off:
+        say("info", "Studs off your pool under 12% projected owned (shown, not used): "
+                    + ", ".join(f"{p.name} (${p.salary:,}, {p.proj:.0f} proj, "
+                                f"{p.ownership:.0f}%)" for p in studs_off[:6]))
+    if hits:
+        say("info", "Taken over a role tonight (projection 1.3x his normal with a "
+                    "teammate out): " + ", ".join(
+                        f"{by_id[k].name} ({by_id[k].proj:.0f} vs {v:.0f})"
+                        for k, v in hits.items() if k in by_id))
+
+    # Lineup objects, the upload file, the log.
+    def lineups_of(res):
+        out = []
+        for r, src in zip(res["rosters"], res["sources"]):
+            lu = C.Lineup(r, slotting=r, source=src)
+            lu.metrics = {"via": src}
+            out.append(lu)
+        return out
+
+    chosen = {k: lineups_of(v) for k, v in sets.items()}
+    show = chosen.get("big") or chosen.get("small") or []
+    for k, lus in chosen.items():
+        for w in NB.after_build([lu.players for lu in lus], players):
+            say("info", ("150-max" if k == "big" else "20-max") + " heavy: " + w)
+        keys = [lu.key() for lu in lus]
+        if len(keys) != len(set(keys)):
+            say("warn", f"{len(keys) - len(set(keys))} entries duplicate another exactly — "
+                        f"do not upload until that is looked at.")
+        else:
+            say("good", f"All {len(lus)} lineups distinct.", "check",
+                f"{len(lus)} distinct ({'150' if k == 'big' else '20'})")
+    slots = list(dk["slots"]) if dk and dk.get("entries") else list(CLASSIC_SLOTS)
+    start_of = (lambda p: p.start or "") if dk else None
+    rostered = {k: [_roster(lu, "classic", start_of) for lu in v] for k, v in chosen.items()}
+    would_adds = {}
+    if pool_names:
+        cheap, mid = _pool_adds(players)
+        would_adds = {"cheap": [p.name for p in cheap], "mid": [p.name for p in mid],
+                      "stud": [p.name for p, _k in _stud_adds(players, n_big or n_small)]}
+    settings = {"build": "nov7", "seed": seed, "format": "classic",
+                "games": n_games, "slateGroup": NB.slate_group(n_games),
+                "pool": sorted(pool_names), "cores": [],
+                "capPlayers": o.get("capPlayers") or "",
+                "floorPlayers": o.get("floorPlayers") or "",
+                "remove": sorted(removed_names),
+                "sets": {k: v["meta"] for k, v in sets.items()},
+                "wouldBeAdds": would_adds,
+                "takeover": [by_id[k].name for k in hits if k in by_id],
+                "fieldFiles": len(fields)}
+    meta = {"slate": datetime.now().astimezone().date().isoformat(), "games": games,
+            "files": files, "format": "classic", "slots": slots, "settings": settings,
+            "removed": [r["name"] for r in removed],
+            "projection": {"source": "stokastic", "columns": rep["matched"]},
+            "contest_state": {}}
+    inputs = {"proj.csv": proj_text, "dk.csv": dk_text, "linestar.csv": linestar_text}
+    for i, t in enumerate(fields):
+        inputs[f"lineups_{i + 1}.csv"] = t
+    NB.save_inputs(inputs, {"options": {k: v for k, v in o.items() if k != "fieldMore"},
+                            "settings": settings})
+    dk_csv, log_lus, log_ros = None, [], []
+    if contests:
+        ents, pairs = [], []
+        for cid, nm, es in contests:
+            kind = "big" if len(es) > NB.SMALL_SET else "small"
+            lus, ros = chosen[kind], rostered[kind]
+            if len(es) > len(lus):
+                say("warn", f"{nm or cid} has {len(es)} entries but only {len(lus)} "
+                            f"lineups were built.")
+            for e, lu, r in zip(es, lus, ros):
+                ents.append(e)
+                pairs.append((lu, r))
+        if len(contests) > 1:
+            say("info", f"{len(contests)} contests: " + "; ".join(
+                f"{len(es)} entries in {nm or cid} ({'150 build' if len(es) > NB.SMALL_SET else '20-max build'})"
+                for cid, nm, es in contests), "check", f"{len(contests)} contests")
+        log_lus = [lu for lu, _r in pairs]
+        log_ros = [r for _lu, r in pairs]
+        problems = _check_upload(ents, log_ros, slots, "classic", dk)
+        if problems:
+            say("warn", f"NOT writing an upload file — {len(problems)} problem(s) "
+                        f"DraftKings would reject:")
+            for line in problems[:12]:
+                say("warn", "    " + line)
+        else:
+            dk_csv = _dk_rows(ents, log_ros, "Entry ID,Contest Name,Contest ID,Entry Fee,"
+                              + ",".join(slots), "classic")
+            say("good", f"Upload file checked: {len(ents)} rows, every player ID valid for "
+                        f"its slot, no repeats, none over the cap.", "check",
+                "upload file valid")
+            meta["entry_ids"] = [e["entry_id"] for e in ents]
+            meta["contest_ids"] = [e["contest_id"] for e in ents]
+    else:
+        say("warn", "No DK entries file, so there is no uploadable CSV — that export is "
+                    "the only source of your Entry IDs and DK's player IDs.")
+        for k in chosen:
+            log_lus += chosen[k]
+            log_ros += rostered[k]
+    err = _log(log_lus, log_ros, meta)
+    if err:
+        say("warn", err + " Grading reads that log, so this night will not be gradable.")
+
+    used = collections.Counter(p.dk_id for lu in show for p in lu.players)
+    pct = lambda p: round(100.0 * used.get(p.dk_id, 0) / max(1, len(show)))
+    zero_chalk = [p for p in active if p.ownership >= 15 and not used.get(p.dk_id)]
+    info = {
+        "checks": [x["label"] for x in notes if x.get("tag") == "check"],
+        "problems": [x["text"].strip() for x in notes if x["type"] == "warn"],
+        "shown": [x for x in notes if x["type"] != "warn" and not x.get("tag")],
+        "zeroes": [{"name": p.name, "salary": p.salary, "proj": round(p.proj, 1),
+                    "own": p.ownership, "from": "chalk"} for p in zero_chalk],
+        "overweights": [], "cores": [], "coreGame": None,
+        "adds": {"cheap": [], "mid": [], "stud": []},
+        "mostUsed": [{"name": p.name, "n": used[p.dk_id], "pct": pct(p),
+                      "field": round(p.ownership)}
+                     for p in sorted((q for q in players if used.get(q.dk_id)),
+                                     key=lambda q: -used[q.dk_id])[:6]],
+    }
+    arms = collections.Counter(lu.source for lu in show)
+    show_ros = rostered.get("big") or rostered.get("small") or []
+    shapes = collections.Counter(lu.shape_label() for lu in show)
+    return {
+        "info": info, "notes": notes, "coach": [], "format": "classic", "teams": teams0,
+        "games": games,
+        "summary": {"n": len(show), "arms": dict(arms),
+                    "shapeLabel": "biggest game / team block",
+                    "splits": dict(shapes.most_common(8)), "captains": 0, "topCaptains": [],
+                    "salaryLo": min(lu.salary for lu in show),
+                    "salaryHi": max(lu.salary for lu in show),
+                    "projAvg": round(sum(lu.proj for lu in show) / len(show), 1),
+                    "ownAvg": round(sum(lu.own_sum for lu in show) / len(show), 1),
+                    "distinct": len(used),
+                    "dupeAvg": 0.0,
+                    "small": ({"n": len(chosen["small"]),
+                               "exposure": _exposure(chosen["small"], "classic")}
+                              if "small" in chosen and "big" in chosen else None)},
+        "exposure": _exposure(show, "classic"),
+        "lineups": [_lineup_payload(lu, r, "classic", slots) for lu, r in zip(show, show_ros)],
+        "dkCsv": dk_csv,
+        "logPath": LOG_PATH,
+    }
+
+
+def run_build_old(proj_text, field_text="", dk_text="", options=None, linestar_text=""):
+    """The OLD build (simulation, bar, win-rate score, neutral rules, adds), up to
+    Nov 7. Kept for showdown and for the after-the-fact replays that grade the
+    new build against what this one would have made; the page runs run_build."""
     o = options or {}
     notes = []
 
@@ -1067,7 +1401,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                     + f", {sum(1 for p in players if p.in_pool)} in pool.", "hide")
 
     # Late scratches — the WNBA removal.
-    removed, rem_missing = apply_removals(players, read_sharp(o.get("remove") or ""))
+    removed, rem_missing = apply_removals(players, read_sharp(o.get("remove") or ""),
+                                          redistribute=True)
     if rem_missing:
         say("warn", "Not on this slate, so NOT removed: " + ", ".join(rem_missing))
     for r in removed:
@@ -2129,8 +2464,11 @@ class Handler(BaseHTTPRequestHandler):
                                            p.get("standings") or "", p.get("options") or {})
                 return self._send(400 if r.get("error") else 200, json.dumps(r))
             if self.path == "/api/check":
-                return self._send(200, json.dumps(
-                    _describe(p.get("kind") or "", p.get("text") or "")))
+                d = _describe(p.get("kind") or "", p.get("text") or "")
+                if p.get("kind") == "proj" and d.get("ok"):
+                    import newbuild
+                    newbuild.save_pull(p.get("text") or "", "drop")   # timestamped pull
+                return self._send(200, json.dumps(d))
             if not (p.get("proj") or "").strip():
                 return self._send(400, json.dumps({"error": "Drop the Stokastic "
                                                             "projections CSV first."}))

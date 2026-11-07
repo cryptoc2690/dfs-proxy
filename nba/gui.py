@@ -168,11 +168,11 @@ INDEX_HTML = r"""<!doctype html>
   <div class="fslot req" id="s_proj"><b>1 · Stokastic projections</b>
     <span class="fstate">required — drop or click</span></div>
   <div class="fslot req" id="s_field"><b>2 · Stokastic lineups</b>
-    <span class="fstate">the opponent field — drop or click</span></div>
+    <span class="fstate">the 150 uses them on 5+ games — drop one or more</span></div>
   <div class="fslot req" id="s_dk"><b>3 · DK entries export</b>
     <span class="fstate">needed to upload — drop or click</span></div>
   <div class="fslot" id="s_ls"><b>4 · LineStar <span style="opacity:.6">(optional)</span></b>
-    <span class="fstate">Vegas + a second projection, logged only</span></div>
+    <span class="fstate">only warns if it has a player at 0</span></div>
   <div class="fslot" id="s_st"><b>5 · DK contest standings <span style="opacity:.6">(live or final)</span></b>
     <span class="fstate">grade last night's build — drop or click</span></div>
 </div>
@@ -192,25 +192,18 @@ INDEX_HTML = r"""<!doctype html>
       <div class="picknote">Paste the whole sheet at once — names separated by
         commas, or one per line. Anything that matches nobody is named back to
         you rather than dropped quietly.</div>
-      <label>Players from outside the pool, per lineup</label>
-      <select id="offpool">
-        <option value="0" selected>0 — build only from the pool</option>
-        <option value="1">1 — allow one</option>
-        <option value="2">2 — allow two</option>
-        <option value="none">No limit — the pool is only a shortlist</option>
-      </select>
-      <div class="picknote">Only applies if you picked a pool. A sheet that
-        cannot fill all eight classic slots (or six showdown names) is treated as
-        a shortlist instead of a filter, and the build says so.</div>
+      <div class="picknote">Your pool is where our own lineups come from: all
+        150 on 2–4 games, 75 on 8+ games, and the 20-max every night. On 5–7 games
+        the 150 is Stokastic's lineups. If the pool cannot make legal lineups the
+        whole slate is used, and the build says so.</div>
     </div>
     <div>
       <label>Late scratch — remove players</label>
       <textarea id="remove" rows="2" spellcheck="false"
                 placeholder="Stephon Castle"></textarea>
       <div class="picknote">Ruled out after you pulled the projections. He is
-        zeroed and about 65% of his production goes to teammates, weighted to his
-        position — the WNBA tool's removal. A fresh Stokastic pull is better when
-        there is time for one.</div>
+        taken out of every lineup, Stokastic's included; nothing is shifted to his
+        teammates. A fresh Stokastic pull is better when there is time for one.</div>
     </div>
     <div>
       <label>Cap individual players <span id="capwho" class="muted">— none set</span></label>
@@ -218,76 +211,25 @@ INDEX_HTML = r"""<!doctype html>
                 placeholder="Jalen Johnson 60&#10;Daniss Jenkins 25%"></textarea>
       <div class="picknote">One player per line and a NUMBER OF LINEUPS, the same
         as the minimum box ("Reed Sheppard 50" = at most 50 lineups). Add % for a
-        percentage ("Reed Sheppard 33%"). Your number is the final word on that player — it overrides the board-wide exposure
-        cap (which is off by default: heavy exposure is reported, not capped). Leave a
-        player out and nothing changes for him. The build says which caps it
-        applied and warns about any name it could not find.</div>
+        percentage ("Reed Sheppard 33%"). A cap at 0 keeps him out entirely. Without
+        a cap nobody goes past 85% of a 150 or 90% of a 20. The build says which caps
+        it applied and warns about any name it could not find.</div>
       <label style="margin-top:14px">Minimum lineups for a player</label>
       <textarea id="floorplayers" rows="2" spellcheck="false"
                 placeholder="Andre Drummond 2"></textarea>
       <div class="picknote">One player and a NUMBER of lineups per line. Gets a
-        game-script play into a lineup or two without making him a core; he is
-        added to the pool if he is not on it. The build says if a minimum could
-        not be met.</div>
+        game-script play into a lineup or two; he is added to the pool if he is
+        not on it. The build says if a minimum could not be met.</div>
     </div>
     <details id="advwrap">
-      <summary>Advanced — automatic, leave alone unless overriding</summary>
+      <summary>Advanced — leave alone unless overriding</summary>
       <div class="setgrid">
     <div>
-      <label>Lineups</label>
+      <label>Lineups (only with no DK file)</label>
       <input id="n" type="number" min="1" max="150" placeholder="auto — from the DK file">
-      <label>How many are OURS (rest come from their pool)</label>
-      <input id="split" type="number" min="0" max="150" placeholder="auto — half, 11 of a 20-max">
-      <div class="hint">Leave both blank: lineups is the contest's entry count in
-        the DK file, ours is half of a 150-max and 11 of a 20-max (15 of 20 on
-        5–7 games). Type a number only to override.</div>
-      <label style="margin-top:12px">Neutral build</label>
-      <select id="neutral">
-        <option value="auto" selected>Auto — the slate decides (on at 5–7 games)</option>
-        <option value="on">On</option>
-        <option value="off">Off — the old build</option>
-      </select>
-      <div class="hint">Leave it on Auto. Each lineup's main game rotated across the
-        slate, the two teams in it held 50/50, and no team in too many lineups.
-        It paid on 5–7 games and cost on 2–4 and 8+ (Thorough Review 10-27), so
-        the tool switches it from the game count. Slot 1 says what it chose.</div>
-        </div>
-        <div>
-      <label>Ownership lean — <span id="lv">+0.00</span>
-        <span style="color:var(--muted)">(&minus; fade · + consensus)</span></label>
-      <input id="lean" type="range" min="-100" max="100" value="0" style="width:100%">
-      <div class="hint">Neutral by default, on three sports' evidence: WNBA
-        picked 0 on all 23 held-out folds and fading cost 11-14 cashes; NFL
-        returned the same money at +0.35, 0 and -0.35; and the old NBA chats saw
-        Stokastic's leverage number fade chalk that won. The lever still works —
-        move it if your read says so.</div>
-        </div>
-        <div>
-      <label>Contest size — max entries</label>
-      <input id="cap" type="number" placeholder="auto — from the contest name">
-      <label>How full it will get — <span id="fv">100</span>%</label>
-      <input id="fillpct" type="range" min="10" max="100" value="100"
-             style="width:100%">
-      <div class="hint">Leave blank: worked out from the contest's prize and fee
-        in the DK file (prize ÷ fee ÷ 0.84 matched DK's real counts on 22 of 23
-        contests). Assumed to fill. Type a number only to override.</div>
-      <label>Min projection for a roster spot</label>
-      <input id="minproj" type="number" value="2" step="0.5">
-        </div>
-        <div>
-          <label>Round out the pool</label>
-          <select id="pooladds">
-            <option value="auto" selected>Auto — the slate decides (on at 5+ games)</option>
-            <option value="on">On</option>
-            <option value="off">Off</option>
-          </select>
-          <div class="picknote">Leave it on Auto: the adds hurt on 2–4 games and
-            helped on 5+. Adds the 5 best points-per-$1,000 players off your sheet at
-            $4,500 or less, and 5 more from $4,600 to $7,500, all projected 14+. They become
-            legal, not forced. Plus the 3 highest-projected studs above $7,500 under 10%
-            owned, each in at least 2x his projected ownership. Cap a name at 0 to drop
-            him. The build names them all.</div>
-        </div>
+      <div class="hint">Leave blank: each contest in the DK file gets its own
+        entry count. A contest of 20 or fewer entries gets the 20-max build.</div>
+    </div>
       </div>
     </details>
   </div>
@@ -310,27 +252,19 @@ INDEX_HTML = r"""<!doctype html>
       against the real field — rank, cashes, duplication, and projected vs actual.</span>
   </div>
   <div id="welcome">
-    <p><b>Drop three files above.</b></p>
+    <p><b>Drop three files above, type your pool, press Build.</b></p>
     <p>1 and 2 come from Stokastic — the projections export and the lineups
-      export. <b>Pull them in the same minute:</b> the two carry separate
-      ownership snapshots and they drift apart during the day.</p>
-    <p>3 is your DK entries export. Enter or reserve your entries on DK first,
-      then download it. It is the only file carrying your Entry IDs and DK's
-      per-slot player IDs, and without it there is nothing to upload.</p>
-    <p>Their lineup file is not a list of picks — it is a model of your
-      opponents. We use it to score against and to estimate duplication, and
-      build our own lineups on top.</p>
-    <p><b>Classic or showdown is worked out from your files</b>, so the same
-      three slots handle both.</p>
-    <p>4, LineStar, is optional: its Vegas lines, its projection and its
-      starting status are logged beside Stokastic's and not used. It also warns
-      if LineStar has someone at 0 whom Stokastic still projects.</p>
-    <p>Slot 1 refuses any file that is not Stokastic's projections export.</p>
-    <p><b>Late swap</b> (mid-slate): put a FRESH Stokastic pull in 1, your CURRENT DK
-      entries export in 3 and the live contest standings in 5, then press Late swap.
-      It moves a lineup on news (+8 simulated points) or without news only when
-      the gain is big (+14), never touches a locked player, and shows each change
-      so you can untick it.</p>
+      export (drop every lineups file you pulled; they are read as one set).</p>
+    <p>3 is your DK entries export, with your entries reserved. Each contest in it
+      is built by its size: a 150 or a 20-max.</p>
+    <p><b>The 150:</b> 2–4 games, all from your pool · 5–7 games, all from Stokastic's
+      lineups · 8+ games, half and half. <b>The 20-max:</b> always from your pool, with
+      the night's top three owned raised to about twice their ownership.</p>
+    <p>4, LineStar, is optional: it only warns if LineStar has someone at 0 whom
+      Stokastic still projects. Every Stokastic file you drop is saved with its time.</p>
+    <p><b>Late swap</b> (mid-slate): put a FRESH Stokastic pull in 1 and your CURRENT DK
+      entries export in 3, then press Late swap. It replaces only players who are
+      out (ruled out, removed, or over a cap you typed). Nothing else moves.</p>
     <p>5 is for the morning after: drop DK's contest standings and grade the
       build you logged against the real field.</p>
   </div>
@@ -339,7 +273,7 @@ INDEX_HTML = r"""<!doctype html>
 
 <script>
 const $ = s => document.querySelector(s);
-const files = {proj:null, field:null, dk:null, linestar:null, standings:null};
+const files = {proj:null, field:null, fieldMore:[], dk:null, linestar:null, standings:null};
 const fileNames = {};
 let result = null, roster = [], fmt = 'showdown', fmtFromDk = false;
 // Which teams each file covers, and the slots themselves, so the projections
@@ -393,6 +327,15 @@ function slot(key, el){
   };
   slotUi[key] = {mark, ok: ''};
 
+  let more = 0;
+  const readMore = list => {
+    files.fieldMore = []; more = list.length - 1;
+    [...list].slice(1).forEach(f => {
+      const r = new FileReader();
+      r.onload = e => { files.fieldMore.push(e.target.result); };
+      r.readAsText(f);
+    });
+  };
   const read = f => {
     if(!f){ return; }
     state.textContent = 'reading ' + f.name + '…';
@@ -409,7 +352,8 @@ function slot(key, el){
         if(d.ok){
           files[key] = text; fileNames[key] = f.name;
           slates[key] = d.teams || null;
-          slotUi[key].ok = '✓ ' + f.name + ' — ' + d.msg;
+          slotUi[key].ok = '✓ ' + f.name + ' — ' + d.msg
+            + (key === 'field' && more ? ' · +' + more + ' more file' + (more > 1 ? 's' : '') : '');
           mark('loaded', slotUi[key].ok);
           if(d.format) setFmt(d.format, key === 'dk');
           if(key === 'standings') $('#graderow').style.display = '';
@@ -431,7 +375,11 @@ function slot(key, el){
     r.readAsText(f);
   };
 
-  input.addEventListener('change', () => { read(input.files[0]); input.value=''; });
+  if(key === 'field') input.multiple = true;
+  input.addEventListener('change', () => {
+    if(key === 'field') readMore(input.files);
+    read(input.files[0]); input.value='';
+  });
   el.addEventListener('click', e => { if(e.target !== input) input.click(); });
   ['dragenter','dragover'].forEach(ev => el.addEventListener(ev, e => {
     e.preventDefault(); e.stopPropagation(); el.classList.add('over');
@@ -442,6 +390,7 @@ function slot(key, el){
   el.addEventListener('drop', e => {
     e.preventDefault(); e.stopPropagation(); el.classList.remove('over');
     const dt = e.dataTransfer;
+    if(key === 'field' && dt.files) readMore(dt.files);
     read(dt.files && dt.files[0]);
   });
   mark('req', empty);
@@ -646,11 +595,6 @@ function slateLabel(teams){
 }
 
 
-$('#lean').addEventListener('input', e => {
-  const v = e.target.value/100;
-  $('#lv').textContent = (v>=0?'+':'') + v.toFixed(2);
-});
-$('#fillpct').addEventListener('input', e => { $('#fv').textContent = e.target.value; });
 
 // Per-player caps: echo back what the server will read, and flag a line that is
 // missing its number before the build spends two minutes ignoring it.
@@ -669,7 +613,7 @@ const num = (sel, d) => { const v = parseFloat($(sel).value); return isNaN(v) ? 
 
 $('#go').addEventListener('click', async () => {
   const b = $('#go'); b.disabled = true;
-  b.innerHTML = '<span class="spin"></span>Simulating…';
+  b.innerHTML = '<span class="spin"></span>Building…';
   $('#status').textContent = ''; $('#welcome').style.display='none';
   $('#out').innerHTML = ''; $('#dl').style.display='none';
   try {
@@ -678,19 +622,13 @@ $('#go').addEventListener('click', async () => {
       body: JSON.stringify({
         proj: files.proj, field: files.field, dk: files.dk, linestar: files.linestar,
         options: {
-          n: num('#n','auto'), split: num('#split','auto'),
+          n: num('#n','auto'),
           // Deliberately NOT sending the format. The server works it out from
-          // the files and says which signal it used; the page's own guess only
-          // decides which settings to show.
-          ownLean: num('#lean',0)/100,
-          minProj: num('#minproj', 2),
+          // the files and says which signal it used.
           remove: $('#remove').value,
           floorPlayers: $('#floorplayers').value,
-          poolAdds: $('#pooladds').value,
-          neutral: $('#neutral').value,
+          fieldMore: files.fieldMore || [],
           fileNames: fileNames,
-          fieldCap: num('#cap','auto'), fillPct: num('#fillpct',100),
-          maxOffPool: $('#offpool').value,
           pool: [...sel.pool].join('\n'), cores: [...sel.core].join('\n'),
           capPlayers: $('#capplayers').value
         }
@@ -839,7 +777,7 @@ function infoHtml(d){
   if(f.zeroes.length){
     const src = {pool:'', core:'core', cheap:'added', mid:'added', stud:'added stud', minimum:'minimum'};
     h += '<div class="note info"><span class="mk zero">●</span><b>In 0 lineups</b> '
-      + '<span class="muted">(your pool and the added players)</span>: '
+      + '<span class="muted">(chalk, 15%+ projected owned)</span>: '
       + f.zeroes.map(z => '<b>'+esc(z.name)+'</b> <span class="muted">($'
           + z.salary.toLocaleString()+', '+z.proj+' proj, '+Math.round(z.own)+'% owned'
           + (src[z.from] ? ', '+src[z.from] : '')+')</span>').join(' · ')
@@ -902,7 +840,8 @@ function render(d){
   const s = d.summary;
   if(d.format) setFmt(d.format, true);
   $('#slate').textContent = slateLabel(d.teams||[]);
-  const arms = Object.entries(s.arms).map(([k,v]) => k+' '+v).join(' / ');
+  const armName = k => k === 'vendor' ? 'Stokastic' : (k === 'mine' ? 'your pool' : k);
+  const arms = Object.entries(s.arms).map(([k,v]) => armName(k)+' '+v).join(' / ');
   const sd = d.format !== 'classic';
   h += '<div class="cards">'
     + card(s.n, 'lineups ('+arms+')')
@@ -910,8 +849,12 @@ function render(d){
     + card('$'+s.salaryLo.toLocaleString()+'–'+s.salaryHi.toLocaleString(), 'salary used')
     + card(s.projAvg, 'avg projection')
     + card(s.ownAvg, 'avg ownership sum')
-    + card(s.dupeAvg, 'avg expected duplicates')
+    + (s.distinct !== undefined ? card(s.distinct, 'distinct players')
+                                : card(s.dupeAvg, 'avg expected duplicates'))
     + '</div>';
+  if(s.small) h += '<div class="note info"><span class="lbl">20-max ('+s.small.n+')</span>'
+    + s.small.exposure.players.slice(0, 8).map(p => esc(p.name)+' '+p.pct.toFixed(0)
+        + '% <span class="muted">(field '+p.own.toFixed(0)+'%)</span>').join(' · ') + '</div>';
   h += '<div style="font-size:12.5px;color:var(--muted);margin-bottom:6px">'
      + esc(s.shapeLabel) + ': '
      + Object.entries(s.splits).map(([k,v]) => esc(k)+' × '+v).join(' · ')
@@ -926,7 +869,7 @@ function render(d){
   h += '<div class="tblwrap"><table><thead><tr>'
      + '<th>#</th><th>arm</th><th>shape</th><th>roster, in DK slot order</th>'
      + '<th class="num">salary</th><th class="num">proj</th>'
-     + '<th class="num">own</th><th class="num">win%</th><th class="num">dupes</th>'
+     + '<th class="num">own</th>'
      + '</tr></thead><tbody>';
   const who = p => '<span style="color:var(--muted)">'+p.slot+'</span> '
     + (p.off ? '<span class="offsheet" title="not on your sheet">' + esc(p.name) + '</span>'
@@ -935,15 +878,13 @@ function render(d){
     + (p.slot === 'CPT' ? '' : ' <span style="color:var(--muted)">('+p.team+')</span>');
   d.lineups.forEach((l,i) => {
     h += '<tr><td class="num">'+(i+1)+'</td>'
-      + '<td><span class="arm '+l.source+'">'+l.source+'</span></td>'
+      + '<td><span class="arm '+l.source+'">'+armName(l.source)+'</span></td>'
       + '<td>'+esc(l.shape)+'</td>'
       + '<td>'+l.players.map((p,j) => j===0 && sd ? '<span class="cpt">'+who(p)+'</span>'
                                                   : who(p)).join(', ')+'</td>'
       + '<td class="num">'+l.salary.toLocaleString()+'</td>'
       + '<td class="num">'+l.proj.toFixed(1)+'</td>'
-      + '<td class="num">'+l.ownSum.toFixed(0)+'</td>'
-      + '<td class="num">'+(l.win*100).toFixed(2)+'</td>'
-      + '<td class="num">'+l.dupes.toFixed(1)+'</td></tr>';
+      + '<td class="num">'+l.ownSum.toFixed(0)+'</td></tr>';
   });
   h += '</tbody></table></div>';
   if(d.info) h += detailsHtml(d);
@@ -974,8 +915,7 @@ $('#ls').addEventListener('click', async () => {
     const res = await fetch('/api/lateswap', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({proj: files.proj, dk: files.dk, standings: files.standings,
-        options: {neutral: $('#neutral').value,
-                  noNewsSwaps: $('#nonews').checked ? 'on' : 'off',
+        options: {noNewsSwaps: $('#nonews').checked ? 'on' : 'off',
                   pool: [...sel.pool].join('\n'), cores: [...sel.core].join('\n'),
                   remove: $('#remove').value,
                   capPlayers: $('#capplayers').value}})

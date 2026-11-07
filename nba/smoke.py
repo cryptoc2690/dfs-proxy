@@ -22,6 +22,7 @@ Rules for editing it, inherited from wnba/smoke.py:
 
 Run it before every commit.
 """
+import collections
 import csv
 import io
 import json
@@ -55,6 +56,9 @@ def check(label, cond, detail=""):
 # Keep the build log out of the real one.
 _TMP = tempfile.mkdtemp(prefix="nba_smoke_")
 app.LOG_PATH = os.path.join(_TMP, "nba_builds.jsonl")
+import newbuild as NB                        # noqa: E402
+NB.LOG_DIR = _TMP                            # pulls and inputs out of the real logs
+NB.HISTORY_DIR = os.path.join(_TMP, "history")  # no real earlier nights in the tests
 
 # ---------- synthetic Stokastic projections ----------
 PROJ_COLS = ["Player", "Salary", "Position", "Team", "Opponent", "Minutes", "FPPM",
@@ -252,7 +256,7 @@ print("\n-- classic build --")
 def build(**opts):
     base = {"n": 40, "sims": 400, "seed": 0, "fieldCap": 47000}
     base.update(opts)
-    return app.run_build(PROJ5, FIELD5, DK5, base)
+    return app.run_build_old(PROJ5, FIELD5, DK5, base)
 
 
 r = build()
@@ -359,7 +363,12 @@ check("a removed player is in no lineup",
 check("an unknown removal is reported",
       any("not a player" in n["text"].lower() and "NOT removed" in n["text"] for n in rr["notes"]))
 _pl3, _ = S.read_projections(PROJ5)
-_info, _miss = app.apply_removals(_pl3, {normalize_name("Nikola Jokić")})
+_pl0, _ = S.read_projections(PROJ5)
+_d0 = next(p for p in _pl0 if p.name == "DEN Player5").proj
+app.apply_removals(_pl0, {normalize_name("Nikola Jokić")})
+check("removal (new default): nothing is shifted to teammates",
+      next(p for p in _pl0 if p.name == "DEN Player5").proj == _d0)
+_info, _miss = app.apply_removals(_pl3, {normalize_name("Nikola Jokić")}, redistribute=True)
 _mate = next(p for p in _pl3 if p.name == "DEN Player5")
 check("removal pushes production to teammates, capped at 8",
       0 < _mate.proj - _mate_before <= 8.0, f"{_mate_before} -> {_mate.proj}")
@@ -369,7 +378,7 @@ check("the coach notes the removal", any("You removed" in n["text"] for n in rr[
 
 print("\n-- refusals --")
 _wrong = dk_classic(slate([("PHX", "SAC"), ("CHI", "IND")], seed=9), [("PHX", "SAC"), ("CHI", "IND")])
-rw = app.run_build(PROJ5, FIELD5, _wrong, {"n": 10, "sims": 200})
+rw = app.run_build_old(PROJ5, FIELD5, _wrong, {"n": 10, "sims": 200})
 check("the wrong slate's DK file stops the build", bool(rw.get("error")), rw.get("error", "")[:60])
 _c = next(p for p in pl if p.pos == "C")
 _ents = [dk5["entries"][0]]
@@ -413,7 +422,7 @@ def dk_showdown(rows):
 
 
 DK_SD = dk_showdown(RSD)
-rs = app.run_build(PROJ_SD, "", DK_SD, {"n": 30, "sims": 400, "fieldCap": 30000})
+rs = app.run_build_old(PROJ_SD, "", DK_SD, {"n": 30, "sims": 400, "fieldCap": 30000})
 check("showdown: no error", not rs.get("error"), rs.get("error", ""))
 check("showdown: detected from the DK file", rs.get("format") == "showdown")
 check("showdown: 30 lineups of CPT + 5 UTIL",
@@ -449,7 +458,7 @@ def linestar_csv(rows, games, scored=False):
 
 
 LS5 = linestar_csv(R5, GAMES5)
-rl = app.run_build(PROJ5, FIELD5, DK5, {"n": 40, "sims": 400, "seed": 0, "fieldCap": 47000},
+rl = app.run_build_old(PROJ5, FIELD5, DK5, {"n": 40, "sims": 400, "seed": 0, "fieldCap": 47000},
                    linestar_text=LS5)
 check("LineStar: the build is IDENTICAL with and without it",
       [l["players"] for l in rl["lineups"]] == [l["players"] for l in lus])
@@ -461,7 +470,7 @@ _ll = [json.loads(l) for l in open(app.LOG_PATH, encoding="utf-8")][-1]
 check("LineStar: Vegas and its projection are in the log",
       (_ll["contest_state"].get("vegas") or {}).get("DEN", {}).get("implied") == 115.5
       and any(p["ls_proj"] is not None for p in _ll["players"]), str(_ll["contest_state"].get("vegas"))[:80])
-rpost = app.run_build(PROJ5, FIELD5, DK5, {"n": 10, "sims": 200},
+rpost = app.run_build_old(PROJ5, FIELD5, DK5, {"n": 10, "sims": 200},
                       linestar_text=linestar_csv(R5, GAMES5, scored=True))
 check("LineStar: a post-game file is refused for logging, loudly",
       any("post-game" in n["text"] for n in rpost["notes"]))
@@ -484,7 +493,7 @@ def etr_csv(rows, rename=None):
 
 
 ETR5 = etr_csv(R5, rename={"Nikola Jokić": "N. Jokic"})
-re_ = app.run_build(ETR5, FIELD5, DK5, {"n": 10, "sims": 200})
+re_ = app.run_build_old(ETR5, FIELD5, DK5, {"n": 10, "sims": 200})
 check("an ETR file in the projections slot stops the build, by name",
       bool(re_.get("error")) and "ETR's projections file" in re_["error"], re_.get("error", "")[:90])
 check("...and the drop slot says so before any build",
@@ -492,8 +501,8 @@ check("...and the drop slot says so before any build",
       and "NOT Stokastic" in app._describe("proj", ETR5)["msg"])
 _nosd = proj_csv(R5).replace("Std Dev", "Spread", 1)
 check("a projections file with no Std Dev stops the build",
-      "no Std Dev" in (app.run_build(_nosd, FIELD5, DK5, {"n": 10, "sims": 200}).get("error") or ""))
-_ovr = app.run_build(_nosd, FIELD5, DK5, {"n": 10, "sims": 200, "allowNonStokastic": True})
+      "no Std Dev" in (app.run_build_old(_nosd, FIELD5, DK5, {"n": 10, "sims": 200}).get("error") or ""))
+_ovr = app.run_build_old(_nosd, FIELD5, DK5, {"n": 10, "sims": 200, "allowNonStokastic": True})
 check("...unless deliberately overridden, and then it still warns",
       not _ovr.get("error") and any("No Std Dev" in n["text"] for n in _ovr["notes"]))
 check("Stokastic's own file is accepted and labelled",
@@ -1032,7 +1041,7 @@ GAMES3 = GAMES5[:3]
 R3 = slate(GAMES3, seed=3)
 PROJ3, FIELD3, DK3 = proj_csv(R3), field_csv(R3), dk_classic(R3, GAMES3)
 _pool3 = "\n".join(x["Player"] for i, x in enumerate(R3) if i % 2 == 0)
-r3 = app.run_build(PROJ3, FIELD3, DK3, {"n": 40, "sims": 400, "seed": 0, "split": 40,
+r3 = app.run_build_old(PROJ3, FIELD3, DK3, {"n": 40, "sims": 400, "seed": 0, "split": 40,
                                          "fieldCap": 47000, "pool": _pool3})
 _l3 = [json.loads(l) for l in open(app.LOG_PATH, encoding="utf-8")][-1]["settings"]
 check("3 games on auto: neutral off and no round-out adds, said in the check line",
@@ -1042,7 +1051,7 @@ check("3 games on auto: neutral off and no round-out adds, said in the check lin
 check("slot 1 says what the slate will get",
       app._describe("proj", PROJ3)["msg"].endswith("→ neutral off, round-out off")
       and app._describe("proj", PROJ5)["msg"].endswith("→ neutral on, round-out on"))
-r3h = app.run_build(PROJ3, FIELD3, DK3, {"n": 40, "sims": 400, "seed": 0, "split": 40,
+r3h = app.run_build_old(PROJ3, FIELD3, DK3, {"n": 40, "sims": 400, "seed": 0, "split": 40,
                                           "fieldCap": 47000, "pool": _pool3,
                                           "neutral": "on", "poolAdds": "on"})
 _l3h = [json.loads(l) for l in open(app.LOG_PATH, encoding="utf-8")][-1]["settings"]
@@ -1122,7 +1131,7 @@ check("bar field: a player 12 points light in the file is raked to his projected
       f"{_sh[_mid_id]:.1f} -> {_after[_mid_id]:.1f}, target {_sh[_mid_id] + 12:.1f}")
 check("bar field: a player only 3 points off is not a target",
       all(r[0].dk_id != _near_id for r in _rk))
-_rb = app.run_build(PROJ5, FIELD5, DK5, {"n": 10, "sims": 200})
+_rb = app.run_build_old(PROJ5, FIELD5, DK5, {"n": 10, "sims": 200})
 _lb = [json.loads(l) for l in open(app.LOG_PATH, encoding="utf-8")][-1]
 _sb = [json.loads(l) for l in open(app._side_log("nba_slates.jsonl"), encoding="utf-8")][-1]
 check("each player's share of Stokastic's lineups file is logged (build and slate logs)",
@@ -1142,7 +1151,7 @@ check("contest size: $20K And-One at $1 ~23,800; $50K Four Point Play at $4 ~14,
 check("contest size: an unreadable name gives 0, not a guess",
       app.contest_size("NBA Free Contest", "$0") == 0 and app.contest_size("", "") == 0)
 check("ours: half of 150, 11 of a 20-max", app.auto_ours(150) == 75 and app.auto_ours(20) == 11)
-_ra = app.run_build(PROJ5, FIELD5, DK5, {"n": "auto", "split": "auto", "fieldCap": "auto",
+_ra = app.run_build_old(PROJ5, FIELD5, DK5, {"n": "auto", "split": "auto", "fieldCap": "auto",
                                          "sims": 200})
 _sa = [json.loads(l) for l in open(app.LOG_PATH, encoding="utf-8")][-1]["settings"]
 check("blank boxes: lineups, ours and contest size all come from the DK file",
@@ -1154,6 +1163,107 @@ check("the check line says it", any("from the DK file" in n["text"] for n in _ra
 _d = app._describe("dk", DK5)
 check("slot 3 shows the contest, its lineups and its size",
       _d["ok"] and _d["n"] == 150 and _d["size"] > 30000 and "lineups" in _d["msg"], _d["msg"])
+
+print("\n-- the Nov 7 build (newbuild.py) --")
+def _rows_of(res_start):
+    return [json.loads(l) for l in open(app.LOG_PATH, encoding="utf-8")][res_start:]
+def _nlog():
+    return sum(1 for _ in open(app.LOG_PATH, encoding="utf-8")) if os.path.exists(app.LOG_PATH) else 0
+_pool5 = "\n".join(x["Player"] for i, x in enumerate(R5) if i % 3 != 2)
+_k0 = _nlog()
+nb5 = app.run_build(PROJ5, FIELD5, DK5, {"pool": _pool5})
+check("new build: runs on 5 games with a 150, a 20-max and a 1-entry contest",
+      not nb5.get("error") and nb5.get("dkCsv"), str(nb5.get("error") or nb5["info"]["problems"][:3]))
+_lr = _rows_of(_k0)
+_big = [r for r in _lr if r["contest_id"] == "900001"]
+_small = [r for r in _lr if r["contest_id"] == "900002"]
+check("new build: 5-7 games, the 150 is all Stokastic's lineups",
+      len(_big) == 150 and all(r["source"] == "vendor" for r in _big),
+      str(collections.Counter(r["source"] for r in _big)))
+check("new build: the 20-max is its own set from the pool, no Stokastic lineups",
+      len(_small) == 20 and all(r["source"] == "mine" for r in _small)
+      and all(p["pool"] for r in _small for p in r["players"]))
+_ex20 = collections.Counter(p["name"] for r in _small for p in r["players"])
+_top3 = sorted(R5, key=lambda r: -r["Ownership %"])[:3]
+_m20 = _small[0]["settings"]["sets"]["small"]
+_t0 = _top3[0]
+check("new build: the 20-max raises the top three owned (15%+) toward 2x, at most 95%",
+      _m20["retarget"]["raised"] > 0
+      and _ex20[_t0["Player"]] >= int(round(min(2 * _t0["Ownership %"] / 100, 0.95) * 20))
+      and max(_ex20.values()) <= 19,
+      ", ".join(f"{r['Player']} {_ex20[r['Player']]}/20 ({r['Ownership %']:.0f}%)" for r in _top3))
+_ex150 = collections.Counter(p["name"] for r in _big for p in r["players"])
+check("new build: nobody above 85% of the 150", max(_ex150.values()) <= 0.85 * 150 + 0.5,
+      str(_ex150.most_common(1)))
+check("new build: nobody in fewer than 4 of the 150", min(_ex150.values()) >= 4,
+      str(min(_ex150.items(), key=lambda kv: kv[1])))
+check("new build: every 150 roster distinct", len({frozenset(p["id"] for p in r["players"]) for r in _big}) == 150)
+check("new build: the log names the rule and the build", _big[0]["settings"]["build"] == "nov7"
+      and "Stokastic" in _big[0]["settings"]["sets"]["big"]["rule"], _big[0]["settings"]["sets"]["big"]["rule"])
+check("new build: the old add rule's names are logged, not built",
+      set(_big[0]["settings"]["wouldBeAdds"]) == {"cheap", "mid", "stud"}
+      and not any(p["added"] for r in _big for p in r["players"]))
+check("new build: inputs saved for the after-the-fact rebuild",
+      any(os.path.exists(os.path.join(_TMP, "inputs", d, h, "typed.json"))
+          for d in os.listdir(os.path.join(_TMP, "inputs"))
+          for h in os.listdir(os.path.join(_TMP, "inputs", d))))
+_k3 = _nlog()
+_pool3n = "\n".join(x["Player"] for i, x in enumerate(R3) if i % 3 != 2)
+nb3 = app.run_build(PROJ3, FIELD3, DK3, {"pool": _pool3n})
+_r3 = _rows_of(_k3)
+check("new build: 2-4 games, all 150 from the pool", not nb3.get("error")
+      and len(_r3) == 150 and all(r["source"] == "mine" for r in _r3)
+      and all(p["pool"] for r in _r3 for p in r["players"]),
+      str(nb3.get("error") or collections.Counter(r["source"] for r in _r3)))
+GAMES9 = GAMES5 + [("PHI", "CHI"), ("MIL", "IND"), ("HOU", "MEM"), ("SAC", "POR")]
+R9 = slate(GAMES9, seed=9)
+PROJ9, FIELD9, DK9 = proj_csv(R9), field_csv(R9), dk_classic(R9, GAMES9)
+_k9 = _nlog()
+nb9 = app.run_build(PROJ9, FIELD9, DK9, {"pool": "\n".join(x["Player"] for i, x in enumerate(R9) if i % 3 != 2)})
+_r9 = _rows_of(_k9)
+check("new build: 8+ games, 75 from Stokastic's lineups and 75 from the pool (old draw)",
+      not nb9.get("error") and collections.Counter(r["source"] for r in _r9) == {"vendor": 75, "mine": 75}
+      and _r9[0]["settings"]["sets"]["big"]["draw"] == "old",
+      str(nb9.get("error") or collections.Counter(r["source"] for r in _r9)))
+_cap_nm = _ex150.most_common(1)[0][0]
+_k5 = _nlog()
+nbc = app.run_build(PROJ5, FIELD5, DK5, {"pool": _pool5, "capPlayers": f"{_cap_nm} 10",
+                                        "floorPlayers": f"{R5[30]['Player']} 3"})
+_rc = [r for r in _rows_of(_k5) if r["contest_id"] == "900001"]
+_exc = collections.Counter(p["name"] for r in _rc for p in r["players"])
+check("new build: a typed cap holds", not nbc.get("error") and _exc[_cap_nm] <= 10,
+      f"{_cap_nm} {_exc[_cap_nm]}")
+check("new build: a typed minimum holds (and the 4-lineup floor leaves it alone)",
+      _exc[R5[30]["Player"]] >= 3, f"{R5[30]['Player']} {_exc[R5[30]['Player']]}")
+_k6 = _nlog()
+nbz = app.run_build(PROJ5, FIELD5, DK5, {"pool": _pool5, "capPlayers": f"{_cap_nm} 0"})
+check("new build: a cap at 0 keeps him out of every lineup",
+      not any(p["name"] == _cap_nm for r in _rows_of(_k6) for p in r["players"]))
+_rm = R5[0]["Player"]
+_mate = R5[1]["Player"]
+_k7 = _nlog()
+nbr = app.run_build(PROJ5, FIELD5, DK5, {"pool": _pool5, "remove": _rm})
+_r7 = _rows_of(_k7)
+_mp = [p["proj"] for r in _r7 for p in r["players"] if p["name"] == _mate]
+check("new build: a removal takes him out and shifts nothing to his teammates",
+      not any(p["name"] == _rm for r in _r7 for p in r["players"])
+      and (not _mp or abs(_mp[0] - R5[1]["Projection"]) < 0.01), str(_mp[:1]))
+_pd = os.path.join(_TMP, "pulls")
+_days = os.listdir(_pd) if os.path.isdir(_pd) else []
+_idx = [json.loads(l) for d in _days for l in open(os.path.join(_pd, d, "index.jsonl"))]
+check("new build: each new projections file is saved once, with its time",
+      len(_idx) >= 2 and len({x["sha1"] for x in _idx}) == len(_idx), str(len(_idx)))
+_moved_proj = PROJ5.replace(f",{R5[5]['Projection']},", f",{R5[5]['Projection'] + 9},", 1)
+NB.save_pull(_moved_proj, "test")
+_mv = [json.loads(l) for d in os.listdir(_pd) if os.path.exists(os.path.join(_pd, d, "moves.jsonl"))
+       for l in open(os.path.join(_pd, d, "moves.jsonl"))]
+check("new build: a projection that moved between pulls is logged with both times",
+      any(m["proj"][1] - m["proj"][0] >= 8 for m in _mv), str(_mv[-1:] if _mv else None))
+LS.SWAP_OUTS_ONLY = True
+_mid9 = dk_midslate(R5, GAMES5, _entries40)
+_sw = LS.run_late_swap(PROJ5, _mid9, _stand, {"remove": _out_nm, "noPullSave": True}, log_path=LS_LOG)
+check("new build: the outs-only late swap still runs, and logs risers it did not act on",
+      not _sw.get("error") and "risersNotActed" in _sw, str(_sw.get("error")))
 
 # The summary and exit MUST stay last — appending a new section after them
 # silently skips it and the suite still reports a clean pass.
