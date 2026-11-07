@@ -4,6 +4,12 @@ Newest first. One entry per change, in plain words: what changed and why.
 
 ## Nov 7, 2026
 
+**Settings: tick the contests to fill.** The user hand-builds the contests that are not the 150 or the 20-maxes, and the tool must not overwrite them.
+- Dropping the DK file lists its contests as tick boxes at the top of Settings (it opens when the file holds more than one). Contests of 20 or more entries start ticked.
+- Only ticked contests are built and written to the upload file. An unticked contest's rows are left out entirely, so DK keeps those lineups exactly as entered; the build names the contests it left alone.
+- Each ticked 20-max gets its own set. Nothing ticked stops the build and says so.
+- Late swap is unchanged: it still checks every entry in the file, and only replaces players who are out.
+
 **Two 20-max contests get two different sets.** From `NBA Slate By Slate Calls Report 11-07.md`, section 5C: on 17 nights with two 20-max contests, the next 20 in the pick order for the second contest gave 0.61 top-1% lineups a night (both contests) against 0.56 for the same 20, with a better best rank (396 against 428) and the mean within 0.2. Inside the noise on 17 nights; on the check list for 20 more.
 - One DK file with several 20-max contests: the first gets the top 20, the next the next 20 in the pick order (picked together under the 90% cap), and so on. Each set gets its own top-3 raise. A 1-entry contest takes the first lineup of the first set.
 - Nov 2's file (150 + Four Point Play + And-One + a 2-entry contest) built clean: the two 20-max sets share 0 of 20 lineups.

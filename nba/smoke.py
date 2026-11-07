@@ -1283,6 +1283,22 @@ check("new build: two 20-max contests get two different sets (the next 20 in the
 check("new build: the second 20-max gets its own top-3 raise",
       _e2[_top3[0]["Player"]] >= int(round(min(2 * _top3[0]["Ownership %"] / 100, 0.95) * 20)),
       f"{_top3[0]['Player']} {_e2[_top3[0]['Player']]}/20")
+_dd = app._describe("dk", DK5b)
+check("new build: the DK check lists every contest for the tick boxes",
+      [c["id"] for c in _dd.get("contests", [])] == ["900001", "900002", "900004", "900003"]
+      and [c["entries"] for c in _dd["contests"]] == [150, 20, 20, 1], str(_dd.get("contests")))
+_k9 = _nlog()
+nbt = app.run_build(PROJ5, FIELD5, DK5b, {"pool": _pool5, "contests": ["900001", "900002"]})
+_r9b = _rows_of(_k9)
+_up = nbt.get("dkCsv") or ""
+check("new build: an unticked contest is left out of the build and the upload file",
+      not nbt.get("error") and {r["contest_id"] for r in _r9b} == {"900001", "900002"}
+      and "900004" not in _up and "900003" not in _up and _up.count("\n") == 1 + 170
+      and any("Left alone" in n["text"] for n in nbt["notes"]),
+      f"{collections.Counter(r['contest_id'] for r in _r9b)}")
+check("new build: nothing ticked stops the build and says so",
+      "No contest is ticked" in (app.run_build(PROJ5, FIELD5, DK5b, {"pool": _pool5, "contests": []})
+                                 .get("error") or ""))
 LS.SWAP_OUTS_ONLY = True
 _mid9 = dk_midslate(R5, GAMES5, _entries40)
 _sw = LS.run_late_swap(PROJ5, _mid9, _stand, {"remove": _out_nm, "noPullSave": True}, log_path=LS_LOG)

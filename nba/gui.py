@@ -178,7 +178,14 @@ INDEX_HTML = r"""<!doctype html>
 </div>
 
 <details id="setwrap">
-  <summary>Settings — pool, late scratches, caps</summary>
+  <summary>Settings — contests, pool, late scratches, caps</summary>
+  <div id="contestwrap" style="display:none;padding:12px 0 4px">
+    <label style="margin-top:0">Contests to fill <span class="muted">— only ticked contests are built and written to the upload file</span></label>
+    <div id="contestlist"></div>
+    <div class="picknote">Untick a contest you built by hand: it is left out of the upload
+      file, so DK keeps your lineups exactly as entered. A contest of 20 or fewer entries
+      gets the 20-max build; each 20-max you tick gets its own 20.</div>
+  </div>
   <div class="setgrid">
     <div>
       <label>Sharp's pool</label>
@@ -357,6 +364,7 @@ function slot(key, el){
           mark('loaded', slotUi[key].ok);
           if(d.format) setFmt(d.format, key === 'dk');
           if(key === 'standings') $('#graderow').style.display = '';
+          if(key === 'dk') showContests(d.contests || []);
           if(key === 'proj') loadRoster(text);
           crossCheck();
         } else {
@@ -415,6 +423,29 @@ function crossCheck(){
     else slotUi[k].mark('loaded', slotUi[k].ok);
   });
   buttons();
+}
+
+// The DK file's contests, as checkboxes (Nov 7: hand-built contests must not be
+// overwritten). Ticked by default: 20 or more entries — the 150 and the 20-maxes.
+function showContests(list){
+  const box = $('#contestlist');
+  box.innerHTML = '';
+  list.forEach(c => {
+    const id = 'ct_' + c.id;
+    const lab = document.createElement('label');
+    lab.style.cssText = 'display:flex;gap:8px;align-items:center;margin:4px 0;font-weight:400';
+    lab.innerHTML = '<input type="checkbox" class="ctbox" style="width:auto" id="'+id+'" value="'
+      + esc(c.id) + '"' + (c.entries >= 20 ? ' checked' : '') + '> '
+      + esc(c.name || c.id) + ' <span class="muted">— ' + c.entries + ' entr'
+      + (c.entries === 1 ? 'y' : 'ies') + '</span>';
+    box.appendChild(lab);
+  });
+  $('#contestwrap').style.display = list.length ? '' : 'none';
+  if(list.length > 1) $('#setwrap').open = true;
+}
+function pickedContests(){
+  const boxes = [...document.querySelectorAll('.ctbox')];
+  return boxes.length ? boxes.filter(b => b.checked).map(b => b.value) : null;
 }
 
 function clearRoster(){
@@ -628,6 +659,7 @@ $('#go').addEventListener('click', async () => {
           remove: $('#remove').value,
           floorPlayers: $('#floorplayers').value,
           fieldMore: files.fieldMore || [],
+          contests: pickedContests(),
           fileNames: fileNames,
           pool: [...sel.pool].join('\n'), cores: [...sel.core].join('\n'),
           capPlayers: $('#capplayers').value

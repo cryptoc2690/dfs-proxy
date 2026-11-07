@@ -991,6 +991,21 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
     # Contests: a 20-entry (or smaller) contest gets the 20-max build, anything
     # bigger the 150 build. One set per kind, shared by the contests of that kind.
     contests = _contests(dk["entries"]) if dk and dk.get("entries") else []
+    # Only the contests ticked on the page (Nov 7: hand-built contests are left
+    # out of the upload file, so DK keeps them as entered). None = all of them.
+    picked = o.get("contests")
+    if contests and picked is not None:
+        picked = {str(x) for x in picked}
+        skipped = [(cid, nm, es) for cid, nm, es in contests if str(cid) not in picked]
+        contests = [(cid, nm, es) for cid, nm, es in contests if str(cid) in picked]
+        if skipped:
+            say("info", "Left alone (not ticked, not in the upload file): " + "; ".join(
+                f"{nm or cid} ({len(es)} entr{'y' if len(es) == 1 else 'ies'})"
+                for cid, nm, es in skipped), "check",
+                f"{len(skipped)} contest(s) left alone")
+        if not contests:
+            return {"error": "No contest is ticked in Settings — tick the contests the "
+                             "tool should fill.", "notes": notes}
     if contests:
         n_big = max([len(es) for _c, _n, es in contests if len(es) > NB.SMALL_SET] or [0])
         n_small = max([len(es) for _c, _n, es in contests if len(es) <= NB.SMALL_SET] or [0])
@@ -2403,6 +2418,8 @@ def _describe(kind, text):
             return {"ok": True, "format": "showdown" if sd else "classic",
                     "teams": sorted({r["team"] for r in dk["pool"].values() if r.get("team")}),
                     "n": big, "ours": auto_ours(big), "size": size,
+                    "contests": [{"id": cid, "name": nm, "entries": len(es)}
+                                 for cid, nm, es in _contests(dk["entries"])],
                     "msg": f"{(c.get('contest') or '').strip()} — {big} lineups"
                            + (f", ~{size:,} entries" if size else "")
                            + (f" · {len(per)} contests" if len(per) > 1 else "")
