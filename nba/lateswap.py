@@ -67,6 +67,13 @@ SWAP_EARLY_PENALTY = 0.5    # tiny tiebreak against filling from the next game t
 # big losses). A mid-night rebuild on 1,500 sims was replacing a lineup the
 # full model chose at lock. Cap 2: -64 -> +118 over 46 swaps.
 SWAP_MAX_MOVED = 2
+# Outs only (the user, Nov 7, from the Where The Points Come From and Full
+# System reviews): the swap replaces a player who is out (ruled out, removed,
+# or over a typed cap) and moves nothing else. The bar-cleared news and no-news
+# swaps added about a point a lineup and gave back top finishes: 42 -> 36
+# top-1% over 34 contests; the pre-swap 20-max sets ran 2.27% top 1% against
+# 1.03% after. The bars below stay for the logged shadow and the tests.
+SWAP_OUTS_ONLY = True
 
 # --- what counts as news (against the logged build of this slate) -------------
 SWAP_NEWS_PROJ_SHARE = 0.25  # a raw projection moving this share...
@@ -773,6 +780,8 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
                               in_pool, alive):
                     if group:
                         return group[0][1], group[0][0] - cur_score, True, None
+            if SWAP_OUTS_ONLY:
+                return None, None, False, None
             for sc, r in scored:
                 names = {normalize_name(p.name) for p in r}
                 if names == here:
@@ -900,7 +909,8 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
     out = {"notes": notes, "entries": len(entries), "changed": changed,
            "winLine": win_line,
            "mode": "news" if str(o.get("swapMode") or "free") == "news" else "free",
-           "noNewsSwaps": allow_free, "neutral": plan,
+           "noNewsSwaps": allow_free and not SWAP_OUTS_ONLY, "outsOnly": SWAP_OUTS_ONLY,
+           "neutral": plan,
            "bars": {"news": SWAP_NEWS_GAIN, "noNews": SWAP_DISC_GAIN if allow_free else None,
                     "offPool": SWAP_OFF_POOL_GAIN},
            "news": {k: v for k, v in news.items()}, "benchMoves": bench_moves,
@@ -917,6 +927,11 @@ def _hold_reason(blocked, open_idx, winning, why_news, allow_free=True):
         return blocked
     if not open_idx:
         return "nothing left to move"
+    if SWAP_OUTS_ONLY:
+        if why_news:
+            who = ", ".join(w.split(":")[0] for w in why_news)
+            return f"outs only: {who} has news but is not out, so the lineup stays"
+        return "outs only: nobody in this lineup is out"
     if not why_news and not allow_free:
         return "no news — no-news swaps are off"
     if winning and not why_news:

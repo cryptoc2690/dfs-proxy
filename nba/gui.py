@@ -300,8 +300,8 @@ INDEX_HTML = r"""<!doctype html>
     <button id="ls" class="alt" disabled title="needs a fresh Stokastic pull (1), your current DK entries export (3), and ideally the live standings (6)">&#8635; Late swap</button>
     <button id="lsdl" class="alt" style="display:none">&#11015; Download late-swap file</button>
     <label style="display:inline-flex;gap:6px;align-items:center;margin:0 4px;font-size:12.5px;color:var(--muted)"
-           title="Any swap that keeps the news player, or a lineup with no news: needs +14. A top-1% lineup never takes one.">
-      <input type="checkbox" id="nonews" style="width:auto" checked> allow no-news swaps</label>
+           title="Late swap is outs only: it replaces players who are out (ruled out, removed, or over a typed cap) and moves nothing else. This box does nothing while outs only is on.">
+      <input type="checkbox" id="nonews" style="width:auto" checked disabled> allow no-news swaps (off: outs only)</label>
     <span id="status" style="color:var(--muted);font-size:13px"></span>
   </div>
   <div class="row" id="graderow" style="display:none">
@@ -993,8 +993,9 @@ function renderSwap(r){
   let h = '';
   (r.notes||[]).forEach(n => { h += '<div class="note '+n.type+'">'+esc(n.text)+'</div>'; });
   h += '<div class="cards">' + card(r.changed+' of '+r.entries, 'lineups to change')
-     + card(r.mode === 'news' ? 'news only' : (r.noNewsSwaps ? 'free + bars' : 'bad news only'), 'policy')
-     + card('+'+r.bars.news+' / '+(r.bars.noNews ? '+'+r.bars.noNews : 'off'), 'bar: news / no news')
+     + (r.outsOnly ? card('outs only', 'policy: only players who are out get replaced')
+        : card(r.mode === 'news' ? 'news only' : (r.noNewsSwaps ? 'free + bars' : 'bad news only'), 'policy')
+          + card('+'+r.bars.news+' / '+(r.bars.noNews ? '+'+r.bars.noNews : 'off'), 'bar: news / no news'))
      + (r.winLine ? card(r.winLine, 'projected FINAL top-1% line') : '') + '</div>';
   h += '<div class="picknote" style="margin:6px 0">Untick any swap you do not want; '
      + 'the download keeps that entry exactly as entered. "Now" is the live score, '

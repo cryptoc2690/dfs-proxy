@@ -561,6 +561,7 @@ check("the log records the minimums", _lf["settings"]["floorPlayers"] == {"DEN P
 print("\n-- late swap --")
 import lateswap as LS                        # noqa: E402
 LS.SWAP_LOG_PATH = os.path.join(_TMP, "nba_swaps.jsonl")
+LS.SWAP_OUTS_ONLY = False                    # the bar tests; outs only is tested after them
 _g0 = {x["Team"] for x in R5 if x["_gi"] == 0}           # DEN@OKC is in progress
 _entries40 = [row for row in _up[1:41]]                    # the first build's 150-max rows
 
@@ -982,6 +983,24 @@ check("swap: the cap check names the player and the count",
 check("swap: each run saves its input files for replay",
       any(os.path.exists(os.path.join(_TMP, "swap_inputs", d, "dk.csv"))
           for d in os.listdir(os.path.join(_TMP, "swap_inputs"))))
+# Outs only (Nov 7): the default swap replaces players who are out and nothing else.
+LS.SWAP_OUTS_ONLY = True
+_o0 = LS.run_late_swap(PROJ5, _mid, _stand, {}, log_path=LS_LOG)
+check("swap, outs only: with nobody out, nothing moves and every hold says outs only",
+      _o0["changed"] == 0 and _o0["outsOnly"] is True
+      and all("outs only" in (x["hold"] or "") for x in _o0["swaps"] if x["hold"] != "nothing left to move"))
+_o1 = LS.run_late_swap(PROJ5, _mid, _stand, {"remove": _out_nm}, log_path=LS_LOG)
+_oh = [x for x in _o1["swaps"] if any(_out_nm == b["name"] for b in x["before"])
+       and not all(b["locked"] for b in x["before"] if b["name"] == _out_nm)]
+check("swap, outs only: every lineup holding the removed player is moved, and only those",
+      _oh and all(not x["keep"] and _out_nm in x["out"] for x in _oh)
+      and all(_out_nm in x["out"] for x in _o1["swaps"] if not x["keep"]),
+      f"{sum(1 for x in _oh if not x['keep'])} of {len(_oh)}")
+_o7 = LS.run_late_swap(PROJ5, _mid, _stand, {"capPlayers": f"{_out_nm} 2"}, log_path=LS_LOG)
+_o7r = [x for x in _o7["swaps"] if x["contest"].startswith("NBA $15K")]
+check("swap, outs only: a typed cap still trims, and nothing else moves",
+      sum(1 for x in _o7r if any(_out_nm == a["name"] for a in x["after"])) <= 2
+      and all(_out_nm in x["out"] for x in _o7["swaps"] if not x["keep"]))
 _r20 = build(n=20, split=11)
 check("20-max on 5 games: 15 ours / 5 Stokastic",
       sum(1 for l in _r20["lineups"] if l["source"] == "mine") == 15

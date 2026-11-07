@@ -2,6 +2,14 @@
 
 Newest first. One entry per change, in plain words: what changed and why.
 
+## Nov 7, 2026
+
+**Late swap: outs only.** From `NBA Where The Points Come From Report 11-07.md` and `NBA Full System Review And Prototype Report 11-07.md`:
+- The swap now replaces a player who is out (ruled out, removed by you, or over a typed cap) and moves nothing else. No news swaps at +8, no no-news swaps at +14.
+- Why: over 34 contests the old swaps added about a point a lineup and gave back top finishes, 42 top-1% lineups down to 36. Where a pre-swap export exists, our 20-max sets ran 2.27% top 1% before the swap and 1.03% after.
+- A typed cap still trims, as before. Each held lineup says "outs only" and names any news player who stayed.
+- The "allow no-news swaps" box is greyed out while outs only is on.
+
 ## Nov 2, 2026
 
 **Late swap: your player caps now carry into it.** The user: a starter listed on the bench, a DNP risk, in 28% of the mini-MAX — "limit that to 10-15%, eat the risk if he does play".
