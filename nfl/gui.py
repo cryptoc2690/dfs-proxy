@@ -381,7 +381,6 @@ function setFmt(f, fromDk){
   if(!minTouched){
     $('#minproj').value = f === 'showdown' ? 2 : 3;
   }
-  $('#cap').placeholder = f === 'showdown' ? 'e.g. 237812' : 'e.g. 416171';
 }
 
 // The browser must not navigate away when a file is dropped anywhere else.
