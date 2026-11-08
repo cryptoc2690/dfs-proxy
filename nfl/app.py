@@ -1388,6 +1388,9 @@ def _run_main(players, rep, dk, dk_text, contests, skipped, big, small, o,
              for k, t in (("proj", proj_text), ("field", field_text), ("dk", dk_text),
                           ("linestar", linestar_text)) if (t or "").strip()}
     settings = {"build": NB.SPEC, "format": "classic", "seed": seed,
+                # "first" from 11-9 on; builds before that (the 11-8 main
+                # slate, week 9) were DST-last and carry no dstRule key.
+                "dstRule": "first" if NB.DST_FIRST else "last",
                 "ranges": {k: list(v) for k, v in NB.RANGES.items()},
                 "cap": NB.CAP, "share2": NB.SHARE2, "p_bb": NB.P_BB,
                 "stack_probs": NB.STACK_PROBS, "alpha": NB.ALPHA,

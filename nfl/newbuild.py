@@ -25,7 +25,12 @@ import random
 
 from dk import SALARY_CAP, normalize_name
 
-SPEC = "stage3-2026-11-09"
+SPEC = "stage3-2026-11-09+dstfirst"
+# DST drawn right after the stack (README_PORT 7b, DST deep dive 2026-11-08),
+# not last in the $400 window. Builds logged before this change (the 11-8 main
+# slate, week 9) used DST-last; that is why the Cardinals sat at the 55% cap
+# there (capped by hand to 40%). False restores the graded Stage 3 rule.
+DST_FIRST = True
 
 # The winners' ranges, refit on all 7 graded main slates (27,946 top-1%
 # lineups). The analysis chat refits these as new slates arrive (README_PORT
@@ -148,9 +153,11 @@ def qb_quotas(P, elig, n, nqb, alpha=ALPHA, vt_range=None):
     return {q: v for q, v in quota.items() if v > 0}
 
 
-def generate(P, elig, quota, rng, R, p_bb=P_BB, stack_probs=None, min_proj=MIN_PROJ):
+def generate(P, elig, quota, rng, R, p_bb=P_BB, stack_probs=None, min_proj=MIN_PROJ,
+             dst_first=None):
     """-> {sorted name tuple: (score, qb, npc)}, attempts made."""
     stack_probs = stack_probs or STACK_PROBS
+    dst_first = DST_FIRST if dst_first is None else dst_first
     W = lambda n: P[n]["proj"] ** 2
     by_pos = collections.defaultdict(list)
     for n in sorted(elig):
@@ -193,18 +200,35 @@ def generate(P, elig, quota, rng, R, p_bb=P_BB, stack_probs=None, min_proj=MIN_P
             chosen = set(lineup)
             slots = [pos for pos, k in need.items() for _ in range(k)]
             rng.shuffle(slots)
-            slots.append("DST")
             ok = True
+            dst_opp = None
+            if dst_first:
+                # DST before the fill: never facing a team already in the
+                # lineup, and leaving the minimum salary for every open slot.
+                floor_rem = sum(minsal.get(p, 2000) for p in slots)
+                off_teams = {P[n]["team"] for n in lineup}
+                pool = [n for n in by_pos["DST"] if P[n]["opp"] not in off_teams
+                        and P[n]["sal"] <= SALARY_CAP - used - floor_rem]
+                if not pool:
+                    continue
+                pick = rng.choices(pool, [W(n) for n in pool])[0]
+                lineup.append(pick)
+                chosen.add(pick)
+                used += P[pick]["sal"]
+                dst_opp = P[pick]["opp"]
+            else:
+                slots.append("DST")
             for i, pos in enumerate(slots):
                 rem = slots[i + 1:]
                 floor_rem = sum(minsal.get(p, 2000) for p in rem)
                 hi = SALARY_CAP - used - floor_rem
                 lo = (last_lo - used) if not rem else 0
-                off_teams = {P[n]["team"] for n in lineup}
+                off_teams = {P[n]["team"] for n in lineup if P[n]["pos"] != "DST"}
                 pool = [n for n in by_pos[pos] if n not in chosen
                         and lo <= P[n]["sal"] <= hi
                         and not (pos == "RB" and P[n]["team"] == T)
-                        and not (pos == "DST" and P[n]["opp"] in off_teams)]
+                        and not (pos == "DST" and P[n]["opp"] in off_teams)
+                        and not (dst_opp is not None and P[n]["team"] == dst_opp)]
                 if not pool:
                     ok = False
                     break
@@ -280,7 +304,8 @@ def select(cands, n, cap, quota, stack_quota=None, caps=None, floors=None):
 
 
 # ---------------- one set ----------------
-def build_set(P, elig, n, seed, nqb, caps=None, floors=None, ranges=None):
+def build_set(P, elig, n, seed, nqb, caps=None, floors=None, ranges=None,
+              dst_first=None):
     """-> {"lineups": [name tuples], "quota", "candidates", "tries", "notes"}"""
     R = ranges or RANGES
     rng = random.Random(seed)
@@ -290,7 +315,7 @@ def build_set(P, elig, n, seed, nqb, caps=None, floors=None, ranges=None):
         return {"lineups": [], "quota": {}, "candidates": 0, "tries": 0,
                 "notes": ["no QB is eligible: check the pool has QBs and their "
                           "game totals sit inside the range"]}
-    cands, tries = generate(P, elig, quota, rng, R)
+    cands, tries = generate(P, elig, quota, rng, R, dst_first=dst_first)
     chosen = select(cands, n, CAP, quota, stack_quotas(n), caps=caps, floors=floors)
     return {"lineups": chosen, "quota": quota, "candidates": len(cands),
             "tries": tries, "notes": notes}

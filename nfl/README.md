@@ -29,10 +29,26 @@ any late scratches and caps. Tick the contests. Build.
 | stack | QB+1 or QB+2 only; 55% of the set QB+2 (a quota at selection) |
 | bring-back | drawn 60% of the time, never more than 2 |
 | never | the QB's own RB; a DST facing a team in the lineup |
-| fill | budget-aware, weighted by projection² |
+| defense | drawn right after the QB and stack, weighted by projection², never facing a team in the lineup (Nov 9, see below) |
+| fill | budget-aware, weighted by projection²; the last offensive slot takes the $400 window |
 | ranges (kept only if inside) | projected-ownership sum 86.4–145.0; ≤3 under 5%; ≤1 under 2%; ≤$400 left; QB game total 41.5–53.5 (LineStar VegasTotals) |
 | pick | by projected points under a 55% cap on every player, the QB quotas and the QB+2 quota |
 | not in it | no simulation, no Stokastic half, no cores, no value/owned adds, no lottery, no QB floor, no tier leverage, no tilt |
+
+**Defense change, Nov 9 — read before reviewing week 9.** The 11-8 main slate
+(week 9) was built with the defense picked LAST, in the $400 window left after
+the offense. That made the defense a salary leftover: one cheap DST fit most
+lineups, so the Cardinals reached the 55% cap (82 of 150 at 8% projected
+ownership) and were capped by hand to 40% before lock. The analysis chat's DST
+deep dive (STAGE3-ADDENDUM-DST, 2026-11-08) found this on 5 of 7 graded slates
+and recommended drawing the defense right after the stack (README_PORT 7b):
+top DST 25% instead of 35%, 19 DSTs instead of 16, mean DST salary $2,721 (the
+winners' $2,777); top-10% +1.29 and the worst lineups both clearly better,
+top-1% +0.43 (better 4 of 7, not proven), nothing worse. It is the default from
+Nov 9 (`newbuild.DST_FIRST`), checked line for line against their 10-4 example.
+Builds logged from then carry `"dstRule": "first"` and `build`
+`stage3-2026-11-09+dstfirst`; week 9's rows have neither. No DST cap is needed
+with it; a hand cap is still possible in the caps box.
 
 The ranges live in `newbuild.RANGES`; the analysis chat refits them as slates
 arrive (README_PORT section 8). Change them there and nowhere else.
