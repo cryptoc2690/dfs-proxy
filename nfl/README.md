@@ -10,6 +10,67 @@ slots out in its header, and failing that, a showdown board is one game while a
 main slate is a dozen. The settings panel changes to match. You can force it
 with `--format showdown|classic` if you ever need to.
 
+## Nov 9: the new main-slate build (read this first)
+
+The main slate now runs **`nfl/newbuild.py`**, a line-for-line port of the
+analysis chat's Stage 3 harness (`hbuild.py`, README_PORT). Showdown builds
+exactly as before. The old main-slate builder is still here, untouched, behind
+**Use the OLD main-slate build (fallback)** on the page or `--old-build`.
+
+**What you do:** drop the Stokastic projections, the DK entries export
+(downloaded *before* lock) and the LineStar pre-game export. Type your pool,
+any late scratches and caps. Tick the contests. Build.
+
+**How a main-slate lineup is made** (all of it tested in Stages 2–3):
+
+| piece | setting |
+|---|---|
+| QBs | 15 for the 150 (7 for a 20-max), each QB's share ∝ projection², only QBs whose game total is inside the range |
+| stack | QB+1 or QB+2 only; 55% of the set QB+2 (a quota at selection) |
+| bring-back | drawn 60% of the time, never more than 2 |
+| never | the QB's own RB; a DST facing a team in the lineup |
+| fill | budget-aware, weighted by projection² |
+| ranges (kept only if inside) | projected-ownership sum 86.4–145.0; ≤3 under 5%; ≤1 under 2%; ≤$400 left; QB game total 41.5–53.5 (LineStar VegasTotals) |
+| pick | by projected points under a 55% cap on every player, the QB quotas and the QB+2 quota |
+| not in it | no simulation, no Stokastic half, no cores, no value/owned adds, no lottery, no QB floor, no tier leverage, no tilt |
+
+The ranges live in `newbuild.RANGES`; the analysis chat refits them as slates
+arrive (README_PORT section 8). Change them there and nowhere else.
+
+**Each 20-max contest gets its own 20** from the same builder (7 QBs, seed 0
+for the first 20-max, 1 for the second), never a slice of the 150. On
+**showdown**, each 20-max takes the next 20 of the one ranking (the first the
+top 20, the second 21–40).
+
+**Read from the files, not typed:**
+
+- **Contests:** listed with tick boxes. Ticked by default: 20+ entries. An
+  unticked contest is left out of the upload file, so DK keeps it as entered.
+- **Lineups:** the biggest ticked contest's entry count.
+- **Ours/Stokastic:** main = all ours. Showdown = half and half (the 20-max
+  blocks always ours). The showdown boxes still override it.
+- **Contest size:** prize pool ÷ fee ÷ 0.84 from the contest name.
+
+**Checks before building:** a DK file with `(LOCKED)` players or started games
+stops the build; DK teams with no projections (the wrong night) stop the build;
+no LineStar file turns the game-total range off and says so. The **Applied**
+line at the top of the results says what was used: contests and which set each
+got, the split, the contest size, LineStar coverage, the pool, scratches.
+
+**Minimum lineups** (`Name 2`, optional) is not part of the tested build.
+Leave it empty unless you mean it.
+
+**The log** (`nfl/logs/nfl_builds.jsonl`) carries, per entry, the set (`150`,
+`20-max 1`…), its seed, and the features it was filtered on (`pown`, `lt5p`,
+`lt2p`, `left`, `npc` stack size, `nbb` bring-backs, `vt` game total). The
+settings record the ranges, every QB quota, candidate counts, the files (name,
+hash, time read), the ticked contests with sizes, and the names the removed
+value adds would have touched, so shadows can be graded without another build.
+
+Command line: `python3 nfl/app.py --proj p.csv --dk DKEntries.csv --linestar
+ls.csv --pool sheet.txt [--remove scratches.txt] [--caps caps.txt]
+[--contests 111,222] [--old-build]`.
+
 ## Run it
 
 ```

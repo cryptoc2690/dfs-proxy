@@ -121,8 +121,13 @@ INDEX_HTML = r"""<!doctype html>
   .menu .mt{color:var(--muted);font-size:11.5px;margin-left:auto;
     font-variant-numeric:tabular-nums}
   .picknote{font-size:11.5px;color:var(--muted);margin-top:5px}
-  .sd-only,.cl-only{display:none}
+  .sd-only,.cl-only,.oldset,.oldcl,.newcl{display:none}
   body.sd .sd-only,body.cl .cl-only{display:block}
+  /* Main slate runs the new build (Nov 9) unless the fallback box is ticked;
+     the old build's settings only show for showdown or the fallback. */
+  body.sd .oldset,body.cl.old .oldset,body.cl.old .oldcl{display:block}
+  body.cl:not(.old) .newcl{display:block}
+  .note.check{border-color:#2e5f8f;background:#122033;color:#bcd6f5}
   .trio{display:flex;gap:6px}
   .trio input{text-align:right}
 </style>
@@ -137,26 +142,44 @@ INDEX_HTML = r"""<!doctype html>
 <div id="filerail">
   <div class="fslot req" id="s_proj"><b>1 · Stokastic projections</b>
     <span class="fstate">required — drop or click</span></div>
-  <div class="fslot req" id="s_field"><b>2 · Stokastic lineups</b>
+  <div class="fslot req" id="s_field"><b>2 · Stokastic lineups <span style="opacity:.6">(showdown)</span></b>
     <span class="fstate">the opponent field — drop or click</span></div>
   <div class="fslot req" id="s_dk"><b>3 · DK entries export</b>
     <span class="fstate">needed to upload — drop or click</span></div>
-  <div class="fslot" id="s_ls"><b>4 · LineStar <span style="opacity:.6">(optional)</span></b>
-    <span class="fstate">Vegas before · results after — drop or click</span></div>
+  <div class="fslot" id="s_ls"><b>4 · LineStar <span style="opacity:.6">(main: game totals)</span></b>
+    <span class="fstate">pre-game export — drop or click</span></div>
 </div>
 
 <details id="setwrap">
-  <summary>Settings — pool &amp; cores, splits, caps, contest size</summary>
+  <summary>Settings — contests, pool, late scratches, caps</summary>
+  <div id="contestwrap" style="display:none;padding:12px 22px 4px">
+    <label style="margin-top:0">Contests to fill <span class="muted">— only ticked
+      contests are built and written to the upload file</span></label>
+    <div id="contestlist"></div>
+    <div class="picknote">Untick a contest you built by hand: it stays out of the
+      upload file, so DK keeps it as entered. The lineup count is the biggest ticked
+      contest. On a main slate each 20-max gets its own 20-lineup build (a different
+      seed per contest); on showdown each 20-max takes the next 20 of the ranking.</div>
+  </div>
   <div class="setgrid">
-    <div>
-      <label>Lineups</label>
-      <input id="n" type="number" value="150" min="1" max="150">
-      <label>How many are OURS (rest come from their pool)</label>
-      <input id="split" type="number" value="75" min="0" max="150">
-      <div class="hint">Splitting inside one contest is the only way to compare
-        the two without slate luck. Both arms are tagged in the log.</div>
+    <div class="cl-only">
+      <label style="font-weight:normal;margin-top:0"><input id="oldbuild" type="checkbox"
+        style="width:auto"> Use the OLD main-slate build (fallback)</label>
+      <div class="hint newcl">Main slate runs the Stage 3 build: QB+1/QB+2 (55% QB+2),
+        bring-back ~60%, never the QB's RB, 55% cap, 15 QBs by projection², every
+        lineup inside the winners' ranges (ownership sum 86–145, ≤3 under 5%, ≤1
+        under 2%, ≤$400 left, QB game total 41.5–53.5 from LineStar), picked by
+        projected points. No Stokastic half, no cores, no add-ons.</div>
     </div>
-    <div>
+    <div class="oldset">
+      <label>Lineups <span class="muted">— blank = read from the DK file</span></label>
+      <input id="n" type="number" placeholder="auto" min="1" max="150">
+      <label>How many are OURS (rest come from their pool)</label>
+      <input id="split" type="number" placeholder="auto" min="0" max="150">
+      <div class="hint">Blank = by contest type: showdown half ours, half Stokastic
+        (and the 20-max blocks always ours). Both arms are tagged in the log.</div>
+    </div>
+    <div class="oldset">
       <label>Ownership lean — <span id="lv">+0.00</span>
         <span style="color:var(--muted)">(&minus; fade · + consensus)</span></label>
       <input id="lean" type="range" min="-100" max="100" value="0" style="width:100%">
@@ -179,7 +202,7 @@ INDEX_HTML = r"""<!doctype html>
         Their own field puts about a fifth of its captaincies on one player and
         uses only 24 captains across 9,000+ lineups.</div>
     </div>
-    <div class="cl-only">
+    <div class="oldcl">
       <label>Stack shape — share of lineups at QB+3 / QB+2 / QB+1</label>
       <div class="trio">
         <input id="st3" type="number" value="30" min="0" max="100">
@@ -197,7 +220,7 @@ INDEX_HTML = r"""<!doctype html>
         receivers: that shape is 0.4% of the field and never reached the top
         0.1%.</div>
     </div>
-    <div class="cl-only">
+    <div class="oldcl">
       <label>Max share on one QB — <span id="qv">35</span>%</label>
       <input id="qbcap" type="range" min="10" max="100" value="35" style="width:100%">
       <label>Max share on one defense — <span id="dv">30</span>%</label>
@@ -206,7 +229,7 @@ INDEX_HTML = r"""<!doctype html>
         correlation structure of the lineup — so it binds tighter than the
         player cap.</div>
     </div>
-    <div class="cl-only">
+    <div class="oldcl">
       <label>Trial switches — off by default, not proven</label>
       <label style="font-weight:normal"><input id="ceilrank" type="checkbox">
         Rank on ceiling instead of win rate</label>
@@ -218,9 +241,9 @@ INDEX_HTML = r"""<!doctype html>
         both are re-tested at week 10. Game-first uses the LineStar file's
         Vegas totals when you load one, else projected game totals.</div>
     </div>
-    <div>
-      <label>Contest size — max entries</label>
-      <input id="cap" type="number" placeholder="e.g. 237812">
+    <div class="oldset">
+      <label>Contest size — max entries <span class="muted">— blank = from the contest name</span></label>
+      <input id="cap" type="number" placeholder="auto">
       <label>How full it will get — <span id="fv">100</span>%</label>
       <input id="fillpct" type="range" min="10" max="100" value="100"
              style="width:100%">
@@ -243,7 +266,9 @@ INDEX_HTML = r"""<!doctype html>
       <div class="picknote" id="poolnote"></div>
       <div class="picknote">Paste the whole sheet at once — names separated by
         commas, or one per line. Anything that matches nobody is named back to
-        you rather than dropped quietly.</div>
+        you rather than dropped quietly. Main slate: every DST is always
+        eligible.</div>
+      <div class="oldset">
       <label>Players from outside the pool, per lineup</label>
       <select id="offpool">
         <option value="0" selected>0 — build only from the pool</option>
@@ -257,8 +282,23 @@ INDEX_HTML = r"""<!doctype html>
       <div class="picknote cl-only">Only applies if you picked a pool. On a main
         slate a sheet that cannot cover all nine roster seats is treated as a
         shortlist instead of a filter, and the build says so.</div>
+      </div>
     </div>
     <div>
+      <label>Late scratches</label>
+      <textarea id="remove" rows="3" spellcheck="false"
+                placeholder="one name per line"></textarea>
+      <div class="picknote">Taken off the board before anything is built.</div>
+      <div class="newcl">
+      <label>Minimum lineups <span class="muted">(optional)</span></label>
+      <textarea id="floors" rows="3" spellcheck="false"
+                placeholder="Josh Allen 2"></textarea>
+      <div class="picknote">Name and a number of lineups: at least that many, inside
+        the normal ranges and caps. Not part of the tested build — leave it empty
+        unless you mean it.</div>
+      </div>
+    </div>
+    <div class="oldset">
       <label>Sharp's cores</label>
       <div class="pick">
         <input id="corein" type="text" autocomplete="off" disabled
@@ -297,18 +337,15 @@ INDEX_HTML = r"""<!doctype html>
       actual scores in it — score your logged entries against them.</span>
   </div>
   <div id="welcome">
-    <p><b>Drop three files above.</b></p>
-    <p>1 and 2 come from Stokastic — the projections export and the lineups
-      export. <b>Pull them in the same minute:</b> the two carry separate
-      ownership snapshots and they drift apart during the day.</p>
-    <p>3 is your DK entries export. Enter or reserve your entries on DK first,
-      then download it. It is the only file carrying your Entry IDs and DK's
-      per-slot player IDs, and without it there is nothing to upload.</p>
-    <p>Their lineup file is not a list of picks — it is a model of your
-      opponents. We use it to score against and to estimate duplication, and
-      build our own lineups on top.</p>
-    <p><b>Showdown or main slate is worked out from your files</b>, so the same
-      three slots handle both. The settings below change to match.</p>
+    <p><b>Main slate:</b> drop 1 (Stokastic projections), 3 (your DK entries
+      export, downloaded before lock) and 4 (LineStar pre-game, for the game
+      totals). Type your pool, any late scratches and caps in Settings, tick the
+      contests, press build.</p>
+    <p><b>Showdown:</b> drop 1, 2 (Stokastic lineups — pull it in the same minute
+      as the projections) and 3. Showdown builds exactly as before.</p>
+    <p>Everything else comes from the files: the format, the contests, how many
+      lineups, each 20-max's own set, the ours/Stokastic split and the contest
+      size. The line at the top of the results says what was applied.</p>
   </div>
   <div id="out"></div>
 </main>
@@ -317,6 +354,8 @@ INDEX_HTML = r"""<!doctype html>
 const $ = s => document.querySelector(s);
 const files = {proj:null, field:null, dk:null, linestar:null};
 const names = {};   // the dropped files' names, logged with the build
+const slates = {proj:null, dk:null};   // teams per file, for the slate check
+const okMsg = {};
 let result = null, roster = [], fmt = 'showdown', fmtFromDk = false;
 
 // Showdown and classic are different games, not two sizes of one, so the page
@@ -382,13 +421,19 @@ function slot(key, el){
         const d = await res.json();
         if(d.ok){
           files[key] = text; names[key] = f.name;
-          mark('loaded', '✓ ' + f.name + ' — ' + d.msg);
+          okMsg[key] = '✓ ' + f.name + ' — ' + d.msg;
+          mark('loaded', okMsg[key]);
           if(d.format) setFmt(d.format, key === 'dk');
+          if(key in slates) slates[key] = d.teams || null;
+          if(key === 'dk') showContests(d.contests || []);
+          crossCheck();
           if(key === 'linestar')
             $('#graderow').style.display = d.results ? '' : 'none';
           if(key === 'proj') loadRoster(text);
         } else {
           files[key] = null;
+          if(key in slates) slates[key] = null;
+          if(key === 'dk') showContests([]);
           mark('bad', '✗ ' + f.name + ' — ' + d.msg);
         }
       } catch(err){
@@ -413,11 +458,53 @@ function slot(key, el){
     read(dt.files && dt.files[0]);
   });
   mark('req', empty);
+  slotUi[key] = {mark};
 }
+const slotUi = {};
 slot('proj', $('#s_proj'));
 slot('field', $('#s_field'));
 slot('dk', $('#s_dk'));
 slot('linestar', $('#s_ls'));
+
+// Projections and DK entries must be the same night. The server checks it too;
+// saying it on the slot means you find out before pressing build.
+function crossCheck(){
+  const a = slates.proj, b = slates.dk;
+  const miss = (a && b) ? b.filter(t => !a.includes(t)) : [];
+  const bad = !!(a && b && b.length) && miss.length > 0.2 * b.length;
+  ['proj','dk'].forEach(k => {
+    if(!files[k] || !slotUi[k]) return;
+    if(bad) slotUi[k].mark('bad', '✗ DIFFERENT SLATES — the DK file has '
+        + miss.slice(0,8).join(', ') + ' with no projections. Replace the wrong one.');
+    else slotUi[k].mark('loaded', okMsg[k]);
+  });
+}
+
+// The DK file's contests as tick boxes. Ticked by default: 20 or more entries
+// (the 150 and the 20-maxes); a single entry or a hand-built contest you tick
+// yourself if you want it filled.
+function showContests(list){
+  const box = $('#contestlist');
+  box.innerHTML = '';
+  list.forEach(c => {
+    const lab = document.createElement('label');
+    lab.style.cssText = 'display:flex;gap:8px;align-items:center;margin:4px 0;font-weight:400;color:var(--text)';
+    lab.innerHTML = '<input type="checkbox" class="ctbox" style="width:auto" value="'
+      + esc(c.id) + '"' + (c.entries >= 20 ? ' checked' : '') + '> '
+      + esc(c.name || c.id) + ' <span style="color:var(--muted)">— ' + c.entries
+      + ' entr' + (c.entries === 1 ? 'y' : 'ies')
+      + (c.size ? ' · size ' + c.size.toLocaleString() : '') + '</span>';
+    box.appendChild(lab);
+  });
+  $('#contestwrap').style.display = list.length ? '' : 'none';
+  if(list.length > 1) $('#setwrap').open = true;
+}
+function pickedContests(){
+  const boxes = [...document.querySelectorAll('.ctbox')];
+  return boxes.length ? boxes.filter(b => b.checked).map(b => b.value) : null;
+}
+$('#oldbuild').addEventListener('change', e =>
+  document.body.classList.toggle('old', e.target.checked));
 
 // ---- type-ahead pickers, enabled once the slate is known ----
 const sel = {pool:new Set(), core:new Set()};
@@ -597,7 +684,7 @@ const num = (sel, d) => { const v = parseFloat($(sel).value); return isNaN(v) ? 
 
 $('#go').addEventListener('click', async () => {
   const b = $('#go'); b.disabled = true;
-  b.innerHTML = '<span class="spin"></span>Simulating…';
+  b.innerHTML = '<span class="spin"></span>Building…';
   $('#status').textContent = ''; $('#welcome').style.display='none';
   $('#out').innerHTML = ''; $('#dl').style.display='none';
   try {
@@ -607,7 +694,10 @@ $('#go').addEventListener('click', async () => {
         proj: files.proj, field: files.field, dk: files.dk,
         linestar: files.linestar,
         options: {
-          n: num('#n',150), split: num('#split',75),
+          n: $('#n').value || 'auto', split: $('#split').value || 'auto',
+          contests: pickedContests(),
+          remove: $('#remove').value, floorPlayers: $('#floors').value,
+          oldBuild: $('#oldbuild').checked,
           // Deliberately NOT sending the format. The server works it out from
           // the files and says which signal it used; the page's own guess only
           // decides which settings to show.
@@ -738,6 +828,7 @@ function exposureHtml(e, n, sd){
 
 function render(d){
   let h = '';
+  if(d.check) h += '<div class="note check"><b>Applied:</b> '+esc(d.check)+'</div>';
   (d.notes||[]).forEach(n => {
     h += '<div class="note '+n.type+'">'+esc(n.text)+'</div>';
   });
@@ -751,31 +842,40 @@ function render(d){
   const arms = Object.entries(s.arms).map(([k,v]) => k+' '+v).join(' / ');
   const splits = Object.entries(s.splits).map(([k,v]) => k+' '+v).join('  ');
   const sd = d.format !== 'classic';
+  const nb = d.build === 'new';
   h += '<div class="cards">'
-    + card(s.n, 'lineups ('+arms+')')
+    + card(s.n, nb ? s.set + ' set' : 'lineups ('+arms+')')
     + card(splits, s.shapeLabel || 'shape')
     + card(s.captains, 'distinct ' + (s.headLabel || 'captains'))
     + card('$'+s.salaryLo.toLocaleString()+'–'+s.salaryHi.toLocaleString(), 'salary used')
     + card(s.projAvg, 'avg projection')
     + card(s.ownAvg, 'avg ownership sum')
-    + card(s.dupeAvg, 'avg expected duplicates')
+    + (nb ? '' : card(s.dupeAvg, 'avg expected duplicates'))
     + '</div>';
   h += '<div style="font-size:12.5px;color:var(--muted);margin-bottom:6px">Top '
      + (s.headLabel || 'captains') + ': '
      + s.topCaptains.map(c => esc(c[0])+' '+c[1]).join(' · ') + '</div>';
-  h += exposureHtml(d.exposure, s.n, sd);
+  const views = d.exposures || [];
+  if(views.length > 1){
+    h += '<div style="margin-top:12px;font-size:12.5px;color:var(--muted)">Exposure for '
+       + '<select id="expview" style="width:auto;display:inline-block">'
+       + views.map((v,i) => '<option value="'+i+'">'+esc(v.label)+'</option>').join('')
+       + '</select></div><div id="expbox">' + exposureHtml(views[0].exposure, s.n, sd) + '</div>';
+  } else {
+    h += exposureHtml(d.exposure, s.n, sd);
+  }
   const nOff = (d.exposure && d.exposure.players || []).filter(p => p.off).length;
   if(nOff) h += '<div class="picknote" style="margin:8px 0"><span class="offsheet">'
     + 'name</span> = not on your sheet (' + nOff + ' of them below)'
     + (sd ? '' : '; the DST seat is exempt and never marked')
     + ' · <span class="coremark">name</span> = a core.</div>';
   h += '<div class="tblwrap"><table><thead><tr>'
-     + '<th>#</th><th>arm</th><th>' + (sd ? 'split' : 'stack') + '</th>'
+     + '<th>#</th><th>' + (nb ? 'set' : 'arm') + '</th><th>' + (sd ? 'split' : 'stack') + '</th>'
      + (sd ? '<th>captain</th><th>flex</th>' : '<th>QB</th><th>rest of the roster</th>')
      + '<th class="num">salary</th><th class="num">proj</th>'
-     + '<th class="num">own</th><th class="num">win%</th>'
+     + '<th class="num">own</th>' + (nb ? '' : '<th class="num">win%</th>')
      + (sd ? '<th class="num" title="the vendor column the re-ranked arm sorts on">top10%</th>' : '')
-     + '<th class="num">dupes</th>'
+     + (nb ? '' : '<th class="num">dupes</th>')
      + '</tr></thead><tbody>';
   // Off-sheet names are flagged where you read the roster, not only in a note
   // above it. A core is flagged too, in the other direction, so the two kinds
@@ -792,19 +892,24 @@ function render(d){
                     : (l.players.find(p => p.slot === 'QB') || l.players[0]);
     const rest = l.players.filter(p => p !== lead);
     h += '<tr><td class="num">'+(i+1)+'</td>'
-      + '<td><span class="arm '+l.source+'">'+l.source+'</span></td>'
+      + (nb ? '<td>'+esc(l.set||'')+'</td>'
+            : '<td><span class="arm '+l.source+'">'+l.source+'</span></td>')
       + '<td>'+esc(l.split)+'</td>'
       + '<td class="cpt">'+who(lead)+'</td>'
       + '<td>'+rest.map(who).join(', ')+'</td>'
       + '<td class="num">'+l.salary.toLocaleString()+'</td>'
       + '<td class="num">'+l.proj.toFixed(1)+'</td>'
       + '<td class="num">'+l.ownSum.toFixed(0)+'</td>'
-      + '<td class="num">'+(l.win*100).toFixed(2)+'</td>'
+      + (nb ? '' : '<td class="num">'+(l.win*100).toFixed(2)+'</td>')
       + (sd ? '<td class="num">'+(l.top10 ? (l.top10*100).toFixed(2) : '—')+'</td>' : '')
-      + '<td class="num">'+l.dupes.toFixed(1)+'</td></tr>';
+      + (nb ? '</tr>' : '<td class="num">'+l.dupes.toFixed(1)+'</td></tr>');
   });
   h += '</tbody></table></div>';
   $('#out').innerHTML = h;
+  const ev = $('#expview');
+  if(ev) ev.addEventListener('change', () => {
+    $('#expbox').innerHTML = exposureHtml(views[+ev.value].exposure, s.n, sd);
+  });
   if(d.dkCsv){
     $('#dl').style.display = '';
     $('#status').textContent = 'Logged '+d.lineups.length+' entries for later comparison.';

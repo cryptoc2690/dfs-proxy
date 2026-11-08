@@ -35,6 +35,9 @@ from __future__ import annotations
 
 import argparse
 import bisect
+import collections
+import csv
+import io
 import json
 import os
 import re
@@ -742,6 +745,55 @@ def _check_upload(entries, lineups, slots, fmt, dk):
     return bad
 
 
+# DK keeps about 16% of entry fees, so a contest's max entries is its prize pool
+# over the fee over 0.84. NBA checked it against 23 real contests: within 0.5%
+# on 22 (the miss did not fill). Read from the contest name in the DK file.
+DK_PAYOUT = 0.8406
+SMALL_SET = 20              # a contest this size or smaller gets its own set
+
+
+def contest_size(name, fee):
+    """-> max entries from a DK contest name ('NFL $500K mini-MAX') and fee
+    ('$0.50'), or 0 when either can't be read."""
+    m = re.search(r"\$\s*([\d.,]+)\s*([KkMm]?)", name or "")
+    f = re.search(r"([\d.]+)", (fee or "").replace(",", ""))
+    if not m or not f:
+        return 0
+    try:
+        prize = float(m.group(1).replace(",", "")) * {"k": 1e3, "m": 1e6}.get(
+            m.group(2).lower(), 1.0)
+        fee_v = float(f.group(1))
+    except ValueError:
+        return 0
+    return int(prize / fee_v / DK_PAYOUT) if fee_v > 0 else 0
+
+
+def _dk_state(text):
+    """-> {"teams": set, "locked": int, "started": [game info]} from a DK export.
+
+    A file downloaded after lock carries "(LOCKED)" on entered players and
+    "In Progress"/"Final" in the player list's Game Info; building over it
+    would write lineups into entries that can no longer change.
+    """
+    rows = list(csv.reader(io.StringIO((text or "").lstrip("\ufeff"))))
+    teams, started, gi, ti = set(), set(), None, None
+    for r in rows:
+        if gi is None:
+            cells = [(c or "").strip() for c in r]
+            if "Name + ID" in cells and "Game Info" in cells:
+                gi, ti = cells.index("Game Info"), (cells.index("TeamAbbrev")
+                                                    if "TeamAbbrev" in cells else None)
+                continue
+        elif len(r) > gi:
+            g = (r[gi] or "").strip()
+            if re.search(r"(?i)in progress|\bfinal\b", g):
+                started.add(g)
+            if ti is not None and len(r) > ti and (r[ti] or "").strip():
+                teams.add(r[ti].strip().upper())
+    return {"teams": teams, "locked": (text or "").count("(LOCKED)"),
+            "started": sorted(started)}
+
+
 def _contests(entries):
     """Split a DK export into its contests, in file order. -> [(id, name, [entry])]
 
@@ -762,7 +814,7 @@ def _contests(entries):
             for cid in order]
 
 
-def _assign(contests, lineups):
+def _assign(contests, lineups, slices=False):
     """Give every contest its own copy of the ranked lineups. -> [(entry, lineup)]
 
     The same 150 lineups go into each contest rather than being split between
@@ -774,10 +826,21 @@ def _assign(contests, lineups):
     A contest smaller than the build takes the top of the ranking rather than a
     slice of it: if a qualifier holds fifteen entries, it gets the fifteen best
     lineups, not fifteen arbitrary ones.
+
+    With `slices` (showdown, Nov 9) each contest of SMALL_SET entries or fewer
+    takes the NEXT block of the ranking instead: the first 20-max the top 20,
+    the second lineups 21-40, so two 20-maxes never hold the same set.
     """
-    pairs = []
+    pairs, at = [], 0
     for _cid, _name, ents in contests:
-        for e, lu in zip(ents, lineups):
+        if slices and len(ents) <= SMALL_SET:
+            block = lineups[at:at + len(ents)]
+            if len(block) < len(ents):          # not enough: wrap to the top
+                block = (block + lineups)[:len(ents)]
+            at += len(ents)
+        else:
+            block = lineups
+        for e, lu in zip(ents, block):
             pairs.append((e, lu))
     return pairs
 
@@ -815,7 +878,9 @@ def _log(lineups, meta):
                 row = {
                     "ts": ts, "slate": meta.get("slate"), "format": fmt,
                     "code": meta.get("code"),
-                    "contest_id": meta.get("contest_id"),
+                    "contest_id": ((meta.get("contest_ids") or [])[i]
+                                   if i < len(meta.get("contest_ids") or [])
+                                   else meta.get("contest_id")),
                     "entry_id": ids[i] if i < len(ids) else None,
                     "fee": fees[i] if i < len(fees) else None,
                     # A ticket is built by our builder, so its source stays
@@ -927,13 +992,472 @@ def _lineup_payload(lu, fmt="showdown"):
         # actually drove the ordering rather than one that did not.
         "top10": round(lu.metrics.get("top10", 0.0), 5),
         "dupes": round(lu.metrics.get("dupes", 0.0), 2),
+        "set": lu.metrics.get("set"),
         "players": players,
     }
 
 
+def _sha1(text):
+    import hashlib
+    return hashlib.sha1((text or "").encode("utf-8", "replace")).hexdigest()[:12]
+
+
+def _floor_lines(text, players):
+    """'Name 2' lines -> ({dk_id: fewest lineups}, [unmatched or misread])."""
+    by_name = {normalize_name(p.name): p for p in players}
+    out, bad = {}, []
+    for raw in re.split(r"[\r\n;]+", text or ""):
+        line = raw.strip()
+        if not line:
+            continue
+        m = _CAP_LINE.match(line)
+        if not m:
+            bad.append(line)
+            continue
+        key = normalize_name(m.group(1).strip())
+        p = by_name.get(key)
+        if p is None:
+            hits = [v for k, v in by_name.items() if k.startswith(key)] if key else []
+            p = hits[0] if len(hits) == 1 else None
+        if p is None:
+            bad.append(line)
+            continue
+        out[p.dk_id] = int(float(m.group(2)))
+    return out, bad
+
+
 def run_build(proj_text, field_text="", dk_text="", options=None,
               linestar_text=""):
-    """The whole build. Returns plain dicts, so the CLI and the page share it."""
+    """The build (Nov 9). Main slate: newbuild.py, the Stage 3 spec. Showdown:
+    the old build, unchanged, fed by the same streamlined inputs.
+
+    What the page no longer asks for, it reads from the files: the contests (and
+    which are ticked), the lineup count (the biggest ticked contest), each
+    20-max's own set, the ours/Stokastic split by contest type, and the contest
+    size from the contest name. Returns plain dicts for the CLI and the page."""
+    o = dict(options or {})
+    players0, rep0 = read_projections(proj_text or "")
+    if rep0.get("error"):
+        return {"error": f"Projections file: {rep0['error']}"}
+    teams0 = sorted({p.team for p in players0 if p.team})
+    dk0 = read_dk_entries(dk_text) if (dk_text or "").strip() else None
+    fmt = o.get("format") or ""
+    if fmt not in ("showdown", "classic"):
+        if dk0 and dk0.get("entries"):
+            fmt = "showdown" if dk0["slots"][0].strip().upper() == "CPT" else "classic"
+        else:
+            fmt = "showdown" if len(teams0) <= 2 else "classic"
+
+    # The two NBA traps, checked before anything is built.
+    if dk0 and dk0.get("entries"):
+        st = _dk_state(dk_text)
+        if (st["locked"] or st["started"]) and not o.get("allowLocked"):
+            return {"error": "Not building: this DK file was downloaded after lock — "
+                             + (f"{st['locked']} locked player cell(s)" if st["locked"]
+                                else "")
+                             + (" and " if st["locked"] and st["started"] else "")
+                             + (f"games already started ({', '.join(st['started'][:3])})"
+                                if st["started"] else "")
+                             + ". Those entries cannot change. Download the entries "
+                               "file again before lock (late swap is Stokastic's job)."}
+        live = {p.team for p in players0 if p.team and p.proj > 0}
+        miss = sorted(st["teams"] - live)
+        if st["teams"] and len(miss) > 0.2 * len(st["teams"]):
+            return {"error": "Not building: the projections and the DK file are "
+                             "different slates. The DK file's teams "
+                             + ", ".join(miss[:12]) + " have no projected player. "
+                             "One of the two is the wrong night — replace it."}
+
+    contests_all = _contests(dk0["entries"]) if dk0 and dk0.get("entries") else []
+    picked = o.get("contests")
+    if picked is not None:
+        picked = {str(x) for x in picked}
+        contests = [c for c in contests_all if str(c[0]) in picked]
+        if contests_all and not contests:
+            return {"error": "No contest is ticked in Settings — tick the contests "
+                             "the tool should fill."}
+    else:
+        contests = contests_all
+    skipped = [c for c in contests_all if c not in contests]
+    big = [c for c in contests if len(c[2]) > SMALL_SET]
+    small = [c for c in contests if len(c[2]) <= SMALL_SET]
+
+    def size_of(c):
+        return contest_size(c[1], c[2][0].get("fee") if c[2] else "")
+
+    def contest_line(builds):
+        if not contests:
+            return ""
+        return (f"{len(contests)} contest{'s' if len(contests) > 1 else ''}: "
+                + "; ".join(f"{nm or cid} ({len(es)}, {builds(len(es), i)})"
+                            for i, (cid, nm, es) in enumerate(contests)))
+
+    if fmt == "classic" and not o.get("oldBuild"):
+        return _run_main(players0, rep0, dk0, dk_text, contests, skipped, big, small,
+                         o, proj_text, field_text, linestar_text, size_of)
+
+    # ---- the old build: every showdown, or main with the fallback ticked ----
+    o2 = dict(o)
+    o2["format"] = fmt
+    if fmt == "showdown":
+        o2["smallSets"] = True
+    if contests:
+        o2["contests"] = [c[0] for c in contests]
+        n_small = sum(len(c[2]) for c in small)
+        need = max([len(c[2]) for c in big] + [0]) if fmt == "classic" else \
+            max([len(c[2]) for c in big] + [n_small])
+        need = need or max(len(c[2]) for c in contests)
+    else:
+        need = 150
+    if str(o.get("n") or "").strip().lower() in ("", "auto", "0", "none"):
+        o2["n"] = need
+    if str(o.get("split") if o.get("split") is not None else "").strip().lower() \
+            in ("", "auto", "none"):
+        n_use = _i(o2.get("n"), need)
+        o2["split"] = (max(n_use // 2, min(n_use, sum(len(c[2]) for c in small)))
+                       if fmt == "showdown" else n_use // 2)
+        auto_split = True
+    else:
+        auto_split = False
+    biggest = max(contests, key=lambda c: (len(c[2]), size_of(c))) if contests else None
+    if not _i(o.get("fieldCap"), 0) and biggest is not None and size_of(biggest):
+        o2["fieldCap"] = size_of(biggest)
+    res = run_build_old(proj_text, field_text, dk_text, o2, linestar_text)
+    if res.get("error"):
+        return res
+    arms = (res.get("summary") or {}).get("arms") or {}
+    bits = []
+    if fmt == "showdown":
+        at = [0]
+
+        def sd_build(k, i):
+            if k > SMALL_SET:
+                return "top of the ranking"
+            a = at[0]
+            at[0] += k
+            return f"lineups {a + 1}-{a + k}"
+        bits.append(contest_line(sd_build))
+    elif contests:
+        bits.append(contest_line(lambda k, i: "top of the ranking"))
+    bits.append(f"ours/Stokastic {arms.get('mine', 0)}/{arms.get('vendor', 0)}"
+                + (" (auto)" if auto_split else " (typed)"))
+    if o2.get("fieldCap"):
+        bits.append(f"contest size {_i(o2['fieldCap']):,}"
+                    + (" (from the contest name)" if not _i(o.get("fieldCap"), 0) else ""))
+    if skipped:
+        bits.append("left alone: " + ", ".join(nm or cid for cid, nm, _e in skipped))
+    if o.get("oldBuild") and fmt == "classic":
+        bits.append("OLD main-slate build (fallback)")
+    res["check"] = " · ".join(b for b in bits if b)
+    res["contests"] = [{"id": cid, "name": nm, "entries": len(es)}
+                       for cid, nm, es in contests_all]
+    return res
+
+
+def _run_main(players, rep, dk, dk_text, contests, skipped, big, small, o,
+              proj_text, field_text, linestar_text, size_of):
+    """Main slate, Stage 3 spec (newbuild.py). See README "Main slate"."""
+    import newbuild as NB
+    notes = []
+
+    def say(kind, text):
+        notes.append({"type": kind, "text": text})
+
+    if rep.get("loose"):
+        say("warn", "Columns matched by GUESS, not by exact name — check these: "
+                    + ", ".join(f"{k} <- “{h}”" for k, h in rep["loose"]))
+    if rep.get("bad_proj"):
+        say("warn", f"{len(rep['bad_proj'])} player(s) have a non-numeric projection "
+                    f"and were treated as 0: " + ", ".join(rep["bad_proj"][:6]))
+    own_sum = sum(p.ownership for p in players)
+    if not 800 <= own_sum <= 1000:
+        say("warn", f"Ownership: {own_sum:.0f}% across nine roster slots. Expected "
+                    f"about 900. The ranges are on projected ownership, so check "
+                    f"which column was read.")
+
+    if dk:
+        if not dk.get("pool"):
+            return {"error": f"The DK file has {len(dk['entries'])} entry rows but no "
+                             f"player pool, so it is an upload file, not DK's export. "
+                             f"Download the entries file from DK again.", "notes": notes}
+        st = _dk_state(dk_text)
+        on_slate = [p for p in players if not st["teams"] or p.team in st["teams"]]
+        hit, miss, _nc = _attach_dk_ids(on_slate, dk)
+        live_miss = [p.name.strip() for p in on_slate if p.name in miss and p.proj >= NB.MIN_PROJ]
+        if live_miss:
+            say("warn", f"{len(live_miss)} projected player(s) have no DK match by name "
+                        f"and cannot be used: " + ", ".join(live_miss[:10]))
+        if hit < 0.8 * (hit + len(miss)):
+            return {"error": f"Only {hit} of {hit + len(miss)} players matched the DK "
+                             f"entries file — almost certainly the wrong slate's export.",
+                    "notes": notes}
+        players = [p for p in on_slate if str(p.dk_id).isdigit()]
+    teams = sorted({p.team for p in players if p.team})
+
+    # LineStar: the QB's game total (VegasTotals) is one of the ranges.
+    ls, vegas = {}, None
+    if (linestar_text or "").strip():
+        ls, lrep = read_linestar(linestar_text)
+        if lrep.get("error"):
+            say("warn", f"LineStar file: {lrep['error']}")
+            ls = {}
+        elif lrep.get("is_results"):
+            say("warn", "That LineStar file already has scores in it — a post-game "
+                        "export. Download the pre-game one.")
+            ls = {}
+        vegas = lrep.get("teams") or None
+    P, obj, tmap = NB.player_table(players, ls)
+    if not ls:
+        say("warn", "No LineStar file, so the QB game-total range (41.5-53.5) is NOT "
+                    "applied: QBs from every game are eligible. The tested build "
+                    "used it — drop the pre-game LineStar export.")
+    else:
+        no_tot = sorted(t for t in teams if t not in tmap)
+        if no_tot:
+            say("warn", "No LineStar game total for " + ", ".join(no_tot)
+                        + " — their QBs are not held to the game-total range.")
+
+    pool = read_sharp(o.get("pool") or "") | read_sharp(o.get("cores") or "")
+    known = set(P)
+    missed = sorted(pool - known)
+    if missed:
+        say("warn", f"{len(missed)} name(s) on your sheet match no player on this "
+                    f"slate and were ignored: " + ", ".join(missed[:12])
+                    + ". Check the spelling, or they are not playing.")
+    removed = read_sharp(o.get("remove") or "")
+    rem_missing = sorted(removed - known)
+    if rem_missing:
+        say("warn", "Not on this slate, so NOT removed: " + ", ".join(rem_missing))
+    for p in players:
+        p.in_pool = normalize_name(p.name) in pool
+        p.core = False
+    elig = NB.eligible(P, pool, removed)
+    if not pool:
+        say("info", "No pool typed, so the whole board (projection 2+) is eligible. "
+                    "The tested build used your sheet.")
+
+    by_id = {p.dk_id: p for p in players}
+    key_of = {p.dk_id: normalize_name(p.name) for p in players}
+    pcaps, cpt_caps, cap_missing, cap_bad = _player_caps(o.get("capPlayers"), players)
+    if cap_missing:
+        say("warn", "No player on this slate matches these caps, so they are NOT in "
+                    "force: " + "; ".join(cap_missing))
+    if cap_bad:
+        say("warn", "These cap lines need a name and a percentage, e.g. \"Josh "
+                    "Allen 20\" — ignored: " + "; ".join(cap_bad))
+    if cpt_caps:
+        say("warn", "CPT caps only apply to showdown — ignored here.")
+    floors, floor_bad = _floor_lines(o.get("floorPlayers"), players)
+    if floor_bad:
+        say("warn", "Minimum lines not read (need a name and a number of lineups, "
+                    "e.g. \"Josh Allen 2\"): " + "; ".join(floor_bad))
+
+    seed = _i(o.get("seed"), 0)
+    plan = []                         # (label, n, nqb, seed, contests)
+    if big:
+        plan.append(("150", max(len(c[2]) for c in big), NB.NQB_BIG, seed, big))
+    for k, c in enumerate(small):
+        plan.append((f"20-max {k + 1}" if len(small) > 1 else "20-max", len(c[2]),
+                     NB.NQB_SMALL, seed + k, [c]))
+    if not plan:
+        n_req = max(1, _i(o.get("n"), 150)) if str(o.get("n") or "").strip().lower() \
+            not in ("", "auto") else 150
+        plan.append(("150" if n_req > NB.SMALL_SET else "20-max", n_req,
+                     NB.NQB_BIG if n_req > NB.SMALL_SET else NB.NQB_SMALL, seed, []))
+
+    sets, set_meta = {}, {}
+    for label, n, nqb, sd, _cs in plan:
+        caps = {key_of[i]: int(round(v * n)) for i, v in pcaps.items() if i in key_of}
+        fl = {key_of[i]: min(v, n) for i, v in floors.items() if i in key_of}
+        res = NB.build_set(P, elig, n, sd, nqb, caps=caps, floors=fl)
+        if not res["lineups"]:
+            return {"error": f"Built no legal lineups for the {label} set"
+                             + (f" — {res['notes'][0]}" if res["notes"] else "")
+                             + ". Check the pool covers every position and has QBs "
+                               "with pass-catchers.", "notes": notes}
+        lus = []
+        for names in res["lineups"]:
+            lu = C.Lineup([obj[x] for x in names], source="mine")
+            ft = NB.lineup_feats(names, P)
+            lu.metrics = {"set": label, "seed": sd, "score": round(ft["proj"], 2),
+                          **{k: ft[k] for k in ("pown", "lt5p", "lt2p", "left", "npc",
+                                                "nbb", "qbrb", "dvo", "vt")}}
+            lu.metrics["pown"] = round(lu.metrics["pown"], 1)
+            lus.append(lu)
+        sets[label] = lus
+        qb_n = collections.Counter(lu.qb().name.strip() for lu in lus)
+        set_meta[label] = {"n": n, "nqb": nqb, "seed": sd, "candidates": res["candidates"],
+                           "tries": res["tries"],
+                           "quota": {obj[q].name.strip(): v for q, v in res["quota"].items()},
+                           "caps": caps, "floors": fl}
+        if len(lus) < n:
+            say("warn", f"{label}: only {len(lus)} distinct lineups for {n} entries — "
+                        f"widen the pool.")
+        over = [(obj[x].name.strip(), sum(1 for lu in lus if obj[x] in lu.players), v)
+                for x, v in caps.items()]
+        over = [t for t in over if t[1] > t[2]]
+        if over:
+            say("warn", f"{label}: these ran over your cap: " + ", ".join(
+                f"{a} {b} of {len(lus)} against {c}" for a, b, c in over))
+        short = [(obj[x].name.strip(), sum(1 for lu in lus if obj[x] in lu.players), v)
+                 for x, v in fl.items()]
+        short = [t for t in short if t[1] < t[2]]
+        if short:
+            say("warn", f"{label}: these minimums could not be met inside the "
+                        f"ranges and caps: " + ", ".join(
+                            f"{a} {b} of {c}" for a, b, c in short))
+        npc2 = sum(1 for lu in lus if lu.metrics["npc"] == 2)
+        bb = sum(1 for lu in lus if lu.metrics["nbb"])
+        say("info", f"{label} set: {len(lus)} lineups, {len(qb_n)} QBs (top "
+                    + ", ".join(f"{k} {v}" for k, v in qb_n.most_common(3))
+                    + f"), QB+2 {100 * npc2 // max(1, len(lus))}%, bring-back "
+                    f"{100 * bb // max(1, len(lus))}%, ownership sum "
+                    f"{sum(lu.metrics['pown'] for lu in lus) / len(lus):.0f} avg, "
+                    f"${sum(lu.metrics['left'] for lu in lus) / len(lus):.0f} left avg; "
+                    f"{res['candidates']:,} lineups inside the ranges from "
+                    f"{res['tries']:,} tries (seed {sd}).")
+
+    # The upload: each contest gets its own set's lineups.
+    slots = list(C.ROSTER)
+    dk_csv, log_lus, ents, per_contest = None, [], [], []
+    label_of = {id(c): lab for lab, _n, _q, _s, cs in plan for c in cs}
+    if contests:
+        if tuple(s.upper() for s in dk["slots"]) != C.ROSTER:
+            say("warn", f"The DK file's slots are {', '.join(dk['slots'])}, not DK's "
+                        f"NFL classic slots — no upload file written.")
+        else:
+            for c in contests:
+                cid, nm, es = c
+                lus = sets[label_of[id(c)]]
+                if len(es) > len(lus):
+                    say("warn", f"{nm or cid} has {len(es)} entries but only "
+                                f"{len(lus)} lineups were built.")
+                per_contest.append((nm or cid, lus[:len(es)]))
+                for e, lu in zip(es, lus):
+                    ents.append(e)
+                    log_lus.append(lu)
+            problems = _check_upload(ents, log_lus, dk["slots"], "classic", dk)
+            if problems:
+                say("warn", f"NOT writing an upload file — {len(problems)} problem(s) "
+                            f"DraftKings would reject:")
+                for line in problems[:12]:
+                    say("warn", "    " + line)
+            else:
+                dk_csv = _dk_rows(ents, log_lus, "Entry ID,Contest Name,Contest ID,"
+                                  "Entry Fee," + ",".join(dk["slots"]), "classic")
+                say("good", f"Upload file checked: {len(ents)} rows across "
+                            f"{len(contests)} contest(s), every player ID valid for its "
+                            f"slot, no repeats, none over the cap.")
+    else:
+        say("warn", "No DK entries file, so there is no uploadable CSV — that export is "
+                    "the only source of your Entry IDs and DK's player IDs.")
+        for lab in sets:
+            log_lus += sets[lab]
+
+    for lab, lus in sets.items():
+        keys = [lu.key() for lu in lus]
+        if len(keys) != len(set(keys)):
+            say("warn", f"{lab}: {len(keys) - len(set(keys))} entries duplicate another "
+                        f"exactly — do not upload until that is looked at.")
+
+    # The check line: what was applied, without opening anything.
+    def built(c):
+        return ("150 build" if len(c[2]) > SMALL_SET
+                else f"own 20-max set, seed {set_meta[label_of[id(c)]]['seed']}")
+    bits = []
+    if contests:
+        bits.append(f"{len(contests)} contest{'s' if len(contests) > 1 else ''}: "
+                    + "; ".join(f"{nm or cid} ({len(es)}, {built(c)})"
+                                for c in contests for cid, nm, es in [c]))
+    bits.append("all ours (no Stokastic half)")
+    bg = max(contests, key=lambda c: (len(c[2]), size_of(c))) if contests else None
+    if bg is not None and size_of(bg):
+        bits.append(f"contest size {size_of(bg):,}")
+    bits.append(f"LineStar totals for {len(tmap)} of {len(teams)} teams" if ls
+                else "NO LineStar — game-total range off")
+    bits.append(f"pool {sum(1 for p in players if p.in_pool)}" if pool else "whole board")
+    if removed:
+        bits.append(f"{len(removed) - len(rem_missing)} scratched")
+    if skipped:
+        bits.append("left alone: " + ", ".join(nm or cid for cid, nm, _e in skipped))
+    check = " · ".join(bits)
+
+    names = o.get("fileNames") or {}
+    ts = datetime.now().astimezone().isoformat(timespec="seconds")
+    files = {k: {"name": names.get(k), "sha1": _sha1(t), "read_at": ts}
+             for k, t in (("proj", proj_text), ("field", field_text), ("dk", dk_text),
+                          ("linestar", linestar_text)) if (t or "").strip()}
+    settings = {"build": NB.SPEC, "format": "classic", "seed": seed,
+                "ranges": {k: list(v) for k, v in NB.RANGES.items()},
+                "cap": NB.CAP, "share2": NB.SHARE2, "p_bb": NB.P_BB,
+                "stack_probs": NB.STACK_PROBS, "alpha": NB.ALPHA,
+                "sets": set_meta,
+                "pool": sorted(pool), "remove": sorted(removed),
+                "capPlayers": o.get("capPlayers") or "",
+                "floorPlayers": o.get("floorPlayers") or "",
+                "qbTotals": {obj[q].name.strip(): P[q]["total"] for q in P
+                             if P[q]["pos"] == "QB" and q in elig},
+                # Shadow: what the removed add-ons would have touched.
+                "wouldBeValueAdds": [obj[x].name.strip()
+                                     for x in NB.would_be_value_adds(P, pool)] if pool else [],
+                "contestsTicked": [{"id": cid, "name": nm, "entries": len(es),
+                                    "size": size_of((cid, nm, es))}
+                                   for cid, nm, es in contests],
+                "contestsSkipped": [cid for cid, _n, _e in skipped],
+                "fileNames": {k: str(v)[:120] for k, v in names.items() if v},
+                "files": files, "check": check}
+    meta = {"slate": datetime.now().astimezone().date().isoformat(),
+            "format": "classic", "code": _CODE_VERSION, "lottery_keys": set(),
+            "notes": notes, "settings": settings,
+            "contest_state": {"vegas": vegas,
+                              "field_cap": size_of(bg) if bg is not None else None}}
+    if ents and dk_csv:
+        meta["entry_ids"] = [e["entry_id"] for e in ents]
+        meta["contest_ids"] = [e["contest_id"] for e in ents]
+        meta["entry_fees"] = [e.get("fee") for e in ents]
+        meta["contests"] = settings["contestsTicked"]
+    _log(log_lus, meta)
+
+    show = sets[plan[0][0]]
+    views = [{"label": f"{lab} set ({len(lus)})", "exposure": _exposure(lus, "classic")}
+             for lab, lus in sets.items()]
+    if len(per_contest) > 1:
+        allx = [lu for _nm, lus in per_contest for lu in lus]
+        views.insert(0, {"label": f"All entries ({len(allx)})",
+                         "exposure": _exposure(allx, "classic")})
+    shapes = collections.Counter(f"QB+{lu.metrics['npc']}" for lu in show)
+    heads = collections.Counter(lu.qb().name.strip() for lu in show)
+    every = [lu for lus in sets.values() for lu in lus]
+    return {
+        "notes": notes, "check": check, "format": "classic", "build": "new",
+        "teams": teams,
+        "contests": [{"id": cid, "name": nm, "entries": len(es)}
+                     for cid, nm, es in _contests(dk["entries"])] if dk else [],
+        "summary": {"n": len(show), "arms": {"mine": len(show)},
+                    "set": plan[0][0], "headLabel": "QBs", "shapeLabel": "stack",
+                    "splits": dict(sorted(shapes.items(), reverse=True)),
+                    "captains": len(heads),
+                    "topCaptains": heads.most_common(6),
+                    "salaryLo": min(lu.salary for lu in show),
+                    "salaryHi": max(lu.salary for lu in show),
+                    "projAvg": round(sum(lu.proj for lu in show) / len(show), 1),
+                    "ownAvg": round(sum(lu.own_sum for lu in show) / len(show), 1),
+                    "dupeAvg": 0.0},
+        "exposure": _exposure(show, "classic"),
+        "exposures": views,
+        "lineups": [_lineup_payload(lu, "classic") for lu in every],
+        "dkCsv": dk_csv,
+        "logPath": LOG_PATH,
+    }
+
+
+def run_build_old(proj_text, field_text="", dk_text="", options=None,
+                  linestar_text=""):
+    """The OLD build: every showdown, and a main slate only with oldBuild on.
+
+    Kept as it was (the fallback). The only additions are the streamlining
+    hooks the new page sends: ticked contests, late scratches, and each
+    showdown 20-max getting the next 20 of the ranking (smallSets)."""
     o = options or {}
     notes = []
 
@@ -969,6 +1493,17 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                 p.opponent = teams[1] if p.team == teams[0] else teams[0]
 
     dk = read_dk_entries(dk_text) if (dk_text or "").strip() else None
+    # Streamlining hooks (Nov 9): only the ticked contests are built and
+    # written, and late scratches leave the board before anything else.
+    if dk and o.get("contests") is not None:
+        keep = {str(x) for x in o.get("contests")}
+        dk["entries"] = [e for e in dk["entries"] if str(e.get("contest_id")) in keep]
+    scratched = read_sharp(o.get("remove") or "")
+    if scratched:
+        gone = [p.name.strip() for p in players if normalize_name(p.name) in scratched]
+        players = [p for p in players if normalize_name(p.name) not in scratched]
+        if gone:
+            say("info", "Late scratches removed: " + ", ".join(gone) + ".")
 
     # Which game is this? A showdown board is one game, two teams, and DK heads
     # its first roster column CPT; a main slate is a dozen games and starts at
@@ -1117,6 +1652,11 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
         for e in dk["entries"]:
             per[e.get("contest_id") or ""] = per.get(e.get("contest_id") or "", 0) + 1
         biggest = max(per.values())
+        if o.get("smallSets"):
+            # Each 20-max takes its own 20 of the ranking (the first the top
+            # 20, the next the next 20), so the build needs at least that many.
+            biggest = max([v for v in per.values() if v > SMALL_SET] + [0]
+                          + [sum(v for v in per.values() if v <= SMALL_SET)])
     if biggest and biggest < n:
         say("warn", f"The biggest contest in the DK file holds {biggest} entries, "
                     f"so building {biggest} lineups, not {n}. Enter or reserve "
@@ -2085,10 +2625,14 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
         else:
             contests = _contests(dk["entries"])
             if len(contests) > 1:
-                say("info", f"{len(contests)} contests in this DK file. The same "
-                            f"{len(chosen)} lineups go into each — separate prize "
-                            f"pools, so a lineup entered in both is two shots at "
-                            f"first place, not a duplicate: "
+                say("info", f"{len(contests)} contests in this DK file"
+                            + (". Each 20-max takes the next block of the "
+                               "ranking (the first the top 20); bigger contests "
+                               "take the top: " if o.get("smallSets") else
+                               f". The same {len(chosen)} lineups go into each — "
+                               f"separate prize pools, so a lineup entered in "
+                               f"both is two shots at first place, not a "
+                               f"duplicate: ")
                             + "; ".join(f"{len(ents)} entries in {name or cid}"
                                         for cid, name, ents in contests))
             short = [(name or cid, len(ents)) for cid, name, ents in contests
@@ -2098,7 +2642,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                             f"lineups were built — {have - len(chosen)} of its "
                             f"entries will have no lineup. Raise the lineup count "
                             f"to fill it.")
-            pairs = _assign(contests, chosen)
+            pairs = _assign(contests, chosen, slices=bool(o.get("smallSets")))
             ents = [e for e, _lu in pairs]
             rostered = [lu for _e, lu in pairs]
             header = ("Entry ID,Contest Name,Contest ID,Entry Fee,"
@@ -2401,6 +2945,7 @@ def _describe(kind, text):
             where = (" @ ".join(teams) if len(teams) <= 2
                      else f"{len(teams)} teams / {len(teams) // 2} games")
             return {"ok": True, "msg": f"{len(live)} players, {where}",
+                    "teams": teams,
                     "format": "showdown" if len(teams) <= 2 else "classic"}
         if kind == "field":
             _entries, rep = read_field(text)
@@ -2422,7 +2967,7 @@ def _describe(kind, text):
                                f"{n_t} teams with Vegas"}
             return {"ok": True, "results": False,
                     "msg": f"pre-game: {rep['players']} players, {n_t} teams "
-                           f"with Vegas (Vegas is logged, nothing else is used)"}
+                           f"with Vegas (main slate: the QB game-total range)"}
         if kind == "dk":
             dk = read_dk_entries(text)
             n_e, n_p = len(dk["entries"]), len(dk["pool"])
@@ -2435,13 +2980,23 @@ def _describe(kind, text):
                                             f"then download again"}
             slots = dk["slots"]
             sd = bool(slots) and slots[0].strip().upper() == "CPT"
-            if sd:
-                cpt = sum(1 for v in dk["pool"].values() if v["cpt_dk_id"])
-                extra = f"showdown, {cpt} with captain IDs"
-            else:
-                extra = f"classic, {len(slots)} slots"
-            return {"ok": True, "msg": f"{n_e} entries, {n_p} players ({extra})",
-                    "format": "showdown" if sd else "classic"}
+            st = _dk_state(text)
+            if st["locked"] or st["started"]:
+                return {"ok": False, "msg": "downloaded AFTER lock (locked players or "
+                                            "started games) — download it again "
+                                            "before lock"}
+            cs = _contests(dk["entries"])
+            big = max(cs, key=lambda c: (len(c[2]), contest_size(c[1], c[2][0].get("fee"))))
+            size = contest_size(big[1], big[2][0].get("fee"))
+            return {"ok": True, "format": "showdown" if sd else "classic",
+                    "teams": sorted(st["teams"]),
+                    "contests": [{"id": cid, "name": nm, "entries": len(es),
+                                  "size": contest_size(nm, es[0].get("fee"))}
+                                 for cid, nm, es in cs],
+                    "msg": f"{'showdown' if sd else 'main'} · {len(cs)} contest"
+                           + ("s" if len(cs) > 1 else "")
+                           + f" · biggest {len(big[2])} entries"
+                           + (f" · size {size:,}" if size else "")}
     except Exception as exc:                                 # noqa: BLE001
         return {"ok": False, "msg": f"could not read that file: {exc}"}
     return {"ok": False, "msg": "unknown file kind"}
@@ -2552,7 +3107,16 @@ def main(argv=None):
     ap.add_argument("--paid-to", type=int, help="last paid rank")
     ap.add_argument("--pool", help="sharp's pool, one name per line")
     ap.add_argument("--cores", help="sharp's cores, one name per line")
-    ap.add_argument("--n", type=int, default=150)
+    ap.add_argument("--n", type=int, default=None,
+                    help="lineups; default: read from the DK file (the biggest "
+                         "ticked contest), 150 without one")
+    ap.add_argument("--contests", help="contest IDs to fill, comma separated "
+                                       "(default: every contest of 20+ entries)")
+    ap.add_argument("--remove", help="late scratches, one name per line")
+    ap.add_argument("--floors", help="main slate: minimum lineups, 'Name 2' per line")
+    ap.add_argument("--caps", help="per-player caps, 'Name 20' per line")
+    ap.add_argument("--old-build", action="store_true",
+                    help="main slate: the OLD builder (fallback)")
     ap.add_argument("--split", type=int, default=None,
                     help="entries from OUR builder; the rest come from the "
                          "re-ranked vendor pool. 0 = all vendor, N = all ours, "
@@ -2651,7 +3215,19 @@ def main(argv=None):
     if not a.proj:                    # no files named -> open the page
         return serve()
 
-    res = run_build(_read(a.proj), _read(a.field), _read(a.dk), {
+    dk_text = _read(a.dk)
+    if a.contests:
+        picked = [x.strip() for x in a.contests.split(",") if x.strip()]
+    elif dk_text.strip():
+        # The page's default: tick every contest of 20 or more entries.
+        picked = [cid for cid, _nm, es in _contests(read_dk_entries(dk_text)["entries"])
+                  if len(es) >= SMALL_SET]
+    else:
+        picked = None
+    res = run_build(_read(a.proj), _read(a.field), dk_text, {
+        "contests": picked, "remove": _read(a.remove),
+        "floorPlayers": _read(a.floors), "capPlayers": _read(a.caps),
+        "oldBuild": a.old_build,
         "pool": _read(a.pool), "cores": _read(a.cores),
         "n": a.n, "split": a.split, "sims": a.sims, "seed": a.seed,
         "format": a.format,
@@ -2666,6 +3242,8 @@ def main(argv=None):
     }, linestar_text=_read(a.linestar))
     for note in res.get("notes", []):
         print(f"  [{note['type']}] {note['text']}")
+    if res.get("check"):
+        print(f"\n  CHECK  {res['check']}")
     if res.get("error"):
         print(f"\nERROR: {res['error']}")
         return 2
