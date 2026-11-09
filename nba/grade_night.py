@@ -29,6 +29,7 @@ Writes nothing to the real logs: the old build runs with temporary log paths.
 
 import bisect
 import collections
+import statistics
 import csv
 import glob
 import json
@@ -189,6 +190,69 @@ def seed_spread(inp, options, seeds=range(6)):
     return out
 
 
+VALUE_BANDS = ((0, 4.8, "value under 4.8"), (4.8, 5.5, "4.8-5.5"), (5.5, 6.5, "5.5-6.5"),
+               (6.5, 99, "6.5+"))
+RANK_BANDS = ((1, 1, "best value in his $500 band"), (2, 3, "2nd-3rd"), (4, 99, "4th or worse"))
+
+
+def pool_tilt(inp, options, St, final):
+    """Pool players at 5%+ own: ours / top 1% / sharks' median, by value group."""
+    pool = {norm(x) for x in ((options.get("pool") or "") + "\n" +
+                              (options.get("cores") or "")).splitlines() if x.strip()}
+    if not pool:
+        return
+    P = {}
+    with open(os.path.join(inp, "proj.csv"), encoding="utf-8-sig", newline="") as fh:
+        for r in csv.DictReader(fh):
+            k = norm(r.get("Player") or r.get("Name") or "")
+            sal = _f(r.get("Salary"))
+            if k in pool and sal > 0:
+                P[k] = {"name": r.get("Player") or k, "sal": sal, "own": _f(r.get("Ownership %")),
+                        "val": _f(r.get("Projected FP")) / (sal / 1000.0)}
+    for k, v in P.items():
+        band = [x for x in P.values() if int(x["sal"] // 500) == int(v["sal"] // 500)]
+        v["rank"] = 1 + sum(1 for x in band if x["val"] > v["val"])
+    keys = [k for k, v in P.items() if v["own"] >= 5]
+    if not keys:
+        return
+    share = lambda ros, k: 100.0 * sum(1 for r in ros if k in r) / max(1, len(ros))
+    cols = []
+    for kind in ("mini-MAX", "Four Point Play", "And-One", "Sharpshooter"):
+        S = St.get(kind)
+        if not S or not final.get(kind):
+            continue
+        top = [e["names"] for e in S["entries"] if e["names"] and e["rank"] <= S["n"] * 0.01]
+        sh = [[e["names"] for e in S["entries"] if e["user"] == u and e["names"]] for u in SHARKS]
+        sh = [x for x in sh if len(x) >= 10]
+        cols.append((kind, {k: (share(final[kind], k), share(top, k),
+                                statistics.median(share(x, k) for x in sh) if sh else None)
+                            for k in keys}))
+    if not cols:
+        return
+    print("\nThe pick's tilt — pool players at 5%+ own: ours / top 1% / sharks' median "
+          "(ours minus the top 1%)")
+    for title, groups, key in (("by value", VALUE_BANDS, "val"), ("by value rank in his band",
+                                                                 RANK_BANDS, "rank")):
+        print(f"  {title}:")
+        for lo, hi, label in groups:
+            ks = [k for k in keys if lo <= P[k][key] < hi or (key == "rank" and lo <= P[k][key] <= hi)]
+            if not ks:
+                continue
+            cells = []
+            for kind, d in cols:
+                o = statistics.mean(d[k][0] for k in ks)
+                t = statistics.mean(d[k][1] for k in ks)
+                m = [d[k][2] for k in ks if d[k][2] is not None]
+                cells.append(f"{kind[:10]} {o:4.0f}/{t:3.0f}/" + (f"{statistics.mean(m):3.0f}" if m else "  -")
+                             + f" ({o - t:+.0f})")
+            print(f"    {label:<28} ({len(ks):>2})  " + " | ".join(cells))
+    print("  players (value, rank in band, projected own; ours / top 1% per contest):")
+    for k in sorted(keys, key=lambda k: -P[k]["own"]):
+        v = P[k]
+        print(f"    {v['name'][:22]:<23} {v['val']:4.2f} #{v['rank']:<2} {v['own']:4.0f}%  " +
+              " | ".join(f"{d[k][0]:3.0f}/{d[k][1]:3.0f}" for _kind, d in cols))
+
+
 def last_build(day):
     folder = os.path.join(HERE, "logs", "inputs", day)
     stamps = sorted(d for d in os.listdir(folder) if os.path.isdir(os.path.join(folder, d))) \
@@ -299,6 +363,8 @@ def main(argv):
                 pm = grade(final[kind], S)["vs_field"]
                 below = sum(1 for _sd, g in gs if g["vs_field"] < pm)
                 print(f"  played {pm:+.1f}: above {below} of {len(gs)} seeds")
+
+    pool_tilt(inp, options, St, final)
 
     S = St.get("mini-MAX")
     if S and final.get("mini-MAX"):

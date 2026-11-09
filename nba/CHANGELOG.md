@@ -9,6 +9,8 @@ Newest first. One entry per change, in plain words: what changed and why.
 - The top-3 raise and the two different 20s stay as they are (no raise, a 1.5x raise and a lowest-value swap all read lower over 38 contests).
 - The 150 is unchanged: its Stokastic lineups still carry whoever is in them.
 
+**`grade_night.py`: the pick's tilt.** From `NBA Off-Pool Scenarios And Pool Weight Report 11-09.md` (build list 6): every pool player at 5%+ projected own, our share in each played set against the top 1% and the sharks' median, grouped by value (projection per $1,000: under 4.8, 4.8–5.5, 5.5–6.5, 6.5+) and by value rank among the pool players in his $500 salary band, then the players one by one. The review found the pick by projected sum runs heavy on the best value in a band, 35%+ chalk and punts, and light on low-value players (Acuff's type); every floor and cap that corrects it lost on 19 nights, so it is watched, not built. The same report: no news swap, no pool-weight rule, no pool add — nothing else changes.
+
 **`grade_night.py`: two more blocks.**
 - Where each played set lost and gained against each shark's set and the contest's top 1%: (our share − theirs) × his real points, the five biggest costs and three biggest gains. The lines sum to the gap between the two sets' average lineups.
 - The 20-max rebuilt with seeds 0–5 from the night's saved inputs (temporary logs), each graded against the field with its best rank, and where the played set falls among them. About 25 seconds a night.

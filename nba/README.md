@@ -35,7 +35,8 @@ in `app.py`: kept for showdown and for after-the-fact replays only.
 played sets, an old-tool rebuild from the saved inputs and the sharks on the real
 standings; names, player by player, where each played set lost and gained against
 each shark and the top 1%; and rebuilds the 20-max with seeds 0-5 so the played set
-can be placed inside its own draw's spread.
+can be placed inside its own draw's spread; and shows the pick's tilt — pool players
+at 5%+ own, ours against the top 1% and the sharks, by value.
 
 ## Run it
 
