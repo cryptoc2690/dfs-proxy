@@ -872,6 +872,7 @@ def _log(lineups, meta):
         ids = meta.get("entry_ids") or []
         lotto = meta.get("lottery_keys") or set()
         fees = meta.get("entry_fees") or []
+        emx = meta.get("entry_metrics") or []
         with open(LOG_PATH, "a", encoding="utf-8") as fh:
             for i, lu in enumerate(lineups):
                 ps = _roster(lu, fmt)
@@ -895,7 +896,7 @@ def _log(lineups, meta):
                     "salary": lu.salary, "leftover": SALARY_CAP - lu.salary,
                     "proj": lu.proj, "own_sum": lu.own_sum,
                     "has_dst": any(p.is_dst for p in lu.players),
-                    "metrics": lu.metrics,
+                    "metrics": emx[i] if i < len(emx) else lu.metrics,
                     "settings": meta.get("settings", {}),
                     "contest_state": meta.get("contest_state", {}),
                 }
@@ -921,7 +922,7 @@ def _log(lineups, meta):
                     # carries them so 150 rows do not repeat the same text.
                     row["notes"] = [dict(n) for n in meta.get("notes") or []]
                     row["contests"] = meta.get("contests") or []
-                    row["build"] = _build_summary(lineups, fmt)
+                    row["build"] = _build_summary(meta.get("built") or lineups, fmt)
                 fh.write(json.dumps(row) + "\n")
     except Exception as exc:                     # never let logging break a build
         print(f"  ! log write failed: {exc}", file=sys.stderr)
@@ -2673,10 +2674,35 @@ def run_build_old(proj_text, field_text="", dk_text="", options=None,
                               f"none over the cap.")
                 meta["entry_ids"] = [e["entry_id"] for e in ents]
                 meta["contest_id"] = ents[0]["contest_id"]
+                # One log row per ENTRY, each with its own contest (Nov 9: every
+                # row used to carry the first contest's id, and the rows were
+                # the 150 lineups paired with the first 150 entry ids, so a
+                # 20-max block listed first shifted every mini row).
+                meta["contest_ids"] = [e["contest_id"] for e in ents]
+                meta["log_lineups"] = rostered
                 meta["contests"] = [{"id": cid, "name": name, "entries": len(es),
-                                     "fee": es[0].get("fee") if es else None}
+                                     "fee": es[0].get("fee") if es else None,
+                                     "size": contest_size(name, es[0].get("fee")
+                                                          if es else "")}
                                     for cid, name, es in contests]
                 meta["entry_fees"] = [e.get("fee") for e in ents]
+                # The duplicate estimate per entry, at THAT contest's size. The
+                # build's own estimate uses the biggest ticked contest, which
+                # over-stated 20-max copies 1.7-2.8x on 11-8. On showdown it is
+                # a logged number only (DUPE_EXP 0: the ranking ignores it), so
+                # this changes no lineup.
+                size_of_c = {c["id"]: c["size"] for c in meta["contests"]}
+                ent_metrics = []
+                for e, lu in zip(ents, rostered):
+                    mx = dict(lu.metrics)
+                    sz = size_of_c.get(e["contest_id"]) or 0
+                    if sz and modelled:
+                        mx["dupes"] = round(M.estimated_dupes(
+                            lu, idx, scale=max(1.0, sz / modelled),
+                            field_n=modelled), 2)
+                    mx["contestSize"] = sz or None
+                    ent_metrics.append(mx)
+                meta["entry_metrics"] = ent_metrics
     else:
         say("warn", "No DK entries file, so there is no uploadable CSV — that "
                     "export is the only source of your Entry IDs and DK's "
@@ -2698,7 +2724,8 @@ def run_build_old(proj_text, field_text="", dk_text="", options=None,
         + f" · {len(chosen)} lineups, "
         + (f"all distinct" if not dupes else f"{dupes} REPEATED"))
 
-    _log(chosen, meta)
+    meta["built"] = chosen
+    _log(meta.get("log_lineups") or chosen, meta)
 
     arms, shapes, heads = {}, {}, {}
     for lu in chosen:
