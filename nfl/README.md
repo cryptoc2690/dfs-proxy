@@ -73,6 +73,14 @@ no LineStar file turns the game-total range off and says so. The **Applied**
 line at the top of the results says what was used: contests and which set each
 got, the split, the contest size, LineStar coverage, the pool, scratches.
 
+**Showdown log fix (Nov 9).** Showdown (and the old main build) now log one
+row per ENTRY, each with its own contest id, and the duplicate estimate in each
+row uses that contest's own size (`metrics.contestSize`). Before, every row
+carried the first contest's id and the rows were the 150 lineups matched to the
+first 150 entry ids, so the 11-8 showdown rows need the entry ids to place them.
+On showdown the duplicate estimate is logged only (the ranking ignores it), so
+no lineup changed.
+
 **Minimum lineups** (`Name 2`, optional) is not part of the tested build.
 Leave it empty unless you mean it.
 
