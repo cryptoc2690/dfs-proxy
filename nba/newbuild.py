@@ -551,14 +551,16 @@ def tail_fix(rosters, by_id, min_count, keep=(), caps=None):
 
 # --- the build ---------------------------------------------------------------
 def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, seed=0,
-              history=None, slotting=None, copies=1):
+              history=None, slotting=None, copies=1, extra_pool=None):
     """One set (a 150 or a 20). -> dict(rosters, sources, chunks, notes, meta)
 
     players: every player with DK ids attached, pool flags set and removals
     marked. caps / floors: {dk_id: lineups}. slotting: players -> slot order.
     copies (20-max only): how many different 20s. The second takes the next 20
     in the pick order (Slate By Slate Calls report, 5C); each gets its own
-    top-3 raise. chunks = [(rosters, sources)] one per copy."""
+    top-3 raise. chunks = [(rosters, sources)] one per copy.
+    extra_pool: dk_ids drawn as if typed in the pool (the 20-max gets the
+    off-pool players from the Stokastic lineups the 150 used)."""
     notes = []
     caps = dict(caps or {})
     floors = dict(floors or {})
@@ -579,7 +581,8 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
     V = _top_sets([(p.dk_id, p.salary, p.proj, p.boom) for p in active])
     rng = random.Random(seed)
 
-    pool = [p for p in active if p.in_pool or p.dk_id in floors]
+    extra_pool = set(extra_pool or ())
+    pool = [p for p in active if p.in_pool or p.dk_id in floors or p.dk_id in extra_pool]
     sheet = any(p.in_pool for p in players)
     allowed = pool if sheet else active
     cands = []

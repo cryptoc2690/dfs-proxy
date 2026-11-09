@@ -15,7 +15,7 @@ in `app.py`: kept for showdown and for after-the-fact replays only.
 | | 2-4 games | 5-7 games | 8+ games |
 |---|---|---|---|
 | 150 | all from your pool | all from Stokastic's lineups | 75 Stokastic / 75 pool (old draw) |
-| 20-max | from your pool, top three owned raised to 2x | same | same (old draw) |
+| 20-max | from your pool plus the off-pool players in the 150's Stokastic lineups, top three owned raised to 2x | same | same (old draw) |
 
 - Pool lineups: slot-first draw (projection^2.5, within $300 of the cap) kept inside
   the winners' ranges from earlier nights of the same slate size (read from

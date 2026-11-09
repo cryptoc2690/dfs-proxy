@@ -1186,16 +1186,27 @@ _small = [r for r in _lr if r["contest_id"] == "900002"]
 check("new build: 5-7 games, the 150 is all Stokastic's lineups",
       len(_big) == 150 and all(r["source"] == "vendor" for r in _big),
       str(collections.Counter(r["source"] for r in _big)))
+_file150 = {p["name"] for r in _big if r["source"] == "vendor" for p in r["players"]}
 check("new build: the 20-max is its own set from the pool, no Stokastic lineups",
       len(_small) == 20 and all(r["source"] == "mine" for r in _small)
-      and all(p["pool"] for r in _small for p in r["players"]))
+      and all(p["pool"] or p["name"] in _file150 for r in _small for p in r["players"]))
+_off150 = sorted({p["name"] for r in _big for p in r["players"] if not p["pool"]})
+_m20f = _small[0]["settings"]["sets"]["small"].get("fromFile") or []
+check("new build: the off-pool players in the 150's Stokastic lineups join the 20-max pool",
+      bool(_off150) and sorted(_m20f) == _off150
+      and any("added to its pool from the Stokastic lineups" in n["text"] for n in nb5["notes"]),
+      f"{_off150} vs {_m20f}")
 _ex20 = collections.Counter(p["name"] for r in _small for p in r["players"])
 _top3 = sorted(R5, key=lambda r: -r["Ownership %"])[:3]
 _m20 = _small[0]["settings"]["sets"]["small"]
 _t0 = _top3[0]
 check("new build: the 20-max raises the top three owned (15%+) toward 2x, at most 95%",
       _m20["retarget"]["raised"] > 0
-      and _ex20[_t0["Player"]] >= int(round(min(2 * _t0["Ownership %"] / 100, 0.95) * 20))
+      and (_ex20[_t0["Player"]] >= int(round(min(2 * _t0["Ownership %"] / 100, 0.95) * 20))
+           # the raise swaps within $500: short only when every slot in that band
+           # already holds one of the top three
+           or all(p["name"] in {r["Player"] for r in _top3} for r in _small for p in r["players"]
+                  if abs(p["salary"] - _t0["Salary"]) <= 500))
       and max(_ex20.values()) <= 19,
       ", ".join(f"{r['Player']} {_ex20[r['Player']]}/20 ({r['Ownership %']:.0f}%)" for r in _top3))
 _ex150 = collections.Counter(p["name"] for r in _big for p in r["players"])

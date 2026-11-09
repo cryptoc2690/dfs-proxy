@@ -2,6 +2,15 @@
 
 Newest first. One entry per change, in plain words: what changed and why.
 
+## Nov 8, 2026
+
+**The 20-max pool takes in the Stokastic lineups' off-pool players.** The user's call: the 150's Stokastic lineups are not pool-bound, so a player they bring in should be open to the 20-max too.
+- After the 150 is built, every player in its Stokastic lineups who is not in the typed pool is added to the 20-max's pool. He may or may not make a 20-max lineup; nothing forces him in.
+- Only when a pool is typed (with no pool the 20-max already draws from the whole slate) and only from Stokastic lineups actually used in the 150. On 2–4 game slates the 150 has none, so nothing changes.
+- The build names the added players, and the log keeps them under `sets.small.fromFile`.
+- Nov 8 rebuilt from its saved inputs: eight added (Keyonte George, Ace Bailey, PJ Washington, Zion Williamson, Morez Johnson, Kyle Kuzma, Naji Marshall, Brice Sensabaugh); seven of them made at least one of the 40 20-max lineups.
+- Not tested by the data chat; grade it after the fact with the rest.
+
 ## Nov 7, 2026
 
 **Settings: tick the contests to fill.** The user hand-builds the contests that are not the 150 or the 20-maxes, and the tool must not overwrite them.
