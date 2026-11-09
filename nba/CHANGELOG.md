@@ -2,6 +2,17 @@
 
 Newest first. One entry per change, in plain words: what changed and why.
 
+## Nov 9, 2026
+
+**The 20-max is the typed pool only again; the Nov 8 add is out.** From `NBA 20-Max And Pool Add Report 11-09.md`: on 19 nights (38 20-max contests, six seeds) every version of adding Stokastic's off-pool players lowered the 20-max — pool only +12.3 / 1.60% top-1%, the Nov 8 version +11.9 / 1.56%, the every-night Stokastic 150's +11.0 / 1.51% (2–4 games: top-1% rate halved), the 50's or 20's +11.6 / 1.21% and +11.9 / 1.23%. Into the 150's own lineups the adds cost 1.1 a lineup for nothing at the top. The pool already held 113 of the 127 slate-breakers.
+- Nov 8's 20s were a normal set drawn badly: Acuff (in the pool) at 5% and 20%, Giannis and Lopez under the field, Kuzma and Klay Thompson off every shark's 20. The same pool rebuilt with six seeds ran −2.8 to +10.7; the sets played were +0.4 and −4.1.
+- The top-3 raise and the two different 20s stay as they are (no raise, a 1.5x raise and a lowest-value swap all read lower over 38 contests).
+- The 150 is unchanged: its Stokastic lineups still carry whoever is in them.
+
+**`grade_night.py`: two more blocks.**
+- Where each played set lost and gained against each shark's set and the contest's top 1%: (our share − theirs) × his real points, the five biggest costs and three biggest gains. The lines sum to the gap between the two sets' average lineups.
+- The 20-max rebuilt with seeds 0–5 from the night's saved inputs (temporary logs), each graded against the field with its best rank, and where the played set falls among them. About 25 seconds a night.
+
 ## Nov 8, 2026
 
 **The 20-max pool takes in the Stokastic lineups' off-pool players.** The user's call: the 150's Stokastic lineups are not pool-bound, so a player they bring in should be open to the 20-max too.

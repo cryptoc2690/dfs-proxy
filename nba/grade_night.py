@@ -13,6 +13,13 @@ tail; points behind first):
   - the consistent sharks and LeVerticalDFS;
 and prints the mini-MAX players: ours, the old tool's, the field's, the top 1%'s.
 
+Two more blocks (20-Max And Pool Add Report 11-09, build list 5):
+  - where each played set lost and gained against each shark's set and the
+    contest's top 1%: (our share - theirs) x his real points, player by player.
+    The lines sum exactly to the gap between the two sets' mean lineups;
+  - the night's 20-max rebuilt with seeds 0-5 from the same saved inputs, so the
+    set played can be placed inside its own draw's spread.
+
 Reads the saved nights folder (NBA_MAIN, default ~/Downloads/NBA Results 1/Main):
   NBA Contest Standing Main <kind> <M-D>.csv
   NBA DK Entries Main All Contests FINAL <M-D>.csv  (or one FINAL file per contest)
@@ -124,6 +131,64 @@ def fmt(g):
             f"| behind {g['behind']:.1f}")
 
 
+def decompose(ours, theirs, St, top=5):
+    """(our mean - their mean, [(name, our %, their %, points, cost)]) sorted by cost."""
+    fp = lambda k: St["ptab"].get(k, {}).get("fpts", 0.0)
+    a = collections.Counter(k for r in ours for k in r)
+    b = collections.Counter(k for r in theirs for k in r)
+    rows = []
+    for k in set(a) | set(b):
+        sa, sb = a[k] / len(ours), b[k] / len(theirs)
+        rows.append((St["ptab"].get(k, {}).get("name", k), 100 * sa, 100 * sb, fp(k),
+                     (sa - sb) * fp(k)))
+    gap = sum(r[4] for r in rows)
+    rows.sort(key=lambda r: r[4])
+    return gap, rows[:top], [r for r in rows[::-1][:3] if r[4] > 0]
+
+
+def print_decompose(label, ours, theirs, St):
+    gap, cost, gain = decompose(ours, theirs, St)
+    f = lambda r: f"{r[0]} {r[4]:+.1f} ({r[1]:.0f}% vs {r[2]:.0f}%, {r[3]:.0f})"
+    print(f"    vs {label:<19} {gap:+6.1f} | cost: " + ", ".join(f(r) for r in cost if r[4] < 0))
+    if gain:
+        print(f"    {'':<22}        | gained: " + ", ".join(f(r) for r in gain))
+
+
+def seed_spread(inp, options, seeds=range(6)):
+    """The night's 20-max sets rebuilt with the new tool, one per seed, by contest
+    kind. Temporary log paths; the real logs are untouched."""
+    rd = lambda n: open(os.path.join(inp, n), encoding="utf-8-sig").read() \
+        if os.path.exists(os.path.join(inp, n)) else ""
+    fields = [rd(f) for f in sorted(os.listdir(inp)) if f.startswith("lineups_")]
+    kind_of = {}
+    with open(os.path.join(inp, "dk.csv"), encoding="utf-8-sig", newline="") as fh:
+        for r in csv.reader(fh):
+            if r and r[0].strip().isdigit() and len(r) > 2:
+                kind_of[r[2].strip()] = contest_kind(r[1])
+    saved = (app.LOG_PATH, NB.LOG_DIR)
+    out = collections.defaultdict(list)
+    try:
+        for sd in seeds:
+            tmp = tempfile.mkdtemp(prefix="nba_seed_")
+            app.LOG_PATH, NB.LOG_DIR = os.path.join(tmp, "b.jsonl"), tmp
+            r = app.run_build(rd("proj.csv"), fields, rd("dk.csv"), dict(options, seed=sd),
+                              rd("linestar.csv"))
+            if r.get("error") or not os.path.exists(app.LOG_PATH):
+                continue
+            sets = collections.defaultdict(list)
+            with open(app.LOG_PATH, encoding="utf-8") as fh:
+                for line in fh:
+                    row = json.loads(line)
+                    sets[kind_of.get(str(row.get("contest_id") or ""))].append(
+                        [norm(p["name"]) for p in row["players"]])
+            for k, v in sets.items():
+                if k and len(v) <= NB.SMALL_SET:
+                    out[k].append((sd, v))
+    finally:
+        app.LOG_PATH, NB.LOG_DIR = saved
+    return out
+
+
 def last_build(day):
     folder = os.path.join(HERE, "logs", "inputs", day)
     stamps = sorted(d for d in os.listdir(folder) if os.path.isdir(os.path.join(folder, d))) \
@@ -199,6 +264,7 @@ def main(argv):
                 kind_of[r[2].strip()] = contest_kind(r[1])
     old = {kind_of.get(cid): v for cid, v in (old_by_id or {}).items()}
 
+    spread = seed_spread(inp, options)
     print(f"== {date} (build {stamp}, pool {len([x for x in (options.get('pool') or '').splitlines() if x.strip()])} names) ==")
     if err:
         print(f"  old tool rebuild failed: {err}")
@@ -212,10 +278,27 @@ def main(argv):
             print("  played (FINAL)     ", fmt(grade(final[kind], S)))
         if old.get(kind):
             print("  old tool, rebuilt  ", fmt(grade(old[kind], S)))
+        sharks = {}
         for u in SHARKS:
             ros = [e["names"] for e in S["entries"] if e["user"] == u and e["names"]]
             if len(ros) >= 10:
+                sharks[u] = ros
                 print(f"  {u:<19}", fmt(grade(ros, S)))
+        if final.get(kind):
+            print("  where the played set lost and gained (our share vs theirs, real points):")
+            for u, ros in sharks.items():
+                print_decompose(u, final[kind], ros, S)
+            top = [e["names"] for e in S["entries"] if e["names"] and e["rank"] <= S["n"] * 0.01]
+            if top:
+                print_decompose("the top 1%", final[kind], top, S)
+        if kind in spread:
+            gs = [(sd, grade(v, S)) for sd, v in spread[kind]]
+            print("  the 20-max rebuilt, seeds 0-5:  " + "  ".join(
+                f"{g['vs_field']:+.1f} (best {g['best']:,})" for _sd, g in gs))
+            if final.get(kind):
+                pm = grade(final[kind], S)["vs_field"]
+                below = sum(1 for _sd, g in gs if g["vs_field"] < pm)
+                print(f"  played {pm:+.1f}: above {below} of {len(gs)} seeds")
 
     S = St.get("mini-MAX")
     if S and final.get("mini-MAX"):

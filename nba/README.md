@@ -15,7 +15,7 @@ in `app.py`: kept for showdown and for after-the-fact replays only.
 | | 2-4 games | 5-7 games | 8+ games |
 |---|---|---|---|
 | 150 | all from your pool | all from Stokastic's lineups | 75 Stokastic / 75 pool (old draw) |
-| 20-max | from your pool plus the off-pool players in the 150's Stokastic lineups, top three owned raised to 2x | same | same (old draw) |
+| 20-max | from your pool, top three owned raised to 2x | same | same (old draw) |
 
 - Pool lineups: slot-first draw (projection^2.5, within $300 of the cap) kept inside
   the winners' ranges from earlier nights of the same slate size (read from
@@ -28,6 +28,14 @@ in `app.py`: kept for showdown and for after-the-fact replays only.
 - Saved every night: each Stokastic file dropped (`logs/pulls/<date>/`, with
   `moves.jsonl` of what changed between pulls), the build's inputs
   (`logs/inputs/<date>/`), and the per-entry build log.
+- The 150's Stokastic lineups are not pool-bound; the 20-max is the typed pool only
+  (adding the file's off-pool players lowered it on 19 nights, Nov 9 review).
+
+**After the night:** `python3 grade_night.py 11-8` (from this folder) grades the
+played sets, an old-tool rebuild from the saved inputs and the sharks on the real
+standings; names, player by player, where each played set lost and gained against
+each shark and the top 1%; and rebuilds the 20-max with seeds 0-5 so the played set
+can be placed inside its own draw's spread.
 
 ## Run it
 

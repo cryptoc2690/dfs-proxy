@@ -1053,26 +1053,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
         copies = 1
         if kind == "small" and contests:
             copies = max(1, sum(1 for _c, _n, es in contests if 1 < len(es) <= NB.SMALL_SET))
-        # The 20-max also draws from the off-pool players in the Stokastic
-        # lineups the 150 used (user's call, Nov 8): they may or may not make it.
-        extra = []
-        if kind == "small" and pool_names and sets.get("big"):
-            seen = set()
-            for r, src in zip(sets["big"]["rosters"], sets["big"]["sources"]):
-                if src != "vendor":
-                    continue
-                for p in r:
-                    if not p.in_pool and p.dk_id not in seen:
-                        seen.add(p.dk_id)
-                        extra.append(p)
-            if extra:
-                all_notes.append("20-max: added to its pool from the Stokastic lineups "
-                                 "in the 150: " + ", ".join(p.name for p in extra))
         res = NB.build_set(players, n, n_games, field, inj, caps, floors, seed, history,
-                           slotting=C.best_slotting, copies=copies,
-                           extra_pool={p.dk_id for p in extra})
-        if extra:
-            res["meta"]["fromFile"] = [p.name for p in extra]
+                           slotting=C.best_slotting, copies=copies)
         sets[kind] = res
         label = "150-max" if kind == "big" else "20-max"
         for t in res["notes"]:
