@@ -155,9 +155,11 @@ def print_decompose(label, ours, theirs, St):
         print(f"    {'':<22}        | gained: " + ", ".join(f(r) for r in gain))
 
 
-def seed_spread(inp, options, seeds=range(6)):
+def seed_spread(inp, options, date, seeds=range(6)):
     """The night's 20-max sets rebuilt with the new tool, one per seed, by contest
-    kind. Temporary log paths; the real logs are untouched."""
+    kind. Temporary log paths; the real logs are untouched. The winners' ranges
+    read only the nights before `date` ('M-D'), as the live build did: the night's
+    own standings sit in the same folder once it is saved."""
     rd = lambda n: open(os.path.join(inp, n), encoding="utf-8-sig").read() \
         if os.path.exists(os.path.join(inp, n)) else ""
     fields = [rd(f) for f in sorted(os.listdir(inp)) if f.startswith("lineups_")]
@@ -166,7 +168,13 @@ def seed_spread(inp, options, seeds=range(6)):
         for r in csv.reader(fh):
             if r and r[0].strip().isdigit() and len(r) > 2:
                 kind_of[r[2].strip()] = contest_kind(r[1])
-    saved = (app.LOG_PATH, NB.LOG_DIR)
+    saved = (app.LOG_PATH, NB.LOG_DIR, NB.load_history)
+    m, d = (int(x) for x in date.split("-"))
+    cut = NB._season_key(m, d)
+    real_load = NB.load_history
+    NB.load_history = lambda folder=None: [
+        r for r in real_load(folder)
+        if NB._season_key(*(int(x) for x in r["date"].split("-"))) < cut]
     out = collections.defaultdict(list)
     try:
         for sd in seeds:
@@ -186,7 +194,7 @@ def seed_spread(inp, options, seeds=range(6)):
                 if k and len(v) <= NB.SMALL_SET:
                     out[k].append((sd, v))
     finally:
-        app.LOG_PATH, NB.LOG_DIR = saved
+        app.LOG_PATH, NB.LOG_DIR, NB.load_history = saved
     return out
 
 
@@ -328,7 +336,7 @@ def main(argv):
                 kind_of[r[2].strip()] = contest_kind(r[1])
     old = {kind_of.get(cid): v for cid, v in (old_by_id or {}).items()}
 
-    spread = seed_spread(inp, options)
+    spread = seed_spread(inp, options, date)
     print(f"== {date} (build {stamp}, pool {len([x for x in (options.get('pool') or '').splitlines() if x.strip()])} names) ==")
     if err:
         print(f"  old tool rebuild failed: {err}")

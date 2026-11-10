@@ -2,6 +2,10 @@
 
 Newest first. One entry per change, in plain words: what changed and why.
 
+## Nov 10, 2026
+
+**`grade_night.py`: the seed rebuilds no longer see the night's own winners.** The 20-max rebuilt with seeds 0–5 reads the winners' ranges from every saved night, and once a night's standings are saved that included the night being graded — its own top 1%. The live build never did (it reads only nights before today). The rebuild now reads only the nights before the graded one, and seed 0 reproduces the set played exactly on Nov 7, 8 and 9 (before, Nov 9's seeds all read above the played set by up to 8 a lineup).
+
 ## Nov 9, 2026
 
 **The 20-max is the typed pool only again; the Nov 8 add is out.** From `NBA 20-Max And Pool Add Report 11-09.md`: on 19 nights (38 20-max contests, six seeds) every version of adding Stokastic's off-pool players lowered the 20-max — pool only +12.3 / 1.60% top-1%, the Nov 8 version +11.9 / 1.56%, the every-night Stokastic 150's +11.0 / 1.51% (2–4 games: top-1% rate halved), the 50's or 20's +11.6 / 1.21% and +11.9 / 1.23%. Into the 150's own lineups the adds cost 1.1 a lineup for nothing at the top. The pool already held 113 of the 127 slate-breakers.
