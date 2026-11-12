@@ -1245,6 +1245,31 @@ _k6 = _nlog()
 nbz = app.run_build(PROJ5, FIELD5, DK5, {"pool": _pool5, "capPlayers": f"{_cap_nm} 0"})
 check("new build: a cap at 0 keeps him out of every lineup",
       not any(p["name"] == _cap_nm for r in _rows_of(_k6) for p in r["players"]))
+# The 150's takeover lean (Nov 12): a takeover player at 15%+ own floored at
+# 1.5x own (cap 95%), the 150 only. The mark needs earlier nights' normals, so
+# the test names him through a stand-in for NB.takeover.
+_tk_row = sorted([x for x in R5 if 15 <= x["Ownership %"] <= 40], key=lambda x: x["Ownership %"])[0]
+_real_tk = NB.takeover
+NB.takeover = lambda players, active, NM, inj: {p.dk_id: 1.0 for p in active
+                                                if p.name == _tk_row["Player"]}
+_k8 = _nlog()
+nbt = app.run_build(PROJ5, FIELD5, DK5, {"pool": _pool5})
+NB.takeover = _real_tk
+_r8 = _rows_of(_k8)
+_b8 = [r for r in _r8 if r["contest_id"] == "900001"]
+_s8 = [r for r in _r8 if r["contest_id"] == "900002"]
+_want = int(round(min(1.5 * _tk_row["Ownership %"] / 100, 0.95) * 150))
+_got = sum(1 for r in _b8 for p in r["players"] if p["name"] == _tk_row["Player"])
+check("new build: takeover chalk (15%+ own) is floored at 1.5x own in the 150",
+      not nbt.get("error") and _got >= _want - 2
+      and any("Takeover chalk raised" in n["text"] for n in nbt["notes"])
+      and _tk_row["Player"] in _b8[0]["settings"]["sets"]["big"]["takeoverLean"],
+      f"{_tk_row['Player']} {_got} of 150, want {_want}")
+check("new build: the takeover lean leaves the 20-max alone",
+      _s8[0]["settings"]["sets"]["small"]["takeoverLean"] == []
+      and [sorted(p["name"] for p in r["players"]) for r in _s8]
+      == [sorted(p["name"] for p in r["players"]) for r in _small], "")
+
 _rm = R5[0]["Player"]
 _mate = R5[1]["Player"]
 _k7 = _nlog()

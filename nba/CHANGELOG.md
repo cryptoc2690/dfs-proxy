@@ -2,6 +2,13 @@
 
 Newest first. One entry per change, in plain words: what changed and why.
 
+## Nov 12, 2026
+
+**The 150's takeover lean, added: it was in the tested spec and left out of the Nov 7 port.** The prototype's final spec (`takeover_k=1.5, takeover_cap=0.95`, the 150 only) floors takeover chalk — the takeover mark (projection 1.3x his normal and +5, a regular out leaving 10%+ of the team's normal projection open) at 15%+ projected own — at 1.5x his own, capped at 95%. The Nov 7 port kept the mark as a warning and applied nothing, so every ledger row has been graded against a spec the tool did not run. Found by `NBA Contest Review Report 11-12.md` (row T13).
+- Over 21 nights in the harness: +12.4 / 2.48 top-1% lineups a contest with the lean against +12.2 / 2.29 without; it acts on 10 nights (ahead on the mean on 6, behind on 2); in the 20 it costs, so the 20 stays without it.
+- Applied after the pick to the whole 150 (Stokastic and own lineups), with typed caps respected, before the 4-lineup minimum — as in the prototype. The build names the player and the target; the log keeps them under `sets.big.takeoverLean`.
+- Rebuilt from the saved inputs: Nov 11 Wolf to 81 of 150 (played +8.0, 1 top-1%, best 579 → +9.8, 2, 327); Nov 7 Ayton to 65 of 150 (+19.8, 10, best 13 → +16.8, 9, 41 — he lost his start); Nov 9 no takeover chalk, identical.
+
 ## Nov 10, 2026
 
 **`grade_night.py`: the seed rebuilds no longer see the night's own winners.** The 20-max rebuilt with seeds 0–5 reads the winners' ranges from every saved night, and once a night's standings are saved that included the night being graded — its own top 1%. The live build never did (it reads only nights before today). The rebuild now reads only the nights before the graded one, and seed 0 reproduces the set played exactly on Nov 7, 8 and 9 (before, Nov 9's seeds all read above the played set by up to 8 a lineup).

@@ -24,6 +24,9 @@ in `app.py`: kept for showdown and for after-the-fact replays only.
 - Stokastic's lineups: every legal one from every lineups file dropped, picked by
   their Top 10% figure.
 - One cap (85% of a 150, 90% of a 20); a 150 has nobody in fewer than 4 lineups.
+- The 150's takeover lean: a player whose projection is 1.3x his normal because a
+  regular is out (the takeover mark), at 15%+ projected own, is floored at 1.5x his own
+  (cap 95%), over Stokastic's and our own lineups alike. Not in the 20-max.
 - Removals shift nothing to teammates. Late swap is outs only.
 - Saved every night: each Stokastic file dropped (`logs/pulls/<date>/`, with
   `moves.jsonl` of what changed between pulls), the build's inputs

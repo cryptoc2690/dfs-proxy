@@ -57,6 +57,10 @@ CAP_BIG = 0.85            # no player in more than 85% of a 150
 CAP_SMALL = 0.90          # ... or 90% of a 20
 MIN_LINEUPS = 4           # a 150 drops anyone in fewer than 4 lineups
 TOP3_K, TOP3_CAP, TOP3_MIN_OWN = 2.0, 0.95, 15.0    # the 20-max's top-3 lean
+# The 150's takeover lean (the prototype's final spec, takeover_k / takeover_cap;
+# left out of the Nov 7 port by mistake, added Nov 12 after the 11-12 review, T13):
+# a takeover player at 15%+ projected own is floored at 1.5x his own, cap 95%.
+TAKEOVER_K, TAKEOVER_CAP, TAKEOVER_MIN_OWN = 1.5, 0.95, 15.0
 NEW_DRAW = dict(weight=2.5, left=300, n=2000, tries=40000, ranges=True)
 OLD_DRAW = dict(weight=3.0, left=2000, n=4000, tries=80000, ranges=False)
 STUD = 9000
@@ -619,7 +623,8 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
     allr = [list(c["ps"]) for c in chosen]
     chunks = []
     cut = raised = 0
-    lean = []
+    lean, tk_lean = [], []
+    hits = takeover(players, active, normals(history, players), inj) if big else {}
     for ci in range(copies):
         rosters = allr[ci * n:(ci + 1) * n]
         csrc = sources[ci * n:(ci + 1) * n]
@@ -631,6 +636,19 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
         for k, v in caps.items():
             lo_, _ = targets.get(k, (None, None))
             targets[k] = (lo_, v)
+        if big:
+            for k in hits:
+                p = by_id[k]
+                if p.ownership >= TAKEOVER_MIN_OWN:
+                    want = int(round(min(TAKEOVER_K * p.ownership / 100.0, TAKEOVER_CAP)
+                                     * len(rosters)))
+                    if k in caps:
+                        want = min(want, caps[k])
+                    lo_, hi_ = targets.get(k, (None, None))
+                    targets[k] = (max(lo_ or 0, want), hi_)
+                    if ci == 0:
+                        tk_lean.append(f"{p.name} to {want} of {len(rosters)} "
+                                       f"({p.ownership:.0f}% projected owned)")
         if not big:
             top3 = sorted(active, key=lambda p: -p.ownership)[:3]
             for p in top3:
@@ -651,6 +669,8 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
         chunks.append((rosters, csrc))
     if lean:
         notes.append("Top three owned raised: " + "; ".join(lean))
+    if tk_lean:
+        notes.append("Takeover chalk raised to 1.5x own: " + "; ".join(tk_lean))
     if copies > 1:
         notes.append(f"{len(chunks)} different sets of {n}: the second takes the next "
                      f"{n} in the pick order")
@@ -664,6 +684,8 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
                      "draw": "old" if draw is OLD_DRAW else "new",
                      "blueprint": {k: v for k, v in (B or {}).items()},
                      "cap": cap, "retarget": {"cut": cut, "raised": raised},
+                     "takeoverLean": [by_id[k].name for k in hits
+                                      if by_id[k].ownership >= TAKEOVER_MIN_OWN],
                      "tail": tail, "seed": seed}}
 
 
