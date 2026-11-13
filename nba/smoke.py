@@ -1461,6 +1461,104 @@ check("box scores: DK points (a triple-double +3, not +4.5), WSH read as WAS, a 
       _jb[0]["team"] == "WAS" and abs(_jb[0]["dk"] - (20 + 1 + 12.5 + 15 + 2 + 4 - 1.5 + 3)) < 1e-6
       and _jb[1]["dnp"], str(_jb))
 
+print("\n-- Nov 13: the field predictor, its shadow, the field logs --")
+import field as FP                           # noqa: E402
+import grade_night as GN                     # noqa: E402
+_real = FP.load_model()
+check("field: the frozen model loads (80 trees on the review's six inputs, 22 nights)",
+      bool(_real) and len(_real["trees"]) == 80 and set(_real["features"]) == set(FP.FEATURES)
+      and len(_real["nights"]) == 22 and "ls_diff" in _real["gain"],
+      str(_real and (len(_real["trees"]), _real.get("nights"))))
+# a fixed model: LineStar 5+ points over Stokastic -> the field takes him 4 over
+_fake = {"version": "test", "b0": 0.0, "trees": [["ls_diff", 1, 0.0, 4.0, 0.0]],
+         "cuts": {f: ([5.0] if f == "ls_diff" else []) for f in FP.FEATURES},
+         "ownByValueRank": {}, "callOver": 3.0, "callUnder": -3.0, "callMinOwn": 5.0}
+_pl5 = [p for p in S.read_projections(PROJ5w)[0] if p.proj > 0 and p.salary > 0]
+_use51 = collections.Counter(p["name"] for r in _r51 if r["contest_id"] == "900001" for p in r["players"])
+_tgt = max((p for p in _pl5 if p.ownership >= 10
+            and _use51[p.name] > int(round(0.5 * p.ownership / 100 * 150)) + 5),
+           key=lambda p: _use51[p.name] - 0.75 * p.ownership)   # one the cap binds on
+_low = next(p for p in _pl5 if p.ownership < 5)
+_lsm = {normalize_name(p.name): {"own": p.ownership + (20 if p in (_tgt, _low) else 0)}
+        for p in _pl5}
+_ft = FP.tonight(_pl5, {}, _lsm, set(), 5, model=_fake)
+check("field: LineStar 20 over -> called an over-draft; under 5% projected own is never called",
+      [r["name"] for r in _ft["over"]] == [_tgt.name] and not _ft["under"]
+      and next(r for r in _ft["players"] if r["name"] == _low.name)["miss"] == 4.0,
+      str([r["name"] for r in _ft["over"]]))
+check("field: the night's predicted own adds up to Stokastic's",
+      abs(sum(r["pred"] for r in _ft["players"]) - sum(r["own"] for r in _ft["players"])) < 0.5)
+check("field: the shadow cap is half his projected own, in lineups",
+      FP.shadow_caps([{"id": "x", "own": 20.0}], 150) == {"x": 15}
+      and FP.shadow_caps([{"id": "x", "own": 20.0}], 20) == {"x": 2})
+_LS5 = "Name,Team,Projected,ProjOwn\n" + "".join(
+    f"{x['Player']},{x['Team']},{x['Projection']},{_lsm.get(normalize_name(x['Player']), {}).get('own', x['Ownership %'])}\n"
+    for x in R5w)
+FP._MODEL = _fake
+_k61 = _nlog()
+nb61 = app.run_build(PROJ5w, FIELD5, DK5w, {"pool": _pool5w}, linestar_text=_LS5)
+_r61 = _rows_of(_k61)
+FP._MODEL = None
+_f61 = _r61[0]["settings"]["field"] if _r61 else {}
+_od = json.load(open(_f61["shadow"])) if _f61.get("shadow") and os.path.exists(_f61["shadow"]) else {}
+_cap150 = int(round(0.5 * _tgt.ownership / 100 * 150))
+_names = lambda rows, cid: [sorted(p["name"] for p in r["players"]) for r in rows if r["contest_id"] == cid]
+check("field: with LineStar the over-draft is named, logged, and its shadow set is saved",
+      not nb61.get("error") and _f61.get("over") == [_tgt.name] and _f61.get("lineStar")
+      and len(_f61["players"]) > 50 and _od.get("calls", [{}])[0].get("name") == _tgt.name
+      and len(_od["sets"]["big"][0]) == 150
+      and sum(1 for r in _od["sets"]["big"][0] if _tgt.name in r) <= _cap150
+      and sum(1 for r in _od["sets"]["small"][0] if _tgt.name in r) <= int(round(0.5 * _tgt.ownership / 100 * 20))
+      and any("over-drafts tonight" in n["text"] for n in nb61["notes"]),
+      str(nb61.get("error") or (_f61.get("over"), _f61.get("shadow"))))
+check("field: the entered set is the build without the shadow (identical lineups)",
+      _names(_r61, "900001") == _names(_r51, "900001") and _names(_r61, "900002") == _names(_r51, "900002")
+      and sum(1 for r in _r61 if r["contest_id"] == "900001"
+              and any(p["name"] == _tgt.name for p in r["players"])) > _cap150)
+check("field: no LineStar file -> no calls and no shadow, and the build says why",
+      _r51[0]["settings"]["field"] is not None and not _r51[0]["settings"]["field"]["lineStar"]
+      and not _r51[0]["settings"]["field"]["over"] and "shadow" not in _r51[0]["settings"]["field"]
+      and any("No LineStar file" in n["text"] for n in nb51["notes"]))
+check("logs: the build names the pull it read, and every lineup's summed projected own",
+      (_r61[0]["settings"].get("pull") or {}).get("file", "").endswith("_projections.csv")
+      and all(abs(r["ownSum"] - sum(p["own"] for p in r["players"])) < 0.2 for r in _r61))
+# after the night: the grader's field log, on a small made-up contest
+_gin = tempfile.mkdtemp(prefix="nba_gn_")
+with open(os.path.join(_gin, "proj.csv"), "w", encoding="utf-8") as _fh:
+    _fh.write("Player,Salary,Projected FP,Ownership %\n" + "".join(
+        f"P{i},{5000 + 100 * i},{30.0},{40.0 if i == 0 else 10.0}\n" for i in range(12)))
+_L = lambda *ix: [f"p{i}" for i in ix]
+_ents = ([{"rank": 1, "user": "a", "pts": 300, "names": _L(1, 2, 3, 4, 5, 6, 7, 8)}]
+         + [{"rank": 2 + j, "user": "b" if j < 3 else f"u{j}", "pts": 200 - j,
+             "names": _L(0, 2, 3, 4, 5, 6, 7, 9)} for j in range(98)]
+         + [{"rank": 100 + j, "user": f"v{j}", "pts": 100, "names": _L(0, 1, 3, 4, 5, 6, 7, 10)}
+            for j in range(100)])
+_pt = {f"p{i}": {"name": f"P{i}", "own": 0.0, "fpts": 40.0} for i in range(12)}
+for _e in _ents:
+    for _k in _e["names"]:
+        _pt[_k]["own"] += 100.0 / len(_ents)
+_pt["p0"]["fpts"] = 10.0                      # chalk at 99.5% real own, 10 on a 30 projection
+_St = {"mini-MAX": {"n": len(_ents), "entries": _ents, "ptab": _pt,
+                    "pts_sorted": sorted((e["pts"] for e in _ents), reverse=True)}}
+_typ = {"settings": {"field": {"model": "test", "lineStar": True, "over": ["P0"], "under": [],
+                               "players": [{"name": f"P{i}", "own": 40.0 if i == 0 else 10.0,
+                                            "pred": 45.0 if i == 0 else 10.0, "miss": 5.0 if i == 0 else 0.0,
+                                            "proj": 30.0} for i in range(12)]}}}
+_GH, GN.HERE = GN.HERE, _TMP
+_out = GN.field_night("2026-11-12", "11-12", _gin, _typ,
+                      _St, collections.defaultdict(list, {"mini-MAX": [_L(0, 2, 3, 4, 5, 6, 7, 9)]}))
+GN.HERE = _GH
+_fc = (_out or {}).get("failedChalk") or []
+check("grade_night: failed chalk and the top 1%'s first pivot (the winner held P8; no field lineup with P0 did)",
+      len(_fc) == 1 and _fc[0]["name"] == "P0" and _fc[0]["pivots"][0]["name"] == "P8"
+      and _fc[0]["pivots"][0]["lead"] == 100.0, str(_fc))
+check("grade_night: our lineups' copies and summed own; the most-copied lineup and its users",
+      _out["ours"]["mini-MAX"][0]["copies"] == 98 and _out["ours"]["mini-MAX"][0]["ownSum"] == 110.0
+      and _out["mostCopied"][0]["copies"] == 100 and _out["mostCopied"][0]["users"] == 100
+      and _out["mostCopied"][1]["users"] == 96
+      and os.path.exists(os.path.join(_TMP, "logs", "field", "2026-11-12.json")),
+      str((_out["ours"], _out["mostCopied"][:2])))
+
 # The summary and exit MUST stay last — appending a new section after them
 # silently skips it and the suite still reports a clean pass.
 print(f"\n{'=' * 56}\n  {ok} passed, {fail} failed\n{'=' * 56}")

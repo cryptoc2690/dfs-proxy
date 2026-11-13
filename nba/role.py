@@ -273,6 +273,7 @@ def marks(active, takeover_ids, logs):
         H = G.get(jk(p), [])
         L5 = H[-5:]
         m5 = _mean(x["mins"] for x in L5)
+        dk5 = _mean(x["dk"] for x in L5)
         starts5 = sum(1 for x in L5 if x["starter"])
         mins = float(p.minutes or 0)
         tk = p.dk_id in takeover_ids
@@ -316,6 +317,8 @@ def marks(active, takeover_ids, logs):
                   "own": round(p.ownership, 1), "proj": round(p.proj, 1),
                   "mins": round(mins, 1), "starting": p.starting,
                   "games": n, "m5": None if m5 is None else round(m5, 1),
+                  "dk5": None if dk5 is None else round(dk5, 2),
+                  "dkLast": L5[-1]["dk"] if L5 else None,
                   "starts5": starts5, "takeover": tk, "lift": lift, "newStart": newstart,
                   "bench": bench, "under22": under, "back": back,
                   "ppm": None if ppm is None else round(ppm, 2), "n6xSmall": n6x_small,

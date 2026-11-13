@@ -33,6 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import classic as C
 import engine as E
+import field as FP
 from dk import (CLASSIC_SIZE, CLASSIC_SLOTS, SALARY_CAP, SD_ROSTER_SIZE,
                 ShowdownLineup, normalize_name, positions_of, slots_for)
 from gui import INDEX_HTML
@@ -848,6 +849,7 @@ def _log(lineups, rosters, meta):
                                  "added": p.added or None}
                                 for s, p in zip(meta.get("slots") or [], ps)],
                     "salary": lu.salary, "leftover": SALARY_CAP - lu.salary,
+                    "ownSum": round(sum(p.ownership or 0 for p in ps), 1),
                     "proj": lu.proj, "own_sum": lu.own_sum,
                     "metrics": lu.metrics,
                     "settings": meta.get("settings", {}),
@@ -1044,10 +1046,13 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
     say("info", f"{n_games} games ({NB.slate_group(n_games)}).", "check",
         f"{n_games} games")
 
-    # LineStar: logged only; its one use is the 0-projection scratch check.
+    # LineStar: its projection is logged only, used for the 0-projection scratch
+    # check; its own feeds the field predictor (field.py), logged and shadow only.
+    ls_map = {}
     if (linestar_text or "").strip():
         ls, lrep = read_linestar(linestar_text)
         if not lrep.get("error") and not lrep.get("is_results"):
+            ls_map = ls
             zeroed = []
             for p in players:
                 rec = ls.get(normalize_name(p.name))
@@ -1164,6 +1169,29 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
     weak_caps = R["out_ids"] if R["applied"] else set()
     shadow = {}
 
+    # The field predictor (Predicting The Field report, Nov 13): every player's
+    # predicted own and the named over-drafts, logged; a shadow set with each
+    # over-draft capped at half his projected own. The build is unchanged.
+    FD = FP.tonight([p for p in players if NB.is_active(p, inj)], R["marks"], ls_map,
+                    set(R["hits"]), n_games)
+    od_calls = FD["over"] if FD and FD["lineStar"] else []
+    od_shadow = {}
+    if FD and not FD["lineStar"]:
+        say("info", "No LineStar file: the field predictor's over-draft calls need its "
+                    "own (most of the predictor), so there are none tonight. Drop "
+                    "LineStar with the projections to log them.")
+    elif FD:
+        if od_calls:
+            say("info", "The field's over-drafts tonight (predicted 3+ points over projected "
+                        "own; shadow only, the build is unchanged): " + "; ".join(
+                            f"{r['name']} ({r['own']:.0f}% \u2192 {r['own'] + r['miss']:.0f}%)"
+                            for r in od_calls) + ". The set with them capped at half "
+                        "their own is saved for the review.")
+        if FD["under"]:
+            say("info", "Predicted 3+ under projected own (logged): " + "; ".join(
+                f"{r['name']} ({r['own']:.0f}% \u2192 {r['own'] + r['miss']:.0f}%)"
+                for r in FD["under"]))
+
     sets, all_notes = {}, []
     for kind, n in (("big", n_big), ("small", n_small)):
         if not n:
@@ -1200,6 +1228,14 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                               history, slotting=C.best_slotting, copies=copies,
                               file_pick=o.get("filePick") or None)
             shadow[kind] = [[[p.name for p in r] for r in ros] for ros, _s in sh["chunks"]]
+        if od_calls:
+            ocaps = dict(bcaps)
+            for k, v in FP.shadow_caps(od_calls, n).items():
+                ocaps[k] = min(ocaps.get(k, v), v)
+            sh = NB.build_set(players, n, n_games, field, inj, ocaps, floors, seed,
+                              history, slotting=C.best_slotting, copies=copies,
+                              file_pick=o.get("filePick") or None)
+            od_shadow[kind] = [[[p.name for p in r] for r in ros] for ros, _s in sh["chunks"]]
         label = "150-max" if kind == "big" else "20-max"
         for t in res["notes"]:
             all_notes.append(f"{label}: {t}")
@@ -1288,7 +1324,17 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                 "bonesType": [p.name for p in R["bones"]],
                 "badChalk": bad,
                 "slateTraits": R["traits"],
-                "chalkWithNoGames": R["noGames"]}
+                "chalkWithNoGames": R["noGames"],
+                "pull": NB.pull_of(proj_text),
+                "field": None if not FD else {
+                    "model": FD["model"], "lineStar": FD["lineStar"],
+                    "over": [r["name"] for r in od_calls],
+                    "under": [r["name"] for r in FD["under"]] if FD["lineStar"] else [],
+                    "players": FD["players"]}}
+    if od_shadow:
+        settings["field"]["shadow"] = NB.save_shadow("overdraft", {
+            "calls": [{k: r[k] for k in ("name", "own", "pred", "miss")} for r in od_calls],
+            "capK": FP.CAP_K, "games": n_games, "sets": od_shadow})
     if shadow:
         settings["weakChalk"]["shadow"] = NB.save_shadow("weakchalk", {
             "calls": [p.name for p in R["calls"] if p.dk_id in R["out_ids"]],

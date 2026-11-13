@@ -25,6 +25,9 @@ Reads the saved nights folder (NBA_MAIN, default ~/Downloads/NBA Results 1/Main)
   NBA DK Entries Main All Contests FINAL <M-D>.csv  (or one FINAL file per contest)
 and the build's inputs the tool saved in logs/inputs/<YYYY-MM-DD>/<HHMMSS>/.
 Writes nothing to the real logs: the old build runs with temporary log paths.
+The one file it writes is logs/field/<date>.json (Predicting The Field report,
+Nov 13): real own joined to the predictor's, our lineups' copies in the field,
+the field's most-copied lineups, the failed chalk and the top 1%'s pivots.
 """
 
 import bisect
@@ -261,6 +264,145 @@ def pool_tilt(inp, options, St, final):
               " | ".join(f"{d[k][0]:3.0f}/{d[k][1]:3.0f}" for _kind, d in cols))
 
 
+def _proj_rows(inp):
+    """proj.csv -> {name: {name, sal, proj, own}} (players with a salary)."""
+    P = {}
+    path = os.path.join(inp, "proj.csv")
+    if not os.path.exists(path):
+        return P
+    with open(path, encoding="utf-8-sig", newline="") as fh:
+        for r in csv.DictReader(fh):
+            nm = r.get("Player") or r.get("Name") or ""
+            sal = _f(r.get("Salary"))
+            if nm and sal > 0:
+                P[norm(nm)] = {"name": nm, "sal": sal, "proj": _f(r.get("Projected FP")),
+                               "own": _f(r.get("Ownership %"))}
+    return P
+
+
+def field_night(day, date, inp, typed, St, final):
+    """The Predicting The Field report's logging (build list 3), after the night:
+      - real own against Stokastic's and the predictor's (field.py), chalk and
+        5-20% apart, and how the night's named over- and under-drafts went;
+      - each of our lineups' summed projected own and its copies in the field;
+      - the field's 20 most-copied lineups;
+      - the night's failed chalk (25%+ real own, under 70% of projection) and the
+        top 1%'s first three pivots: the players the top 1%'s lineups without him
+        held most over the field's lineups with him.
+    Printed, and saved whole to logs/field/<date>.json for the review."""
+    S = St.get("mini-MAX")
+    if not S:
+        return None
+    P = _proj_rows(inp)
+    F = (typed.get("settings") or {}).get("field") or {}
+    tw = [St[k] for k in St if k != "mini-MAX"]
+    real = lambda k: S["ptab"].get(k, {}).get("own", 0.0)
+    real20 = lambda k: (sum(c["ptab"].get(k, {}).get("own", 0.0) for c in tw) / len(tw)) if tw else None
+    fpts = lambda k: S["ptab"].get(k, {}).get("fpts")
+    fld = [e["names"] for e in S["entries"] if e["names"]]
+    top = [e["names"] for e in S["entries"] if e["names"] and e["rank"] <= max(1, S["n"] * 0.01)]
+    share = lambda ros, k: 100.0 * sum(1 for r in ros if k in r) / max(1, len(ros))
+    out = {"date": day, "build": os.path.basename(inp), "model": F.get("model"),
+           "lineStar": F.get("lineStar"), "entries": S["n"]}
+    print("\nThe field (Predicting The Field, Nov 13):")
+
+    # 1. real own against the two numbers
+    rows = []
+    for r in F.get("players") or []:
+        k = norm(r["name"])
+        rows.append(dict(r, real=round(real(k), 2),
+                         real20=None if real20(k) is None else round(real20(k), 2),
+                         fpts=fpts(k), top1=round(share(top, k), 1)))
+    out["players"] = rows
+    if rows:
+        print(f"  own, average miss against DK's real own (mini-MAX); predictor "
+              f"{F.get('model')}{'' if F.get('lineStar') else ', NO LineStar file'}:")
+        for lab, lo, hi in (("all", 0.5, 1e9), ("chalk 20%+", 20, 1e9), ("5-20%", 5, 20)):
+            X = [r for r in rows if lo <= r["own"] < hi]
+            if X:
+                a = statistics.mean(abs(r["real"] - r["own"]) for r in X)
+                b = statistics.mean(abs(r["real"] - r["pred"]) for r in X)
+                print(f"    {lab:<11} {len(X):>3} players: Stokastic {a:.2f}, predictor {b:.2f}")
+        for lab, names in (("over-drafts (3+ over)", F.get("over") or []),
+                           ("under-drafts (3+ under)", F.get("under") or [])):
+            byn = {r["name"]: r for r in rows}
+            if names:
+                print(f"  named {lab}:")
+            for nm in names:
+                r = byn.get(nm)
+                if r:
+                    print(f"    {nm[:22]:<23} own {r['own']:4.1f} -> said {r['own'] + r['miss']:4.1f}"
+                          f" -> real {r['real']:4.1f} | {r['fpts'] if r['fpts'] is not None else 0:5.1f}"
+                          f" on {r['proj']:4.1f} | top 1% {r['top1']:3.0f}%")
+        out["over"], out["under"] = F.get("over") or [], F.get("under") or []
+    else:
+        print("  no predictor in this build (built before Nov 13, or no model)")
+
+    # 2. our lineups: summed projected own and copies in the field
+    copies = collections.Counter(frozenset(r) for r in fld)
+    own_sum = lambda r: sum(P.get(k, {}).get("own", 0.0) for k in r)
+    out["ours"] = {}
+    for kind, ros in final.items():
+        if kind not in St:
+            continue
+        cp = collections.Counter(frozenset(r) for e in St[kind]["entries"] if (r := e["names"]))
+        L = [{"names": r, "ownSum": round(own_sum(r), 1), "copies": cp.get(frozenset(r), 0)}
+             for r in ros]
+        out["ours"][kind] = L
+        if L:
+            print(f"  ours, {kind}: summed projected own {statistics.mean(x['ownSum'] for x in L):.0f}"
+                  f", copies in the field {statistics.mean(x['copies'] for x in L):.1f} a lineup"
+                  f" (most {max(x['copies'] for x in L)})")
+    # 3. the field's most-copied lineups
+    mc = []
+    users = collections.defaultdict(set)
+    for e in S["entries"]:
+        if e["names"]:
+            users[frozenset(e["names"])].add(e["user"])
+    for lu, c in copies.most_common(20):
+        mc.append({"names": sorted(lu), "copies": c, "users": len(users[lu]),
+                   "ownSum": round(own_sum(lu), 1),
+                   "proj": round(sum(P.get(k, {}).get("proj", 0.0) for k in lu), 1),
+                   "pts": round(sum(fpts(k) or 0.0 for k in lu), 1)})
+    out["mostCopied"] = mc
+    if mc:
+        print(f"  the field's most-copied lineups (mini-MAX): " + ", ".join(
+            f"{x['copies']} by {x['users']} user{'s' if x['users'] != 1 else ''} "
+            f"({x['ownSum']:.0f} own, {x['pts']:.0f} pts)" for x in mc[:5]))
+    # 4. failed chalk and the top 1%'s pivots
+    fails = []
+    for k, pt in S["ptab"].items():
+        pr = P.get(k, {}).get("proj") or 0.0
+        if pt["own"] >= 25 and pr > 0 and pt["fpts"] < 0.7 * pr:
+            t_wo = [r for r in top if k not in r]
+            f_w = [r for r in fld if k in r]
+            cand = sorted(((share(t_wo, j) - share(f_w, j), j) for j in S["ptab"]
+                           if j != k), reverse=True)[:3]
+            fails.append({"name": pt["name"], "own": round(pt["own"], 1), "proj": pr,
+                          "fpts": pt["fpts"], "projOwn": P.get(k, {}).get("own"),
+                          "pivots": [{"name": S["ptab"][j]["name"], "lead": round(d, 1),
+                                      "own": round(S["ptab"][j]["own"], 1),
+                                      "projOwn": P.get(j, {}).get("own"),
+                                      "fpts": S["ptab"][j]["fpts"], "proj": P.get(j, {}).get("proj"),
+                                      "sal": P.get(j, {}).get("sal")} for d, j in cand]})
+    out["failedChalk"] = fails
+    for f in fails:
+        pv = f["pivots"][0] if f["pivots"] else None
+        print(f"  failed chalk: {f['name']} ({f['own']:.0f}% real, {f['fpts']:.1f} on {f['proj']:.1f})"
+              + (f"; the top 1%'s first pivot {pv['name']} (+{pv['lead']:.0f} over the field, "
+                 f"{pv['fpts']:.1f} on {pv['proj'] or 0:.1f})" if pv else ""))
+    try:
+        folder = os.path.join(HERE, "logs", "field")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, f"{day}.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(out, fh, indent=1)
+        print(f"  saved {path}")
+    except OSError as e:
+        print(f"  could not save the field log: {e}")
+    return out
+
+
 def last_build(day):
     folder = os.path.join(HERE, "logs", "inputs", day)
     stamps = sorted(d for d in os.listdir(folder) if os.path.isdir(os.path.join(folder, d))) \
@@ -396,6 +538,7 @@ def main(argv):
                   f"{share(final['mini-MAX'], k):5.0f}% {share(old.get('mini-MAX', []), k):5.0f}% "
                   f"{share(fld, k):5.0f}% {share(top, k):5.0f}% "
                   f"{S['ptab'].get(k, {}).get('fpts', 0):6.1f}")
+    field_night(day, date, inp, typed, St, final)
     return 0
 
 

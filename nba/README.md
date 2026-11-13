@@ -34,6 +34,14 @@ in `app.py`: kept for showdown and for after-the-fact replays only.
   ESPN's box scores (`role.py`, one small file a day in `logs/espn/`, fetched when
   the tool starts and before each build). With box scores missing the rule is not
   applied, and the build says so.
+- **The field predictor (Nov 13, Predicting The Field report):** `field.py` predicts
+  each player's real own (Stokastic's own, LineStar's own against it, his own against
+  his value rank, his last game and last five against tonight's projection, the
+  takeover mark, a new starting job; frozen in `field_model.json`, refit with
+  `python3 field.py fit`). Logged only: the predicted own, the named over-drafts (3+
+  points over at 5%+ projected own) and under-drafts. A shadow set with every
+  over-draft capped at half his own is saved to `logs/shadow/<date>/`. Needs the
+  LineStar file; without it there are no calls.
 - One cap (85% of a 150, 90% of a 20); a 150 has nobody in fewer than 4 lineups.
 - The 150's takeover lean: a player whose projection is 1.3x his normal because a
   regular is out (the takeover mark), at 15%+ projected own, is floored at 1.5x his own
@@ -55,7 +63,10 @@ played sets, an old-tool rebuild from the saved inputs and the sharks on the rea
 standings; names, player by player, where each played set lost and gained against
 each shark and the top 1%; and rebuilds the 20-max with seeds 0-5 so the played set
 can be placed inside its own draw's spread; and shows the pick's tilt — pool players
-at 5%+ own, ours against the top 1% and the sharks, by value.
+at 5%+ own, ours against the top 1% and the sharks, by value; and writes
+`logs/field/<date>.json`: real own against Stokastic's and the predictor's, our
+lineups' copies in the field, the field's 20 most-copied lineups, and the failed
+chalk with the top 1%'s pivots.
 
 ## Run it
 
@@ -80,7 +91,7 @@ python3 nba/app.py --proj proj.csv --field lineups.csv --dk DKEntries.csv \
 | 1 | Stokastic **projections** export | **Yes** |
 | 2 | Stokastic **lineups** export | Strongly recommended — it is the opponent field |
 | 3 | Your **DK entries** export | Yes, for an uploadable file |
-| 4 | **LineStar** export | Optional — Vegas, its projection and starting status, logged only |
+| 4 | **LineStar** export | Recommended — its own feeds the field predictor (logged and shadow only); Vegas, projection, starting status logged |
 | 5 | DK **contest standings** | After the slate, to grade the build |
 
 **Slot 1 takes Stokastic's projections and nothing else.** A file with no Std Dev
@@ -99,7 +110,9 @@ beside Stokastic's (never compared on NBA — the log is what lets the grader
 screen it before anything uses it), and its starting status. The build is
 byte-identical with and without the file (`smoke.py` checks it). The one thing
 it says before lock: anyone LineStar has at 0 or out while Stokastic still
-projects him, so you can decide on a late scratch.
+projects him, so you can decide on a late scratch. Since Nov 13 its projected own
+is most of the field predictor (`field.py`): the over-draft calls and their
+shadow set need it, and still change nothing that is entered.
 
 Classic or showdown is read from the DK file's slot header (`PG … UTIL` or
 `CPT, UTIL × 5`), falling back to the number of teams in the projections.

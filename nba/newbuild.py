@@ -804,6 +804,30 @@ def save_pull(proj_text, source="drop"):
         return None
 
 
+def pull_of(proj_text):
+    """Which saved pull the build read: {"file", "ts", "pulls", "first", "last"}
+    from today's pulls/index.jsonl, matched by the file's hash. The predictor is
+    only as good as its pull (Predicting The Field report: Stokastic's own moved
+    6.7 points a player in the last 90 minutes on Nov 7). -> dict or None"""
+    text = proj_text or ""
+    if not text.strip():
+        return None
+    try:
+        _now, day, _hms = _stamp()
+        index = os.path.join(LOG_DIR, "pulls", day, "index.jsonl")
+        if not os.path.exists(index):
+            return None
+        with open(index, encoding="utf-8") as fh:
+            rows = [json.loads(x) for x in fh if x.strip()]
+    except (OSError, ValueError):
+        return None
+    sha = hashlib.sha1(text.encode("utf-8", "replace")).hexdigest()[:12]
+    hit = next((r for r in rows if r.get("sha1") == sha), None)
+    return {"file": hit and hit.get("file"), "ts": hit and hit.get("ts"),
+            "pulls": len(rows), "first": rows[0].get("ts") if rows else None,
+            "last": rows[-1].get("ts") if rows else None}
+
+
 def save_shadow(name, data):
     """A shadow build (logged, never entered) for the review: logs/shadow/<date>/
     <time>_<name>.json. -> path or None"""
