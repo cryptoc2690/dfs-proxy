@@ -59,6 +59,9 @@ app.LOG_PATH = os.path.join(_TMP, "nba_builds.jsonl")
 import newbuild as NB                        # noqa: E402
 NB.LOG_DIR = _TMP                            # pulls and inputs out of the real logs
 NB.HISTORY_DIR = os.path.join(_TMP, "history")  # no real earlier nights in the tests
+import role as RL                            # noqa: E402
+RL.FETCH = False                             # no network in the tests
+RL.ESPN_DIR = os.path.join(_TMP, "espn")     # no real box scores either
 
 # ---------- synthetic Stokastic projections ----------
 PROJ_COLS = ["Player", "Salary", "Position", "Team", "Opponent", "Minutes", "FPPM",
@@ -1329,6 +1332,134 @@ _mid9 = dk_midslate(R5, GAMES5, _entries40)
 _sw = LS.run_late_swap(PROJ5, _mid9, _stand, {"remove": _out_nm, "noPullSave": True}, log_path=LS_LOG)
 check("new build: the outs-only late swap still runs, and logs risers it did not act on",
       not _sw.get("error") and "risersNotActed" in _sw, str(_sw.get("error")))
+
+# ---- Nov 13: weak chalk (Weak Chalk Rebuild report), the 5-7 game file pick
+# by projected sum (Shark Edge report), and the night's logs. Box scores are
+# synthetic day files in the test's own folder; nothing is fetched.
+print("\n-- Nov 13: weak chalk, the file pick, the logs --")
+import copy as _copy
+import datetime as _dt
+import shutil as _sh
+_today = _dt.date.today()
+RL.SEASON_START = _today - _dt.timedelta(days=5)
+
+
+def _espn_days(rows_by_day):
+    _sh.rmtree(RL.ESPN_DIR, ignore_errors=True)
+    os.makedirs(RL.ESPN_DIR)
+    for i in range(5):
+        d = RL.SEASON_START + _dt.timedelta(days=i)
+        json.dump({"date": d.isoformat(), "games": rows_by_day(i)},
+                  open(os.path.join(RL.ESPN_DIR, f"day_{d:%Y%m%d}.json"), "w"))
+
+
+def _slate_with_weak(rows, games):
+    """A copy of the slate where one bench pool player is weak chalk (30% own,
+    24 projected minutes, 24 a night on record) and another bench player is
+    chalk WITH a minutes lift (30 projected, 20 a night): not weak."""
+    R = _copy.deepcopy(rows)
+    bench = [x for i, x in enumerate(R) if x["Starting"] == "false" and i % 3 != 2]
+    weak, lifted = bench[0], bench[3]
+    weak.update({"Ownership %": 30.0, "Minutes": 24})
+    lifted.update({"Ownership %": 28.0, "Minutes": 30})
+
+    def day(i):
+        out = []
+        for a, b in games:
+            rr = [{"team": x["Team"], "key": normalize_name(x["Player"]), "name": x["Player"],
+                   "mins": 24.0 if x is weak else 20.0 if x is lifted else 28.0,
+                   "dk": 20.0, "starter": x["Starting"] == "true", "dnp": False}
+                  for x in R if x["Team"] in (a, b)]
+            out.append({"id": f"{i}{a}", "teams": sorted([a, b]), "tip": "", "rows": rr})
+        return out
+    return R, weak["Player"], lifted["Player"], day
+
+
+R3w, _wk3, _lf3, _day3 = _slate_with_weak(R3, GAMES3)
+_espn_days(_day3)
+PROJ3w = proj_csv(R3w)
+DK3w = dk_classic(R3w, GAMES3, contests=((150, "NBA $15K mini-MAX", "900001", "$0.50"),
+                                         (20, "NBA $8K And-One", "900002", "$1")))
+_pool3w = "\n".join(x["Player"] for i, x in enumerate(R3w) if i % 3 != 2)
+_pv = app.weak_preview(PROJ3w)
+check("weak chalk: the page's preview calls the bench chalk with no lift, not the lifted one",
+      not _pv.get("error") and [c["name"] for c in _pv["calls"]] == [_wk3] and _pv["applied"]
+      and "bench" in _pv["calls"][0]["why"], str(_pv.get("error") or _pv.get("calls")))
+_kw = _nlog()
+nbw = app.run_build(PROJ3w, FIELD3, DK3w, {"pool": _pool3w,
+                                          "badChalk": f"{_wk3} — minutes\nNobody Atall: closing"})
+_rw = _rows_of(_kw)
+check("weak chalk: on 2-4 games he is in no lineup of the 150 or the 20",
+      not nbw.get("error") and len(_rw) == 170
+      and not any(p["name"] == _wk3 for r in _rw for p in r["players"])
+      and any("Weak chalk left out" in n["text"] for n in nbw["notes"]),
+      str(nbw.get("error") or collections.Counter(r["contest_id"] for r in _rw)))
+_sw3 = _rw[0]["settings"]
+check("weak chalk: the call and every chalk player's role marks are logged",
+      _sw3["weakChalk"]["calls"] == [_wk3] and _sw3["weakChalk"]["applied"]
+      and any(m["name"] == _lf3 and m["lift"] and not m["weak"] for m in _sw3["roleMarks"]),
+      str(_sw3.get("weakChalk")))
+check("weak chalk: the sharp's typed calls are logged with their reasons (no effect)",
+      [(b["name"], b["reason"], b["matched"]) for b in _sw3["badChalk"]]
+      == [(_wk3, "minutes", True), ("Nobody Atall", "closing", False)]
+      and any("also a weak chalk call" in n["text"] for n in nbw["notes"]), str(_sw3["badChalk"]))
+check("weak chalk: the slate traits are logged",
+      set(_sw3["slateTraits"]) >= {"lateTeamShare", "studGap", "studs40"}, str(_sw3["slateTraits"]))
+_kk = _nlog()
+nbk = app.run_build(PROJ3w, FIELD3, DK3w, {"pool": _pool3w, "weakKeep": _wk3})
+_rk = _rows_of(_kk)
+check("weak chalk: unticked by hand, he is kept and the build says so",
+      any(p["name"] == _wk3 for r in _rk for p in r["players"])
+      and _rk[0]["settings"]["weakChalk"]["kept"] == [_wk3]
+      and not _rk[0]["settings"]["weakChalk"]["applied"]
+      and any("kept by hand" in n["text"] for n in nbk["notes"]))
+_sh.rmtree(RL.ESPN_DIR, ignore_errors=True)
+_km = _nlog()
+nbm = app.run_build(PROJ3w, FIELD3, DK3w, {"pool": _pool3w})
+_rm3 = _rows_of(_km)
+check("weak chalk: with the box scores missing the rule is not applied, and it says so",
+      not nbm.get("error") and not _rm3[0]["settings"]["weakChalk"]["applied"]
+      and any("box scores are missing" in w for w in nbm["info"]["problems"]))
+
+R5w, _wk5, _lf5, _day5 = _slate_with_weak(R5, GAMES5)
+_espn_days(_day5)
+PROJ5w = proj_csv(R5w)
+DK5w = dk_classic(R5w, GAMES5, contests=((150, "NBA $15K mini-MAX", "900001", "$0.50"),
+                                         (20, "NBA $8K And-One", "900002", "$1")))
+_pool5w = "\n".join(x["Player"] for i, x in enumerate(R5w) if i % 3 != 2)
+_k51 = _nlog()
+nb51 = app.run_build(PROJ5w, FIELD5, DK5w, {"pool": _pool5w})
+_r51 = _rows_of(_k51)
+_k52 = _nlog()
+nb52 = app.run_build(PROJ5w, FIELD5, DK5w, {"pool": _pool5w, "weakChalkOff": True})
+_r52 = _rows_of(_k52)
+_shp = _r51[0]["settings"]["weakChalk"].get("shadow")
+_shj = json.load(open(_shp)) if _shp and os.path.exists(_shp) else {}
+check("weak chalk: on 5+ games the build is unchanged and the set without him is saved",
+      not nb51.get("error") and [r["players"] for r in _r51] == [r["players"] for r in _r52]
+      and _shj.get("calls") == [_wk5] and len(_shj["sets"]["big"][0]) == 150
+      and not any(_wk5 in r for r in _shj["sets"]["big"][0])
+      and not any(_wk5 in r for r in _shj["sets"]["small"][0]), str(_shp))
+check("file pick: 5-7 games by projected sum, 8+ games by Stokastic's Top 10%",
+      _r51[0]["settings"]["sets"]["big"]["filePick"] == "proj"
+      and _r9[0]["settings"]["sets"]["big"]["filePick"] == "top10",
+      f"{_r51[0]['settings']['sets']['big'].get('filePick')} / {_r9[0]['settings']['sets']['big'].get('filePick')}")
+_k53 = _nlog()
+nb53 = app.run_build(PROJ5w, FIELD5, DK5w, {"pool": _pool5w, "filePick": "top10"})
+_r53 = _rows_of(_k53)
+check("file pick: the grader's override rebuilds a night the old way",
+      _r53[0]["settings"]["sets"]["big"]["filePick"] == "top10"
+      and [r["players"] for r in _r53 if r["contest_id"] == "900001"]
+      != [r["players"] for r in _r52 if r["contest_id"] == "900001"])
+_sh.rmtree(RL.ESPN_DIR, ignore_errors=True)
+_jb = RL.box_rows({"boxscore": {"players": [{"team": {"abbreviation": "WSH"}, "statistics": [{
+    "labels": ["MIN", "PTS", "REB", "AST", "STL", "BLK", "TO", "3PT"],
+    "athletes": [{"athlete": {"displayName": "Alexandre Sarr"}, "starter": True,
+                  "stats": ["30", "20", "10", "10", "1", "2", "3", "2-5"]},
+                 {"athlete": {"displayName": "Bench Guy"}, "didNotPlay": True, "stats": []}]}]}]}})
+check("box scores: DK points (a triple-double +3, not +4.5), WSH read as WAS, a DNP kept as one",
+      _jb[0]["team"] == "WAS" and abs(_jb[0]["dk"] - (20 + 1 + 12.5 + 15 + 2 + 4 - 1.5 + 3)) < 1e-6
+      and _jb[1]["dnp"], str(_jb))
 
 # The summary and exit MUST stay last — appending a new section after them
 # silently skips it and the suite still reports a clean pass.

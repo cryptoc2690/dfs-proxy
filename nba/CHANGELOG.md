@@ -2,6 +2,20 @@
 
 Newest first. One entry per change, in plain words: what changed and why.
 
+## Nov 13, 2026
+
+**Weak chalk is left out on 2-4 game slates.** From `NBA Weak Chalk Rebuild Report 11-13.md`. Weak chalk is a player at 20%+ projected own with no role change tonight (no takeover mark, no minutes lift of 5+ over his real last five games, no new starting job) who comes off the bench, has a teammate at his position back tonight, or is projected under 22 minutes. On 22 nights those 31 calls reached projection 19% of the time against 49% for the other chalk; leaving them out of the pick put more lineups in the top 1% on all 8 short slates (150: +2.9 a lineup, +1.4 top-1% lineups a contest), and it held with the "no role change" filter chosen held-out. Capping them or forcing a salary shape on the lineups without them did not.
+- 2-4 games: the calls are left out of every lineup, the 150 and the 20s; the lineups refill on their own (they come out more mid-range). Settings shows the night's calls as soon as the projections are dropped; untick one to keep him. A typed minimum also keeps him.
+- 5+ games: a shadow only. The build is unchanged; the 150 and 20s it would have built are saved in `logs/shadow/<date>/` for the review (it rests on one night there, Nov 9).
+- Real minutes and starts come from ESPN's public box scores: `role.py`, one small file a day in `logs/espn/` (seeded with Oct 20 - Nov 12 from the review's own files), fetched in the background when the tool starts and before each build. A name that does not join falls back to the one player on his team with the same last name and first initial (Alexandre/Alex Sarr, Gregory/GG Jackson). With box scores missing the rule is not applied, and the build says so.
+- Replayed on the 22 saved nights the tool's calls match the review's on 30 of 31 (Harden on Oct 31 is 19.7% own in the tool's copy of that night's file) plus Isaiah Jackson on Nov 1 (projected 21.8 minutes). Nov 12: Morez Johnson and Kevin Huerter, the sharp's two calls.
+
+**On 5-7 games Stokastic's lineups are picked by projected sum.** From `NBA Shark Edge And Slate Triggers Report 11-13.md` (T2): on the nine 5-7 game nights, ahead on the mean on 8 (+1.9 a lineup), top-1% lineups +0.11 a contest, best rank 404 → 359. On 8+ games the Top 10% figure stays ahead and stays. The log keeps it as `sets.big.filePick`.
+
+**Logged with every build, no effect on it** (`typed.json` → `settings`): the weak chalk calls and every chalk player's role marks (`weakChalk`, `roleMarks`); the Bones type (`bonesType`: cheap, under 24 projected minutes, 1.1+ DK points a minute, two earlier games of 6x his salary in under 24 minutes; half went over Stokastic's ceiling, 10 of 15 were off the pool); the sharp's **bad chalk** calls, a new Settings box, one name per line with a word of why (`badChalk`); the slate traits (`slateTraits`: share of teams tipping 30+ minutes after the first game, the gap between the top two studs' projections, studs projected 40+).
+
+**`grade_night.py`** rebuilds a night with only the box scores before it, and a night built before today without the weak chalk rule and with the old file pick, so seed 0 still reproduces the played set (Nov 12: +7.3 and +8.9, as played).
+
 ## Nov 12, 2026
 
 **The 150's takeover lean, added: it was in the tested spec and left out of the Nov 7 port.** The prototype's final spec (`takeover_k=1.5, takeover_cap=0.95`, the 150 only) floors takeover chalk — the takeover mark (projection 1.3x his normal and +5, a regular out leaving 10%+ of the team's normal projection open) at 15%+ projected own — at 1.5x his own, capped at 95%. The Nov 7 port kept the mark as a warning and applied nothing, so every ledger row has been graded against a spec the tool did not run. Found by `NBA Contest Review Report 11-12.md` (row T13).

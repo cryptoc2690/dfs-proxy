@@ -21,7 +21,11 @@ Two sources of lineups and almost no rules:
                         the same slate size). On 8+ games the old draw instead:
                         projection^3, up to $2,000 left, 4,000 candidates, no ranges.
   File lineups        : every legal lineup of active players in every lineups file
-                        dropped, picked by Stokastic's own Top 10% figure.
+                        dropped, picked by projected sum on 5-7 games and by
+                        Stokastic's own Top 10% figure on 8+ (Nov 13).
+  Weak chalk          : on 2-4 games, chalk with a shaky role and no role change
+                        is left out of the pick (role.py, app.run_build; Nov 13).
+                        On 5+ games it is a shadow build, logged only.
   Selection           : by projected points under one cap on any player (85% of a
                         150, 90% of a 20); a 150 drops anyone in fewer than 4
                         lineups for the set's most-used player at his salary.
@@ -555,14 +559,16 @@ def tail_fix(rosters, by_id, min_count, keep=(), caps=None):
 
 # --- the build ---------------------------------------------------------------
 def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, seed=0,
-              history=None, slotting=None, copies=1):
+              history=None, slotting=None, copies=1, file_pick=None):
     """One set (a 150 or a 20). -> dict(rosters, sources, chunks, notes, meta)
 
     players: every player with DK ids attached, pool flags set and removals
     marked. caps / floors: {dk_id: lineups}. slotting: players -> slot order.
     copies (20-max only): how many different 20s. The second takes the next 20
     in the pick order (Slate By Slate Calls report, 5C); each gets its own
-    top-3 raise. chunks = [(rosters, sources)] one per copy."""
+    top-3 raise. file_pick: "proj" or "top10" to override the file pick (the
+    grader, rebuilding a night built before Nov 13). chunks = [(rosters,
+    sources)] one per copy."""
     notes = []
     caps = dict(caps or {})
     floors = dict(floors or {})
@@ -602,7 +608,11 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
     cap = CAP_BIG if big else CAP_SMALL
     cnt, taken = collections.Counter(), set()
     own = select(cands, n_own * copies, cap, n * copies, cnt, taken, "proj", caps)
-    half = select(fc, n_file, cap, n, cnt, taken, "top10", caps) if n_file else []
+    # Which of Stokastic's lineups: on 5-7 games by projected sum, on 8+ by the
+    # file's own Top 10% figure (Shark Edge And Slate Triggers report, Nov 13:
+    # projected sum ahead on 8 of 9 5-7 game nights, Top 10% still ahead on 8+).
+    file_key = file_pick or ("proj" if 5 <= games <= 7 else "top10")
+    half = select(fc, n_file, cap, n, cnt, taken, file_key, caps) if n_file else []
     chosen = own + half
     sources = ["mine"] * len(own) + ["vendor"] * len(half)
     if n_file and len(half) < n_file:
@@ -680,6 +690,7 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
         tail = tail_fix(rosters, by_id, MIN_LINEUPS, keep=set(floors), caps=caps)
     return {"rosters": rosters, "sources": sources, "chunks": chunks, "notes": notes,
             "meta": {"rule": rule, "own": len(own), "file": len(half),
+                     "filePick": file_key if n_file else None,
                      "fileUsable": len(fc), "candidates": len(cands),
                      "draw": "old" if draw is OLD_DRAW else "new",
                      "blueprint": {k: v for k, v in (B or {}).items()},
@@ -790,6 +801,21 @@ def save_pull(proj_text, source="drop"):
                             "mins": [o["mins"], v["mins"]]}) + "\n")
         return name
     except (OSError, ValueError, csv.Error):
+        return None
+
+
+def save_shadow(name, data):
+    """A shadow build (logged, never entered) for the review: logs/shadow/<date>/
+    <time>_<name>.json. -> path or None"""
+    try:
+        _now, day, hms = _stamp()
+        folder = os.path.join(LOG_DIR, "shadow", day)
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, f"{hms}_{name}.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=1)
+        return path
+    except OSError:
         return None
 
 

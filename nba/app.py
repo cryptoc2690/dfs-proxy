@@ -874,6 +874,101 @@ def _log(lineups, rosters, meta):
 
 
 # ---------------- the build ----------------
+def _slate_day(o):
+    """The night being built: options slateDate (YYYY-MM-DD, for after-the-fact
+    rebuilds), else today. Role marks read only games before it."""
+    s = str((o or {}).get("slateDate") or "").strip()
+    try:
+        return datetime.strptime(s, "%Y-%m-%d").date()
+    except ValueError:
+        return datetime.now().astimezone().date()
+
+
+def _bad_chalk(text, players):
+    """The sharp's "bad chalk" calls, one per line: a name, then optionally a
+    dash or colon and a word of reason. -> [{name, reason, matched}]. Logged
+    only (Cheap Chalk and Weak Chalk Rebuild reports, Nov 13)."""
+    by_name = {normalize_name(p.name): p for p in players}
+    out = []
+    for raw in re.split(r"[\r\n;]+", text or ""):
+        line = raw.strip()
+        if not line:
+            continue
+        m = re.match(r"^(.*?)(?:\s+-\s+|\s*[:—–,]\s*)(.*)$", line)
+        nm, why = (m.group(1), m.group(2)) if m else (line, "")
+        key = normalize_name(nm)
+        p = by_name.get(key)
+        if p is None and key:
+            hits = [v for k, v in by_name.items() if k.startswith(key)]
+            p = hits[0] if len(hits) == 1 else None
+        out.append({"typed": line, "name": p.name if p else nm.strip(),
+                    "reason": (why or "").strip(), "matched": p is not None})
+    return out
+
+
+def role_night(players, inj, history, n_games, o):
+    """The night's role marks (role.py): weak chalk calls, the Bones-type list,
+    the slate traits. Fetches any missing ESPN box scores first.
+
+    On 2-4 game slates the calls not kept by hand (options weakKeep) and not
+    given a typed minimum are left out of the build; on 5+ they are a shadow.
+    The rule is not applied when box scores are missing (it would be judging
+    every player's role with no games on record)."""
+    import newbuild as NB
+    import role as RL
+    o = o or {}
+    day = _slate_day(o)
+    sync = RL.sync(day)
+    logs = RL.load_logs(day)
+    active = [p for p in players if NB.is_active(p, inj)]
+    hits = NB.takeover(players, active, NB.normals(history, players), inj)
+    M = RL.marks(active, set(hits), logs)
+    keep = read_sharp(o.get("weakKeep") or "")
+    floors, _m, _b = _player_floors(o.get("floorPlayers"), players)
+    calls = sorted((p for p in active if M[normalize_name(p.name)]["weak"]),
+                   key=lambda p: -p.ownership)
+    kept = [p for p in calls if normalize_name(p.name) in keep or p.dk_id in floors]
+    out_ids = {p.dk_id for p in calls if p not in kept}
+    complete = not sync["missing"] and logs["days"] > 0
+    applied = n_games <= 4 and complete and not o.get("weakChalkOff")
+    bones = sorted((p for p in active if M[normalize_name(p.name)]["bones"]),
+                   key=lambda p: -p.proj)
+    return {"day": day.isoformat(), "sync": sync, "days": logs["days"],
+            "complete": complete, "applied": applied, "marks": M, "hits": hits,
+            "calls": calls, "kept": kept, "out_ids": out_ids, "bones": bones,
+            "noGames": RL.chalk_without_games(active, logs),
+            "traits": RL.slate_traits(active)}
+
+
+def _call_line(R, p):
+    m = R["marks"][normalize_name(p.name)]
+    return f"{p.name} (${p.salary:,}, {p.ownership:.0f}% own, {m['why']})"
+
+
+def weak_preview(proj_text, options=None):
+    """What the page shows once the projections are dropped: tonight's weak
+    chalk calls (tick to keep one) and the Bones-type players."""
+    import newbuild as NB
+    players, rep = read_projections(proj_text or "")
+    if rep.get("error"):
+        return {"error": rep["error"]}
+    inj = NB.injury_tags(proj_text)
+    n_games = len({p.game for p in players if "@" in (p.game or "") and p.proj > 0})
+    R = role_night(players, inj, NB.load_history(), n_games, options)
+    mk = lambda p: R["marks"][normalize_name(p.name)]
+    return {"games": n_games, "group": NB.slate_group(n_games), "applied": R["applied"],
+            "complete": R["complete"], "days": R["days"], "missing": R["sync"]["missing"],
+            "fetchError": R["sync"]["error"],
+            "calls": [{"name": p.name, "team": p.team, "salary": p.salary,
+                       "own": round(p.ownership, 1), "proj": round(p.proj, 1),
+                       "why": mk(p)["why"]} for p in R["calls"]],
+            "bones": [{"name": p.name, "team": p.team, "salary": p.salary,
+                       "own": round(p.ownership, 1), "proj": round(p.proj, 1),
+                       "mins": mk(p)["mins"], "ppm": mk(p)["ppm"],
+                       "n6x": mk(p)["n6xSmall"]} for p in R["bones"]],
+            "noGames": R["noGames"]}
+
+
 def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=""):
     """The build (Nov 7 spec, newbuild.py). Showdown still goes to the old build.
 
@@ -1030,6 +1125,45 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
 
     seed = _i(o.get("seed"), 0)
     history = NB.load_history()
+
+    # Weak chalk (Weak Chalk Rebuild report, Nov 13): on 2-4 games left out of
+    # the build; on 5+ a shadow build, logged only.
+    R = role_night(players, inj, history, n_games, o)
+    if not R["complete"]:
+        say("warn", "ESPN box scores are missing for "
+                    + (", ".join(R["sync"]["missing"][:6]) or "every night")
+                    + (f" ({R['sync']['error']})" if R["sync"]["error"] else "")
+                    + ", so the weak chalk rule is NOT applied tonight. Check the "
+                      "internet connection and build again.")
+    if R["calls"]:
+        lines = "; ".join(_call_line(R, p) for p in R["calls"] if p not in R["kept"])
+        if R["applied"] and R["out_ids"]:
+            say("info", "Weak chalk left out of every lineup (2-4 games): " + lines
+                + ". To keep one, untick him under Weak chalk and build again.",
+                "check", f"weak chalk out: {len(R['out_ids'])}")
+        elif R["out_ids"]:
+            say("info", f"Weak chalk tonight ({NB.slate_group(n_games)}, shadow only — "
+                        f"the build is unchanged): " + lines + ". The set without "
+                        f"them is saved for the review.")
+        if R["kept"]:
+            say("info", "Weak chalk kept by hand: " + ", ".join(p.name for p in R["kept"]))
+    if R["bones"]:
+        say("info", "Bones type tonight (small role, has smashed in it; shown, not used): "
+                    + ", ".join(f"{p.name} (${p.salary:,}, {p.proj:.0f} proj, "
+                                f"{p.ownership:.0f}%{'' if p.in_pool else ', not in your pool'}, "
+                                f"{R['marks'][normalize_name(p.name)]['ppm']} a minute, "
+                                f"{R['marks'][normalize_name(p.name)]['n6xSmall']} games of 6x "
+                                f"in under 24 min)" for p in R["bones"]))
+    bad = _bad_chalk(o.get("badChalk"), players)
+    if bad:
+        say("info", "Your bad chalk calls (logged, no effect on the build): " + "; ".join(
+            f"{b['name']}{' — ' + b['reason'] if b['reason'] else ''}"
+            + ("" if b["matched"] else " (no player by that name)")
+            + (" — also a weak chalk call" if b["matched"] and any(
+                p.name == b["name"] for p in R["calls"]) else "") for b in bad))
+    weak_caps = R["out_ids"] if R["applied"] else set()
+    shadow = {}
+
     sets, all_notes = {}, []
     for kind, n in (("big", n_big), ("small", n_small)):
         if not n:
@@ -1053,9 +1187,19 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
         copies = 1
         if kind == "small" and contests:
             copies = max(1, sum(1 for _c, _n, es in contests if 1 < len(es) <= NB.SMALL_SET))
-        res = NB.build_set(players, n, n_games, field, inj, caps, floors, seed, history,
-                           slotting=C.best_slotting, copies=copies)
+        bcaps = dict(caps)
+        bcaps.update({k: 0 for k in weak_caps})
+        res = NB.build_set(players, n, n_games, field, inj, bcaps, floors, seed, history,
+                           slotting=C.best_slotting, copies=copies,
+                           file_pick=o.get("filePick") or None)
         sets[kind] = res
+        if R["out_ids"] and not R["applied"] and R["complete"] and not o.get("weakChalkOff"):
+            scaps = dict(caps)
+            scaps.update({k: 0 for k in R["out_ids"]})
+            sh = NB.build_set(players, n, n_games, field, inj, scaps, floors, seed,
+                              history, slotting=C.best_slotting, copies=copies,
+                              file_pick=o.get("filePick") or None)
+            shadow[kind] = [[[p.name for p in r] for r in ros] for ros, _s in sh["chunks"]]
         label = "150-max" if kind == "big" else "20-max"
         for t in res["notes"]:
             all_notes.append(f"{label}: {t}")
@@ -1130,7 +1274,25 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                 "sets": {k: v["meta"] for k, v in sets.items()},
                 "wouldBeAdds": would_adds,
                 "takeover": [by_id[k].name for k in hits if k in by_id],
-                "fieldFiles": len(fields)}
+                "fieldFiles": len(fields),
+                # Nov 13 logs (Weak Chalk Rebuild and Shark Edge reports): the
+                # weak chalk calls and every chalk player's role marks, the
+                # Bones type, the sharp's typed calls, the slate traits.
+                "weakChalk": {"calls": [p.name for p in R["calls"]],
+                              "kept": [p.name for p in R["kept"]],
+                              "applied": bool(R["applied"] and R["out_ids"]),
+                              "complete": R["complete"], "espnDays": R["days"],
+                              "missing": R["sync"]["missing"], "day": R["day"]},
+                "roleMarks": [m for m in R["marks"].values()
+                              if m["own"] >= 20 or m["bones"] or m["weak"]],
+                "bonesType": [p.name for p in R["bones"]],
+                "badChalk": bad,
+                "slateTraits": R["traits"],
+                "chalkWithNoGames": R["noGames"]}
+    if shadow:
+        settings["weakChalk"]["shadow"] = NB.save_shadow("weakchalk", {
+            "calls": [p.name for p in R["calls"] if p.dk_id in R["out_ids"]],
+            "games": n_games, "sets": shadow})
     meta = {"slate": datetime.now().astimezone().date().isoformat(), "games": games,
             "files": files, "format": "classic", "slots": slots, "settings": settings,
             "removed": [r["name"] for r in removed],
@@ -2484,7 +2646,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path not in ("/api/build", "/api/players", "/api/check", "/api/grade",
-                             "/api/lateswap"):
+                             "/api/lateswap", "/api/weak"):
             return self._send(404, json.dumps({"error": "not found"}))
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -2500,6 +2662,9 @@ class Handler(BaseHTTPRequestHandler):
                                  "salary": q.salary, "proj": round(q.proj, 1),
                                  "own": round(q.ownership, 1)}
                                 for q in sorted(players, key=lambda x: -x.proj) if q.proj > 0]}))
+            if self.path == "/api/weak":
+                r = weak_preview(p.get("proj") or "", p.get("options") or {})
+                return self._send(400 if r.get("error") else 200, json.dumps(r))
             if self.path == "/api/grade":
                 lad = payout_ladder(p.get("prizePool"), p.get("firstPrize"),
                                     p.get("paidFrom"), p.get("paidTo"))
@@ -2532,6 +2697,8 @@ def serve():
     url = f"http://127.0.0.1:{PORT}/"
     print(f"NBA optimizer (classic and showdown) — {url}")
     print("Drop your files in the browser. Ctrl-C here to stop.")
+    import role
+    role.warm()           # last night's box scores, fetched in the background
     try:
         webbrowser.open(url)
     except Exception:                                        # noqa: BLE001

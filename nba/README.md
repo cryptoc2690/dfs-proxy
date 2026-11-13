@@ -22,7 +22,18 @@ in `app.py`: kept for showdown and for after-the-fact replays only.
   `~/Downloads/NBA Results 1/Main`, or `NBA_HISTORY`). 8+ games: projection^3, up to
   $2,000 left, 4,000 candidates, no ranges.
 - Stokastic's lineups: every legal one from every lineups file dropped, picked by
-  their Top 10% figure.
+  projected sum on 5-7 games and by their Top 10% figure on 8+ (Nov 13, Shark Edge
+  report: projected sum ahead on 8 of 9 5-7 game nights).
+- **Weak chalk (Nov 13, Weak Chalk Rebuild report):** chalk at 20%+ projected own
+  with no role change (no takeover mark, no minutes lift of 5+ over his real last
+  five games, no new starting job) that comes off the bench, has a teammate at his
+  position back tonight, or is projected under 22 minutes. On 2-4 games he is left
+  out of every lineup, the 150 and the 20s; on 5+ games it is a shadow build, logged
+  only (`logs/shadow/<date>/`). Settings shows the night's calls as soon as the
+  projections are dropped; untick one to keep him. Real minutes and starts come from
+  ESPN's box scores (`role.py`, one small file a day in `logs/espn/`, fetched when
+  the tool starts and before each build). With box scores missing the rule is not
+  applied, and the build says so.
 - One cap (85% of a 150, 90% of a 20); a 150 has nobody in fewer than 4 lineups.
 - The 150's takeover lean: a player whose projection is 1.3x his normal because a
   regular is out (the takeover mark), at 15%+ projected own, is floored at 1.5x his own
@@ -30,7 +41,12 @@ in `app.py`: kept for showdown and for after-the-fact replays only.
 - Removals shift nothing to teammates. Late swap is outs only.
 - Saved every night: each Stokastic file dropped (`logs/pulls/<date>/`, with
   `moves.jsonl` of what changed between pulls), the build's inputs
-  (`logs/inputs/<date>/`), and the per-entry build log.
+  (`logs/inputs/<date>/`), and the per-entry build log. Each build's `typed.json`
+  also keeps the weak chalk calls and every chalk player's role marks, the Bones type
+  (cheap, under 24 projected minutes, 1.1+ points a minute, two earlier 6x games in
+  under 24 minutes; shown, never built on), the sharp's typed **bad chalk** calls
+  with a word of why, and the slate traits (share of teams tipping 30+ minutes after
+  the first game, the gap between the top two studs, studs projected 40+).
 - The 150's Stokastic lineups are not pool-bound; the 20-max is the typed pool only
   (adding the file's off-pool players lowered it on 19 nights, Nov 9 review).
 

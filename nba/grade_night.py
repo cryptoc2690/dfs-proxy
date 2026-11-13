@@ -336,6 +336,13 @@ def main(argv):
                 kind_of[r[2].strip()] = contest_kind(r[1])
     old = {kind_of.get(cid): v for cid, v in (old_by_id or {}).items()}
 
+    # The build as it was that night: role marks read only the box scores before
+    # it, and a build saved before the weak chalk rule (Nov 13) is rebuilt
+    # without the rule, so seed 0 still reproduces the played set.
+    st = typed.get("settings") or {}
+    options = dict(options, slateDate=day, weakChalkOff=("weakChalk" not in st))
+    if "filePick" not in ((st.get("sets") or {}).get("big") or {}):
+        options["filePick"] = "top10"          # built before the Nov 13 file pick
     spread = seed_spread(inp, options, date)
     print(f"== {date} (build {stamp}, pool {len([x for x in (options.get('pool') or '').splitlines() if x.strip()])} names) ==")
     if err:

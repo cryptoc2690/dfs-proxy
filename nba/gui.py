@@ -211,6 +211,20 @@ INDEX_HTML = r"""<!doctype html>
       <div class="picknote">Ruled out after you pulled the projections. He is
         taken out of every lineup, Stokastic's included; nothing is shifted to his
         teammates. A fresh Stokastic pull is better when there is time for one.</div>
+      <label style="margin-top:14px">Weak chalk tonight <span id="weakwho" class="muted">— drop the projections first</span></label>
+      <div id="weaklist"></div>
+      <div class="picknote">Chalk (20%+ owned) with a shaky role and no role change:
+        off the bench, a teammate at his position back tonight, or projected under
+        22 minutes, with no takeover, minutes lift or new starting job. On 2–4 games
+        a ticked player is left out of every lineup; untick one to keep him. On 5+
+        games it is a shadow only: the build is unchanged and the set without them
+        is saved for the review.</div>
+      <label style="margin-top:14px">Bad chalk — your sharp's calls</label>
+      <textarea id="badchalk" rows="2" spellcheck="false"
+                placeholder="Morez Johnson — minutes&#10;Kevin Huerter — closing"></textarea>
+      <div class="picknote">One player per line, then a word of why (minutes,
+        closing, the coach's other options). Saved with the build so the reviews
+        can grade the calls. It changes nothing in the build.</div>
     </div>
     <div>
       <label>Cap individual players <span id="capwho" class="muted">— none set</span></label>
@@ -364,7 +378,7 @@ function slot(key, el){
           if(d.format) setFmt(d.format, key === 'dk');
           if(key === 'standings') $('#graderow').style.display = '';
           if(key === 'dk') showContests(d.contests || []);
-          if(key === 'proj') loadRoster(text);
+          if(key === 'proj') { loadRoster(text); loadWeak(text); }
           crossCheck();
         } else {
           files[key] = null; slates[key] = null;
@@ -447,8 +461,53 @@ function pickedContests(){
   return boxes.length ? boxes.filter(b => b.checked).map(b => b.value) : null;
 }
 
+// ---- weak chalk (Weak Chalk Rebuild report, Nov 13) ----
+let weak = null;
+async function loadWeak(text){
+  weak = null;
+  $('#weaklist').innerHTML = '';
+  $('#weakwho').textContent = '— checking the box scores…';
+  try{
+    const res = await fetch('/api/weak', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({proj:text})
+    });
+    const d = await res.json();
+    if(d.error){ $('#weakwho').textContent = '— ' + d.error; return; }
+    weak = d;
+    drawWeak();
+  }catch(e){ $('#weakwho').textContent = '— could not check'; }
+}
+function drawWeak(){
+  const d = weak; if(!d) return;
+  const n = d.calls.length;
+  $('#weakwho').textContent = !n ? '— none tonight'
+    : '— ' + n + ' call' + (n > 1 ? 's' : '') + (d.applied ? ', left out of the build'
+      : d.complete ? ', shadow only (' + d.group + ')'
+      : ', NOT applied: box scores missing');
+  let h = d.calls.map(c => '<label style="display:block;font-weight:400;margin:3px 0">'
+    + '<input type="checkbox" data-n="' + esc(c.name) + '" checked'
+    + (d.applied ? '' : ' disabled') + '> ' + esc(c.name)
+    + ' <span class="muted">$' + c.salary.toLocaleString() + ', ' + Math.round(c.own)
+    + '% own — ' + esc(c.why) + '</span></label>').join('');
+  if(d.bones.length) h += '<div class="picknote">Bones type (small role, has smashed in it; shown, not used): '
+    + d.bones.map(b => esc(b.name) + ' ($' + b.salary.toLocaleString() + ', '
+      + Math.round(b.own) + '%)').join(', ') + '</div>';
+  if(!d.complete) h += '<div class="picknote">Box scores missing for '
+    + esc((d.missing || []).slice(0, 4).join(', ') || 'every night')
+    + (d.fetchError ? ' (' + esc(d.fetchError) + ')' : '') + '.</div>';
+  $('#weaklist').innerHTML = h;
+}
+function weakKeep(){
+  return [...document.querySelectorAll('#weaklist input[type=checkbox]')]
+    .filter(x => !x.checked && !x.disabled).map(x => x.dataset.n).join('\n');
+}
+
 function clearRoster(){
   roster = [];
+  weak = null;
+  $('#weaklist').innerHTML = '';
+  $('#weakwho').textContent = '— drop the projections first';
   $('#slate').textContent = '';
   ['poolin'].forEach(id => {
     const el = $('#'+id);
@@ -661,7 +720,9 @@ $('#go').addEventListener('click', async () => {
           contests: pickedContests(),
           fileNames: fileNames,
           pool: [...sel.pool].join('\n'), cores: [...sel.core].join('\n'),
-          capPlayers: $('#capplayers').value
+          capPlayers: $('#capplayers').value,
+          weakKeep: weakKeep(),
+          badChalk: $('#badchalk').value
         }
       })
     });
