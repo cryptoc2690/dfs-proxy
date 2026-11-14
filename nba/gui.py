@@ -225,6 +225,23 @@ INDEX_HTML = r"""<!doctype html>
       <div class="picknote">One player per line, then a word of why (minutes,
         closing, the coach's other options). Saved with the build so the reviews
         can grade the calls. It changes nothing in the build.</div>
+      <label style="margin-top:14px">Easy matchups tonight <span id="muwho" class="muted">— drop the projections first</span></label>
+      <div id="mulist"></div>
+      <div class="picknote">Players at 5–20% owned against the most generous
+        defenses (what each team has allowed over players' usual rates, from the box
+        scores). The build raises the five highest that are in your pool to 2x their
+        projected own, in the 150 and the 20s. Untick one to skip him.</div>
+      <label style="margin-top:14px">Leverage stud tonight <span id="levwho" class="muted">— drop the projections first</span></label>
+      <div id="levlist"></div>
+      <div class="picknote">Studs ($8,500+) under 10% owned with a reason: regulars
+        out, or scoring over his projection. On 5+ games, 30 of the 150 are built
+        around the one picked, replacing the lineups that hold your most scattered
+        players. Chalk is not touched. Pick another or None to change it.</div>
+      <label style="margin-top:14px">Leverage — your sharp's calls</label>
+      <textarea id="leverbox" rows="2" spellcheck="false"
+                placeholder="Alperen Sengun — running the offense&#10;Franz Wagner — Banchero out"></textarea>
+      <div class="picknote">One player per line, then a word of why. Saved with the
+        build so the reviews can grade the calls. It changes nothing in the build.</div>
     </div>
     <div>
       <label>Cap individual players <span id="capwho" class="muted">— none set</span></label>
@@ -497,6 +514,46 @@ function drawWeak(){
     + esc((d.missing || []).slice(0, 4).join(', ') || 'every night')
     + (d.fetchError ? ' (' + esc(d.fetchError) + ')' : '') + '.</div>';
   $('#weaklist').innerHTML = h;
+  drawLev();
+}
+function drawLev(){
+  const d = weak; if(!d) return;
+  const m = d.matchup || {}, L = d.leverage || {};
+  const ml = m.list || [];
+  $('#muwho').textContent = !m.ready ? '— not tonight: ' + (m.why || 'no figure')
+    : !ml.length ? '— none tonight'
+    : '— line ' + (m.line * 100 >= 0 ? '+' : '') + (m.line * 100).toFixed(1) + '%; up to ' + m.max + ' from your pool';
+  $('#mulist').innerHTML = ml.map(c => '<label style="display:block;font-weight:400;margin:3px 0">'
+    + '<input type="checkbox" class="mubox" data-n="' + esc(c.name) + '" checked> ' + esc(c.name)
+    + ' <span class="muted">v ' + esc(c.opp) + ' ' + (c.figure * 100 >= 0 ? '+' : '')
+    + (c.figure * 100).toFixed(1) + '%, $' + c.salary.toLocaleString() + ', ' + Math.round(c.own)
+    + '% own</span></label>').join('');
+  const nm = L.named || [];
+  $('#levwho').textContent = !nm.length ? '— no named stud tonight'
+    : L.applied || (L.games >= 5) ? '— ' + nm.length + ' named; the pick is ticked'
+    : '— ' + nm.length + ' named; ' + (L.why || 'not used tonight');
+  const off = !(L.games >= 5);
+  let h = nm.map(r => '<label style="display:block;font-weight:400;margin:3px 0">'
+    + '<input type="radio" name="levpick" value="' + esc(r.name) + '"'
+    + (r.name === L.pick ? ' checked' : '') + (off ? ' disabled' : '') + '> ' + esc(r.name)
+    + ' <span class="muted">$' + r.salary.toLocaleString() + ', ' + Math.round(r.own) + '% own — '
+    + esc((r.reasons || []).map(x => ({out:'regulars out', carry:'top ball-handler or scorer',
+        avg:'season average over the projection', hot:'last five 3+ over', beat:'beats his projection',
+        ceil:'reaches his ceiling', under:'owned under the usual'})[x] || x).join(', '))
+    + (r.inPool ? '' : ' (off your pool)') + '</span></label>').join('');
+  if(nm.length) h += '<label style="display:block;font-weight:400;margin:3px 0">'
+    + '<input type="radio" name="levpick" value="none"' + (off ? ' disabled' : '') + '> None tonight</label>';
+  $('#levlist').innerHTML = h;
+}
+function matchupSkip(){
+  return [...document.querySelectorAll('#mulist input.mubox')]
+    .filter(x => !x.checked).map(x => x.dataset.n).join('\n');
+}
+function leverPick(){
+  const x = document.querySelector('#levlist input[name=levpick]:checked');
+  if(!x || x.disabled) return '';
+  const L = (weak && weak.leverage) || {};
+  return x.value === L.pick ? '' : x.value;
 }
 function weakKeep(){
   return [...document.querySelectorAll('#weaklist input[type=checkbox]')]
@@ -508,6 +565,9 @@ function clearRoster(){
   weak = null;
   $('#weaklist').innerHTML = '';
   $('#weakwho').textContent = '— drop the projections first';
+  $('#mulist').innerHTML = ''; $('#levlist').innerHTML = '';
+  $('#muwho').textContent = '— drop the projections first';
+  $('#levwho').textContent = '— drop the projections first';
   $('#slate').textContent = '';
   ['poolin'].forEach(id => {
     const el = $('#'+id);
@@ -722,7 +782,10 @@ $('#go').addEventListener('click', async () => {
           pool: [...sel.pool].join('\n'), cores: [...sel.core].join('\n'),
           capPlayers: $('#capplayers').value,
           weakKeep: weakKeep(),
-          badChalk: $('#badchalk').value
+          badChalk: $('#badchalk').value,
+          matchupSkip: matchupSkip(),
+          leverPick: leverPick(),
+          leverage: $('#leverbox').value
         }
       })
     });

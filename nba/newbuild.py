@@ -352,8 +352,10 @@ def _cand(ps, top10=0.0):
             "key": frozenset(p.dk_id for p in ps)}
 
 
-def gen_candidates(allowed, draw, B, V, rng):
-    """Slot-first sampling. -> list of candidates (players in DK slot order)."""
+def gen_candidates(allowed, draw, B, V, rng, anchor=None):
+    """Slot-first sampling. -> list of candidates (players in DK slot order).
+    anchor: a player placed first, in a random slot he can fill, in every
+    candidate (the leverage block, G11); he is never swapped out by the spend-up."""
     keys = sorted(allowed, key=lambda p: p.dk_id)       # the draw must repeat
     byslot = {s: [p for p in keys if s in p.eligible] for s in CLASSIC_SLOTS}
     if not keys or any(not byslot[s] for s in CLASSIC_SLOTS):
@@ -368,8 +370,17 @@ def gen_candidates(allowed, draw, B, V, rng):
         rng.shuffle(order)
         names = [None] * 8
         used, sal, ok = set(), 0, True
+        if anchor is not None:
+            aslots = [s for s in CLASSIC_SLOTS if s in anchor.eligible]
+            if not aslots:
+                return []
+            names[CLASSIC_SLOTS.index(rng.choice(aslots))] = anchor
+            used.add(anchor.dk_id)
+            sal += anchor.salary
         for s in order:
             i = CLASSIC_SLOTS.index(s)
+            if names[i] is not None:
+                continue
             left = sum(1 for x in names if x is None) - 1
             c = [p for p in byslot[s] if p.dk_id not in used
                  and sal + p.salary + left * minsal <= SALARY_CAP]
@@ -387,6 +398,8 @@ def gen_candidates(allowed, draw, B, V, rng):
                 break
             i = rng.randrange(8)
             cur = names[i]
+            if anchor is not None and cur is anchor:
+                continue
             ups = [p for p in byslot[CLASSIC_SLOTS[i]] if p.dk_id not in used
                    and cur.salary < p.salary <= cur.salary + SALARY_CAP - sal
                    and w[p.dk_id] >= 0.6 * w[cur.dk_id]]
@@ -405,6 +418,41 @@ def gen_candidates(allowed, draw, B, V, rng):
             continue
         out[key] = _cand(names)
     return list(out.values())
+
+
+LEV_DRAW = dict(weight=2.5, left=300, n=1500, tries=30000, ranges=False)
+LEV_OTHER_CAP = 0.85     # in the block, every other player at 85% of it at most
+LEV_DUST = 0.02          # "scattered": in 2% of the set or less (3 of a 150)
+
+
+def leverage_block(rosters, anchor, k, allowed, V, seed, caps=None):
+    """k lineups built around `anchor` from `allowed` (the typed pool and him),
+    none already in the set, picked by projection with every other player at
+    85% of the block at most (and under his typed cap). The Leverage review's
+    harness: shape 'anchor', the draw with no winners' ranges."""
+    if k <= 0:
+        return []
+    c = gen_candidates(allowed, LEV_DRAW, None, V, random.Random(1000 + seed), anchor=anchor)
+    have = {frozenset(p.dk_id for p in r) for r in rosters}
+    other = max(1, int(LEV_OTHER_CAP * k + 1e-9))
+    lcaps = {p.dk_id: other for p in allowed if p.dk_id != anchor.dk_id}
+    for pid, v in (caps or {}).items():
+        if pid in lcaps:
+            lcaps[pid] = min(lcaps[pid], v)
+    return select([x for x in c if x["key"] not in have], k, 1.0, k,
+                  collections.Counter(), set(), "proj", lcaps)
+
+
+def _dust_drop(rosters, k, keep_ids=()):
+    """The k lineups holding the most players the set has in 2% of it or less,
+    not counting `keep_ids`; ties off the end of the pick order. -> indexes"""
+    n = len(rosters)
+    if k <= 0 or not n:
+        return set()
+    cnt = collections.Counter(p.dk_id for r in rosters for p in r)
+    thr = max(1, int(round(LEV_DUST * n)))
+    sc = lambda r: sum(1 for p in r if cnt[p.dk_id] <= thr and p.dk_id not in keep_ids)
+    return set(sorted(range(n), key=lambda i: (-sc(rosters[i]), -i))[:k])
 
 
 def file_candidates(field_lineups, active_ids, slotting):
@@ -559,7 +607,8 @@ def tail_fix(rosters, by_id, min_count, keep=(), caps=None):
 
 # --- the build ---------------------------------------------------------------
 def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, seed=0,
-              history=None, slotting=None, copies=1, file_pick=None):
+              history=None, slotting=None, copies=1, file_pick=None, raises=None,
+              anchor=None):
     """One set (a 150 or a 20). -> dict(rosters, sources, chunks, notes, meta)
 
     players: every player with DK ids attached, pool flags set and removals
@@ -567,7 +616,11 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
     copies (20-max only): how many different 20s. The second takes the next 20
     in the pick order (Slate By Slate Calls report, 5C); each gets its own
     top-3 raise. file_pick: "proj" or "top10" to override the file pick (the
-    grader, rebuilding a night built before Nov 13). chunks = [(rosters,
+    grader, rebuilding a night built before Nov 13). raises: {dk_id: share of
+    the set}, floors applied after the pick the way the takeover lean is (the
+    easy-matchup floor, G10). anchor: {"id": dk_id, "k": lineups}, a block of k
+    lineups built around that player replacing the k lineups that hold the
+    most scattered positions (the leverage block, G11). chunks = [(rosters,
     sources)] one per copy."""
     notes = []
     caps = dict(caps or {})
@@ -659,6 +712,14 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
                     if ci == 0:
                         tk_lean.append(f"{p.name} to {want} of {len(rosters)} "
                                        f"({p.ownership:.0f}% projected owned)")
+        for k, share in (raises or {}).items():
+            if k not in active_ids:
+                continue
+            want = int(round(min(share, 0.95) * len(rosters)))
+            if k in caps:
+                want = min(want, caps[k])
+            lo_, hi_ = targets.get(k, (None, None))
+            targets[k] = (max(lo_ or 0, want), hi_)
         if not big:
             top3 = sorted(active, key=lambda p: -p.ownership)[:3]
             for p in top3:
@@ -688,6 +749,25 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
     tail = 0
     if big and rosters:
         tail = tail_fix(rosters, by_id, MIN_LINEUPS, keep=set(floors), caps=caps)
+    lev = None
+    if anchor and anchor.get("id") in active_ids and chunks:
+        a = by_id[anchor["id"]]
+        base_allowed = allowed if a in allowed else allowed + [a]
+        lev = {"anchor": a.name, "asked": int(anchor.get("k") or 0), "built": 0, "dropped": []}
+        for ci, (ros, src) in enumerate(chunks):
+            k_ = min(int(anchor.get("k") or 0), len(ros), caps.get(a.dk_id, 10 ** 6))
+            block = leverage_block(ros, a, k_, base_allowed, V, seed + ci, caps)
+            drop = _dust_drop(ros, len(block), {a.dk_id})
+            if ci == 0:
+                lev["built"] = len(block)
+                lev["dropped"] = [[p.name for p in ros[i]] for i in sorted(drop)]
+            keep = [i for i in range(len(ros)) if i not in drop]
+            ros[:] = [ros[i] for i in keep] + [list(c["ps"]) for c in block]
+            src[:] = [src[i] for i in keep] + ["leverage"] * len(block)
+        rosters, sources = chunks[0]
+        notes.append(f"Leverage block: {lev['built']} lineups built around {a.name} "
+                     f"({a.ownership:.0f}% projected owned), replacing the "
+                     f"{len(lev['dropped'])} holding the most scattered positions")
     return {"rosters": rosters, "sources": sources, "chunks": chunks, "notes": notes,
             "meta": {"rule": rule, "own": len(own), "file": len(half),
                      "filePick": file_key if n_file else None,
@@ -697,7 +777,10 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
                      "cap": cap, "retarget": {"cut": cut, "raised": raised},
                      "takeoverLean": [by_id[k].name for k in hits
                                       if by_id[k].ownership >= TAKEOVER_MIN_OWN],
-                     "tail": tail, "seed": seed}}
+                     "tail": tail, "seed": seed,
+                     "raises": {by_id[k].name: round(v, 3) for k, v in (raises or {}).items()
+                                if k in by_id},
+                     "leverage": lev}}
 
 
 # --- what the screen says ---------------------------------------------------

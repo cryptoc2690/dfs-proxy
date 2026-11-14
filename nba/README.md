@@ -42,6 +42,17 @@ in `app.py`: kept for showdown and for after-the-fact replays only.
   points over at 5%+ projected own) and under-drafts. A shadow set with every
   over-draft capped at half his own is saved to `logs/shadow/<date>/`. Needs the
   LineStar file; without it there are no calls.
+- **The easy-matchup floor (G10, Nov 14, Matchup report):** `matchup.py` measures what
+  each team has allowed over players' usual rates (box scores before tonight). Pool
+  players at 5-20% projected own facing a team at or over the line (75th percentile on
+  the earlier nights) are floored at 2x their own in the 150 and the 20s, five at most.
+  Settings lists them; untick one to skip him.
+- **The leverage block (G11, Nov 14, Leverage report):** `leverage.py` names the studs
+  ($8,500+, under 10% own) with regulars out or scoring over their projection. On 5+
+  games, 30 of the 150 are built around the one with the most reasons, replacing the
+  lineups that hold the most scattered players; chalk is untouched. Settings shows the
+  pick; choose another or None. The 20s get a shadow (6 of 20, logged only). A
+  "Leverage" box logs the sharp's leverage plays.
 - One cap (85% of a 150, 90% of a 20); a 150 has nobody in fewer than 4 lineups.
 - The 150's takeover lean: a player whose projection is 1.3x his normal because a
   regular is out (the takeover mark), at 15%+ projected own, is floored at 1.5x his own

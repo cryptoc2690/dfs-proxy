@@ -34,6 +34,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import classic as C
 import engine as E
 import field as FP
+import leverage as LV
+import matchup as MU
 from dk import (CLASSIC_SIZE, CLASSIC_SLOTS, SALARY_CAP, SD_ROSTER_SIZE,
                 ShowdownLineup, normalize_name, positions_of, slots_for)
 from gui import INDEX_HTML
@@ -935,11 +937,70 @@ def role_night(players, inj, history, n_games, o):
     applied = n_games <= 4 and complete and not o.get("weakChalkOff")
     bones = sorted((p for p in active if M[normalize_name(p.name)]["bones"]),
                    key=lambda p: -p.proj)
-    return {"day": day.isoformat(), "sync": sync, "days": logs["days"],
+    return {"day": day.isoformat(), "date": day, "logs": logs, "active": active,
+            "sync": sync, "days": logs["days"],
             "complete": complete, "applied": applied, "marks": M, "hits": hits,
             "calls": calls, "kept": kept, "out_ids": out_ids, "bones": bones,
             "noGames": RL.chalk_without_games(active, logs),
             "traits": RL.slate_traits(active)}
+
+
+def leverage_night(players, history, n_games, o, R, proj_text):
+    """The Nov 14 rules (Matchup and Leverage reports), from the role night R:
+    G10, the easy-matchup floor: the night's calls (pool players at 5-20% own in
+    the most generous matchups), floored at 2x own in the 150 and the 20s;
+    G11, the leverage block: the named studs and the pick, 30 of the 150 built
+    around him on 5+ game slates. Options: matchupSkip (names unticked),
+    leverPick ("" = the tool's pick, a name, or "none"), and matchupOff /
+    leverOff (the grader, rebuilding a night built before them)."""
+    import leverage as LV
+    import matchup as MU
+    o = o or {}
+    out = {"mu": None, "muList": [], "muCalls": [], "lev": None, "levPick": None,
+           "levApplied": False, "levWhy": ""}
+    if not R["complete"]:
+        out["levWhy"] = "box scores missing"
+        return out
+    active = R["active"]
+    if not o.get("matchupOff"):
+        mu = MU.tonight(active, R["logs"], history, R["date"])
+        out["mu"] = mu
+        if mu["ready"]:
+            ln = mu["line"]
+            fig = mu["figures"]
+            lst = [p for p in active if MU.OWN_LO <= p.ownership < MU.OWN_HI
+                   and fig.get(p.opponent) is not None and fig[p.opponent] >= ln]
+            lst.sort(key=lambda p: (-fig[p.opponent], -p.ownership))
+            out["muList"] = [{"name": p.name, "id": p.dk_id, "team": p.team,
+                              "opp": p.opponent, "salary": p.salary,
+                              "own": round(p.ownership, 1), "proj": round(p.proj, 1),
+                              "figure": fig[p.opponent], "inPool": bool(p.in_pool)}
+                             for p in lst]
+            skip = read_sharp(o.get("matchupSkip") or "")
+            out["muSkipped"] = [c["name"] for c in mu["calls"] if normalize_name(c["name"]) in skip]
+            sheet = any(p.in_pool for p in active)
+            out["muCalls"] = [c for c in out["muList"] if (c["inPool"] or not sheet)
+                              and normalize_name(c["name"]) not in skip][:MU.MAX_CALLS]
+    if not o.get("leverOff"):
+        lev = LV.named_studs(players, active, R["logs"], history, R["date"],
+                             LV.ceilings(proj_text), n_games, set(R["hits"]))
+        out["lev"] = lev
+        want = (o.get("leverPick") or "").strip()
+        pick = lev["pick"]
+        if want.lower() == "none":
+            pick = None
+            out["levWhy"] = "set to none by hand"
+        elif want:
+            pick = next((r for r in lev["named"] if normalize_name(r["name"]) == normalize_name(want)),
+                        pick)
+        out["levPick"] = pick
+        if pick and n_games < LV.MIN_GAMES:
+            out["levWhy"] = f"{n_games} games: the block is for 5+ game slates"
+        elif pick:
+            out["levApplied"] = True
+        elif not out["levWhy"]:
+            out["levWhy"] = "no named stud tonight"
+    return out
 
 
 def _call_line(R, p):
@@ -956,7 +1017,9 @@ def weak_preview(proj_text, options=None):
         return {"error": rep["error"]}
     inj = NB.injury_tags(proj_text)
     n_games = len({p.game for p in players if "@" in (p.game or "") and p.proj > 0})
-    R = role_night(players, inj, NB.load_history(), n_games, options)
+    history = NB.load_history()
+    R = role_night(players, inj, history, n_games, options)
+    L = leverage_night(players, history, n_games, options, R, proj_text)
     mk = lambda p: R["marks"][normalize_name(p.name)]
     return {"games": n_games, "group": NB.slate_group(n_games), "applied": R["applied"],
             "complete": R["complete"], "days": R["days"], "missing": R["sync"]["missing"],
@@ -968,7 +1031,15 @@ def weak_preview(proj_text, options=None):
                        "own": round(p.ownership, 1), "proj": round(p.proj, 1),
                        "mins": mk(p)["mins"], "ppm": mk(p)["ppm"],
                        "n6x": mk(p)["n6xSmall"]} for p in R["bones"]],
-            "noGames": R["noGames"]}
+            "noGames": R["noGames"],
+            "matchup": {"ready": bool(L["mu"] and L["mu"]["ready"]),
+                        "why": (L["mu"] or {}).get("why", "box scores missing"),
+                        "line": (L["mu"] or {}).get("line"),
+                        "list": L["muList"][:12], "max": 5},
+            "leverage": {"named": (L["lev"] or {}).get("named", []),
+                         "pick": (L["levPick"] or {}).get("name"),
+                         "applied": L["levApplied"], "why": L["levWhy"],
+                         "games": n_games}}
 
 
 def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=""):
@@ -1192,6 +1263,56 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                 f"{r['name']} ({r['own']:.0f}% \u2192 {r['own'] + r['miss']:.0f}%)"
                 for r in FD["under"]))
 
+    # The Nov 14 rules (Matchup and Leverage reports). G10, the easy-matchup
+    # floor: pool players at 5-20% own in the most generous matchups, floored at
+    # 2x their projected own in the 150 and the 20s. G11, the leverage block: on
+    # 5+ game slates, 30 of the 150 built around the named stud with the most
+    # reasons, replacing the lineups that hold the most scattered positions.
+    LN = leverage_night(players, history, n_games, o, R, proj_text)
+    mu_raise = {c["id"]: MU.FLOOR_K * c["own"] / 100.0 for c in LN["muCalls"]}
+    lev_anchor = {"id": LN["levPick"]["id"], "k": LV.BLOCK} if LN["levApplied"] else None
+    lev20_shadow = {}
+    if not o.get("matchupOff"):
+        if not LN["mu"]:
+            say("warn", "Box scores missing, so there is NO easy-matchup floor tonight.")
+        elif not LN["mu"]["ready"]:
+            say("info", "No easy-matchup floor tonight: " + LN["mu"]["why"] + ".")
+        elif LN["muCalls"]:
+            say("info", "Easy matchups, raised to 2x their projected own in the 150 and the "
+                        "20s: " + "; ".join(
+                            f"{c['name']} (v {c['opp']}, {100 * c['figure']:+.1f}%, "
+                            f"{c['own']:.0f}% own)" for c in LN["muCalls"])
+                + f". The line tonight is {100 * LN['mu']['line']:+.1f}%. To skip one, "
+                  f"untick him under Easy matchups and build again.", "check",
+                f"easy matchups: {len(LN['muCalls'])}")
+        else:
+            say("info", "No pool player at 5-20% own is in an easy matchup tonight "
+                        f"(the line is {100 * LN['mu']['line']:+.1f}%).")
+        if LN.get("muSkipped"):
+            say("info", "Easy matchups skipped by hand: " + ", ".join(LN["muSkipped"]))
+    if not o.get("leverOff") and LN["lev"]:
+        named = LN["lev"]["named"]
+        pk = LN["levPick"]
+        if LN["levApplied"]:
+            say("info", f"Leverage stud: {pk['name']} (${pk['salary']:,}, {pk['own']:.0f}% own, "
+                        f"{pk['proj']:.0f} proj{'' if pk['inPool'] else ', added from off your pool'}"
+                        f"; {LV.why(pk)}). {LV.BLOCK} of the 150 are built around him, "
+                        f"replacing the {LV.BLOCK} lineups holding the most scattered "
+                        f"positions. To change or drop him, use Leverage stud and build again.",
+                "check", f"leverage: {pk['name']}")
+        elif named:
+            say("info", "Named studs tonight, no leverage block (" + LN["levWhy"] + "): "
+                + ", ".join(r["name"] for r in named))
+        others = [r for r in named if not pk or r["id"] != pk["id"]]
+        if LN["levApplied"] and others:
+            say("info", "Other named studs (not used): " + "; ".join(
+                f"{r['name']} ({r['own']:.0f}%, {r['nReasons']} reasons)" for r in others))
+    lever = _bad_chalk(o.get("leverage"), players)
+    if lever:
+        say("info", "Your sharp's leverage calls (logged, no effect on the build): " + "; ".join(
+            f"{b['name']}{' — ' + b['reason'] if b['reason'] else ''}"
+            + ("" if b["matched"] else " (no player by that name)") for b in lever))
+
     sets, all_notes = {}, []
     for kind, n in (("big", n_big), ("small", n_small)):
         if not n:
@@ -1217,16 +1338,25 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
             copies = max(1, sum(1 for _c, _n, es in contests if 1 < len(es) <= NB.SMALL_SET))
         bcaps = dict(caps)
         bcaps.update({k: 0 for k in weak_caps})
+        anc = lev_anchor if kind == "big" else None
         res = NB.build_set(players, n, n_games, field, inj, bcaps, floors, seed, history,
                            slotting=C.best_slotting, copies=copies,
-                           file_pick=o.get("filePick") or None)
+                           file_pick=o.get("filePick") or None, raises=mu_raise,
+                           anchor=anc)
         sets[kind] = res
+        if kind == "small" and LN["levApplied"]:
+            sh = NB.build_set(players, n, n_games, field, inj, bcaps, floors, seed, history,
+                              slotting=C.best_slotting, copies=copies,
+                              file_pick=o.get("filePick") or None, raises=mu_raise,
+                              anchor={"id": LN["levPick"]["id"], "k": LV.SHADOW_20})
+            lev20_shadow[kind] = [[[p.name for p in r] for r in ros] for ros, _s in sh["chunks"]]
         if R["out_ids"] and not R["applied"] and R["complete"] and not o.get("weakChalkOff"):
             scaps = dict(caps)
             scaps.update({k: 0 for k in R["out_ids"]})
             sh = NB.build_set(players, n, n_games, field, inj, scaps, floors, seed,
                               history, slotting=C.best_slotting, copies=copies,
-                              file_pick=o.get("filePick") or None)
+                              file_pick=o.get("filePick") or None, raises=mu_raise,
+                              anchor=anc)
             shadow[kind] = [[[p.name for p in r] for r in ros] for ros, _s in sh["chunks"]]
         if od_calls:
             ocaps = dict(bcaps)
@@ -1234,7 +1364,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                 ocaps[k] = min(ocaps.get(k, v), v)
             sh = NB.build_set(players, n, n_games, field, inj, ocaps, floors, seed,
                               history, slotting=C.best_slotting, copies=copies,
-                              file_pick=o.get("filePick") or None)
+                              file_pick=o.get("filePick") or None, raises=mu_raise,
+                              anchor=anc)
             od_shadow[kind] = [[[p.name for p in r] for r in ros] for ros, _s in sh["chunks"]]
         label = "150-max" if kind == "big" else "20-max"
         for t in res["notes"]:
@@ -1330,7 +1461,26 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                     "model": FD["model"], "lineStar": FD["lineStar"],
                     "over": [r["name"] for r in od_calls],
                     "under": [r["name"] for r in FD["under"]] if FD["lineStar"] else [],
-                    "players": FD["players"]}}
+                    "players": FD["players"]},
+                # Nov 14 (Matchup and Leverage reports): G10's figures, line and
+                # calls; G11's named studs with every reason, the pick and the
+                # block; the sharp's leverage box.
+                "matchup": None if o.get("matchupOff") or not LN["mu"] else {
+                    "line": LN["mu"]["line"], "linePlayers": LN["mu"]["linePlayers"],
+                    "figures": LN["mu"]["figures"], "list": LN["muList"][:12],
+                    "calls": [c["name"] for c in LN["muCalls"]],
+                    "skipped": LN.get("muSkipped") or [], "floorK": MU.FLOOR_K},
+                "leverage": None if o.get("leverOff") or not LN["lev"] else {
+                    "named": LN["lev"]["named"], "studs": LN["lev"]["studs"],
+                    "pick": (LN["levPick"] or {}).get("name"),
+                    "byHand": (o.get("leverPick") or "").strip(),
+                    "applied": LN["levApplied"], "why": LN["levWhy"],
+                    "block": (sets.get("big") or {}).get("meta", {}).get("leverage")},
+                "leverageCalls": lever}
+    if lev20_shadow:
+        settings["leverage"]["shadow20"] = NB.save_shadow("leverage20", {
+            "pick": LN["levPick"]["name"], "k": LV.SHADOW_20, "games": n_games,
+            "sets": lev20_shadow})
     if od_shadow:
         settings["field"]["shadow"] = NB.save_shadow("overdraft", {
             "calls": [{k: r[k] for k in ("name", "own", "pred", "miss")} for r in od_calls],

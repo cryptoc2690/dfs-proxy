@@ -40,6 +40,9 @@ ESPN_DIR = os.path.join(LOG_DIR, "espn")
 SEASON_START = dt.date(2026, 10, 20)
 FETCH = True                 # smoke.py turns this off: no network in the tests
 BUDGET_S = 120               # one sync never runs longer than this
+DAY_VERSION = 2              # 2 (Nov 14): each row also keeps points, assists and shots
+                             # (the Leverage report's "regulars out"); older files are
+                             # fetched again, and kept if the fetch fails
 
 SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={}"
 SUMMARY = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event={}"
@@ -105,17 +108,28 @@ def box_rows(summary):
                 row = {"team": ab, "key": normalize_name(nm), "name": nm,
                        "starter": bool(a.get("starter"))}
                 if a.get("didNotPlay") or not a.get("stats"):
-                    row.update(mins=0.0, dk=0.0, dnp=True)
+                    row.update(mins=0.0, dk=0.0, dnp=True, pts=0.0, ast=0.0, fga=0.0)
                 else:
                     st = dict(zip(labels, a["stats"]))
+                    fg = str(st.get("FG", "0-0"))
                     row.update(mins=_num(st.get("MIN")), dk=round(dk_points(st), 2),
-                               dnp=False)
+                               dnp=False, pts=_num(st.get("PTS")), ast=_num(st.get("AST")),
+                               fga=_num(fg.split("-")[1]) if "-" in fg else 0.0)
                 out.append(row)
     return out
 
 
 def _day_path(d):
     return os.path.join(ESPN_DIR, f"day_{d:%Y%m%d}.json")
+
+
+def _day_current(d):
+    """The day's file exists and has this version's fields."""
+    try:
+        with open(_day_path(d), encoding="utf-8") as fh:
+            return (json.load(fh).get("v") or 1) >= DAY_VERSION
+    except (OSError, ValueError):
+        return False
 
 
 def _fetch_day(d):
@@ -136,7 +150,7 @@ def _fetch_day(d):
         if not rows:
             return None
         games.append({"id": e["id"], "teams": teams, "tip": e.get("date"), "rows": rows})
-    return {"date": f"{d:%Y-%m-%d}", "games": games}
+    return {"date": f"{d:%Y-%m-%d}", "v": DAY_VERSION, "games": games}
 
 
 def sync(today=None, budget_s=None):
@@ -153,9 +167,10 @@ def sync(today=None, budget_s=None):
         os.makedirs(ESPN_DIR, exist_ok=True)
         d = SEASON_START
         while d < today:
-            if os.path.exists(_day_path(d)):
-                out["days"] += 1
-            elif not FETCH or time.time() - t0 > budget_s:
+            have = os.path.exists(_day_path(d))
+            if have and (_day_current(d) or not FETCH or time.time() - t0 > budget_s):
+                out["days"] += 1             # an older file still counts until refetched
+            elif not have and (not FETCH or time.time() - t0 > budget_s):
                 out["missing"].append(f"{d:%Y-%m-%d}")
             else:
                 try:
@@ -163,7 +178,9 @@ def sync(today=None, budget_s=None):
                 except Exception as exc:                  # noqa: BLE001
                     rec = None
                     out["error"] = f"{type(exc).__name__}: {exc}"[:200]
-                if rec is None:
+                if rec is None and have:
+                    out["days"] += 1             # the refetch failed: keep the older file
+                elif rec is None:
                     out["missing"].append(f"{d:%Y-%m-%d}")
                 else:
                     with open(_day_path(d) + ".tmp", "w", encoding="utf-8") as fh:
@@ -186,7 +203,8 @@ def warm():
 def load_logs(today=None, folder=None):
     """Every saved game before `today`. -> {"games": {key: [game, ...]},
     "team_dates": {team: [date, ...]}, "days": n}; a game is
-    {date, team, mins, dk, starter}, played games only, oldest first."""
+    {date, team, opp, name, mins, dk, starter, pts, ast, fga}, played games only,
+    oldest first (pts / ast / fga are None in a day file older than version 2)."""
     today = today or dt.date.today()
     folder = folder or ESPN_DIR
     games = collections.defaultdict(list)
@@ -214,11 +232,16 @@ def load_logs(today=None, folder=None):
         for g in rec.get("games") or []:
             for t in g.get("teams") or []:
                 team_dates[t].add(d)
+            teams = g.get("teams") or []
             for r in g.get("rows") or []:
                 if not r.get("dnp") and r.get("mins", 0) > 0:
-                    games[r["key"]].append({"date": d, "team": r["team"],
+                    opp = next((t for t in teams if t != r["team"]), None)
+                    games[r["key"]].append({"date": d, "team": r["team"], "opp": opp,
+                                            "name": r.get("name") or r["key"],
                                             "mins": float(r["mins"]), "dk": float(r["dk"]),
-                                            "starter": bool(r.get("starter"))})
+                                            "starter": bool(r.get("starter")),
+                                            "pts": r.get("pts"), "ast": r.get("ast"),
+                                            "fga": r.get("fga")})
     for k in games:
         games[k].sort(key=lambda x: x["date"])
     return {"games": dict(games), "team_dates": {t: sorted(v) for t, v in team_dates.items()},

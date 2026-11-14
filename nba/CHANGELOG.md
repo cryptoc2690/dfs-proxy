@@ -2,6 +2,20 @@
 
 Newest first. One entry per change, in plain words: what changed and why.
 
+## Nov 14, 2026
+
+**Two rules from the Matchup and Leverage reports (G10, G11), and a leverage box.** Both are shown in Settings as soon as the projections are dropped, and either can be changed there before the build. Chalk is not touched by either.
+
+**G10, the easy-matchup floor** (`matchup.py`, from `NBA Matchup Report 11-14.md`). For each team, what opposing players have scored against it over their own usual rate (DK points a minute in their other games), from the box scores before tonight, pulled toward zero for small samples. Players in the typed pool at 5-20% projected own facing a team at or over the line (the 75th percentile among 5-20% players on the earlier saved nights; +3.4% on Nov 13) are called, the five most generous at most, and each is floored at 2x his projected own in the 150 and in each 20, after the pick, the way the takeover lean is. Review: the 150 +2.58 a lineup and +0.71 top-1% lineups on 13 nights, the 20s +2.27 on 14; the same floor on players in tough matchups loses. The tool's figures match the review's to a quarter of a point and its calls on 53 of 54. Untick a call under Easy matchups to skip him; the next one in the pool takes his place.
+
+**G11, the leverage block** (`leverage.py`, from `NBA Leverage Report 11-14.md`). A named stud is under 10% projected own, $8,500+, projected 15+, with regulars out (teammates of 15+ minutes worth 30+ minutes, 4+ assists or 12+ shots a game between them) or scoring over his projection (season average at or over it, last five 3+ over, or beat it on 60%+ of his saved slates). The pick is the one with the most of seven reasons. On 5+ game slates, 30 of the 150 are built around him from the typed pool (he is added if off it), and they replace the 30 lineups holding the most players the set has in 3 lineups or fewer. Review: +1.07 top-1% lineups a night, top-0.1% nearly doubled, the top unchanged on the nights he missed; a stud with no reason did nothing. The tool names the review's 37 named studs exactly and makes its pick on 22 of 23 nights (Nov 8: Flagg, not Sabonis, because the tool rates "owned under the usual" on earlier nights only; Sabonis did not play). Pick another named stud, or None, under Leverage stud.
+- **Shadow:** the same block with the pick in 6 of each 20, saved in `logs/shadow/<date>/<time>_leverage20.json`.
+- **G10 and G11 together**, run in the review's own harness on all 23 nights against the tool as built: the 150 +1.52 a lineup, +1.26 top-1% lineups (up on 10 nights, down on none), best rank better on 8 and worse on 2; the 20s +2.27. Each alone reproduces its report.
+
+**Leverage box:** the sharp's leverage plays, one per line with a word of why, saved with the build (`settings.leverageCalls`). Nothing in the build reads it.
+
+**Box scores** (`role.py`) now keep each player's points, assists and shots (day files version 2; every day refetched). **Logged** with each build: the matchup figures, the line, the list and the calls (`settings.matchup`); every named stud with his reasons and numbers, the pick, and the block with the lineups it replaced (`settings.leverage`). `grade_night.py` rebuilds a night built before today without either rule.
+
 ## Nov 13, 2026
 
 **The field predictor: logged, and a shadow build. The entered lineups do not change.** From `NBA Predicting The Field Report 11-13.md` (build list 2 and 3; ledger G9). `field.py` predicts each player's real own from Stokastic's own and what was known before lock. It is the review's predictor, cut to the six inputs that carried 99% of it: LineStar's own against Stokastic's, his own against what his value rank usually draws, his last game and last five games against tonight's projection, the takeover mark, a new starting job. ETR is left out (the tool takes no ETR file). Fitted once on the 22 saved nights and frozen in `field_model.json`; leave-one-night-out it misses real own by 1.81 against Stokastic's 2.14 (chalk 4.16 against 4.85), the review's numbers, and names 24 of the review's 26 over-draft calls (the two others are on Oct 25, an ETR night).

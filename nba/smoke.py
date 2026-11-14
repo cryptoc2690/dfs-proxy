@@ -1559,6 +1559,146 @@ check("grade_night: our lineups' copies and summed own; the most-copied lineup a
       and os.path.exists(os.path.join(_TMP, "logs", "field", "2026-11-12.json")),
       str((_out["ours"], _out["mostCopied"][:2])))
 
+print("\n-- Nov 14: the easy-matchup floor (G10), the leverage block (G11) --")
+import datetime as _dt2                      # noqa: E402
+import matchup as MU                         # noqa: E402
+import leverage as LV                        # noqa: E402
+_jb2 = RL.box_rows({"boxscore": {"players": [{"team": {"abbreviation": "HOU"}, "statistics": [{
+    "labels": ["MIN", "FG", "PTS", "REB", "AST", "STL", "BLK", "TO", "3PT"],
+    "athletes": [{"athlete": {"displayName": "Big Man"}, "starter": True,
+                  "stats": ["34", "11-19", "28", "12", "7", "1", "1", "2", "1-3"]}]}]}]}})
+check("box scores keep points, assists and shots (the Leverage report's regulars out)",
+      _jb2[0]["pts"] == 28 and _jb2[0]["ast"] == 7 and _jb2[0]["fga"] == 19, str(_jb2))
+# matchup figures: 30 players, each with a usual rate of 1.0 a minute in other games;
+# against "EZ" they score 1.3 a minute, against "TF" 0.8
+_day = lambda i: _dt2.date(2026, 10, 20) + _dt2.timedelta(days=i)
+_mg = []
+for _i in range(30):
+    for _j in range(4):
+        _mg.append((f"p{_i}", _day(_j), "OTH", 30.0, 30.0))
+    _mg.append((f"p{_i}", _day(10), "EZ" if _i < 15 else "TF", 30.0, 39.0 if _i < 15 else 24.0))
+_fg = MU.figures(_mg, _day(20))
+check("matchup: what a team allows, over players' usual rates, pulled toward zero by n/(n+30)",
+      abs(_fg["EZ"] - 0.30 * 15 / 45) < 1e-9 and abs(_fg["TF"] - (-0.20) * 15 / 45) < 1e-9
+      and _fg.get("OTH") is None or abs(_fg["OTH"]) < 0.05,
+      str({k: (round(v, 4) if v is not None else None) for k, v in _fg.items()}))
+check("matchup: under 12 player-games against a team, no figure",
+      MU.figures([g for g in _mg if not (g[2] == "EZ" and int(g[0][1:]) >= 5)], _day(20)).get("EZ") is None)
+check("matchup: nothing from tonight or later is used", MU.figures(_mg, _day(10)).get("EZ") is None)
+_mh = [{"date": "11-5", "games": 5, "P": {f"x{i}": {"own": 10.0, "opp": "EZ" if i % 4 == 0 else "TF",
+        "proj": 20.0, "mins": 30.0, "sal": 5000.0, "injury": "None"} for i in range(60)}}]
+_ml, _mn = MU.line(_mh, _mg, _dt2.date(2026, 11, 14))
+check("matchup: the line is the 75th percentile of 40+ earlier 5-20% players (15 easy of 60 -> the easy figure)",
+      _mn == 60 and abs(_ml - _fg["EZ"]) < 1e-9, f"{_ml} {_mn}")
+check("matchup: fewer than 40 players on record, no line",
+      MU.line([dict(_mh[0], P=dict(list(_mh[0]["P"].items())[:30]))], _mg, _dt2.date(2026, 11, 14))[0] is None)
+check("matchup: the floor is 2x projected own, 95% at most",
+      MU.floors([{"id": "a", "own": 10.0}, {"id": "b", "own": 60.0}], 150) == {"a": 30, "b": 142})
+# the named studs: one with a regular out, one hot, one with no reason, one chalk
+_pl14 = [p for p in S.read_projections(PROJ5w)[0] if p.proj > 0 and p.salary > 0]
+_stud = sorted([p for p in _pl14 if p.salary >= 8500], key=lambda p: -p.proj)
+_out_p = next(p for p in _pl14 if p.team == _stud[0].team and p is not _stud[0] and p.salary < 8500)
+for _p in _pl14:
+    _p.ownership = 25.0 if _p in _stud[3:4] else (6.0 if _p in _stud[:3] else _p.ownership)
+_act14 = [p for p in _pl14 if p is not _out_p]
+_gl = collections.defaultdict(list)
+for _j in range(6):
+    _gl[normalize_name(_out_p.name)].append({"date": _day(_j), "team": _out_p.team, "opp": "X", "mins": 32.0,
+                                             "dk": 30.0, "starter": True, "pts": 18, "ast": 6, "fga": 15})
+    _gl[normalize_name(_stud[1].name)].append({"date": _day(_j), "team": _stud[1].team, "opp": "X", "mins": 34.0,
+                                               "dk": _stud[1].proj + 6, "starter": True, "pts": 25, "ast": 4, "fga": 18})
+    _gl[normalize_name(_stud[2].name)].append({"date": _day(_j), "team": _stud[2].team, "opp": "X", "mins": 34.0,
+                                               "dk": _stud[2].proj - 10, "starter": True, "pts": 10, "ast": 2, "fga": 9})
+_ns = LV.named_studs(_pl14, _act14, {"games": dict(_gl)}, [], _day(20), {}, 5)
+_nn = [r["name"] for r in _ns["named"]]
+check("leverage: named = a low-owned stud with regulars out or scoring over his projection; not one with "
+      "neither, not chalk",
+      _stud[0].name in _nn and _stud[1].name in _nn and _stud[2].name not in _nn and _stud[3].name not in _nn
+      and "out" in next(r for r in _ns["named"] if r["name"] == _stud[0].name)["reasons"]
+      and {"avg", "hot"} <= set(next(r for r in _ns["named"] if r["name"] == _stud[1].name)["reasons"]),
+      str([(r["name"], r["reasons"]) for r in _ns["named"]]))
+check("leverage: the pick is the named stud with the most reasons",
+      _ns["pick"]["nReasons"] == max(r["nReasons"] for r in _ns["named"]), str(_ns["pick"]))
+# the block: 30 lineups around one player replace the 30 holding the most scattered positions
+_by14 = {p.dk_id: p for p in _pl14}
+_ros = [list(c["ps"]) for c in NB.gen_candidates(_pl14, NB.NEW_DRAW, None, NB._top_sets(
+    [(p.dk_id, p.salary, p.proj, p.boom) for p in _pl14]), random.Random(3))[:150]]
+_anc = _stud[0]
+_ros = [r for r in _ros if _anc not in r][:150]
+_cnt0 = collections.Counter(p.dk_id for r in _ros for p in r)
+_drop = NB._dust_drop(_ros, 30, {_anc.dk_id})
+_sc = lambda r: sum(1 for p in r if _cnt0[p.dk_id] <= 3)
+_blk = NB.leverage_block(_ros, _anc, 30, _pl14, NB._top_sets([(p.dk_id, p.salary, p.proj, p.boom) for p in _pl14]), 0)
+_bc = collections.Counter(p.dk_id for c in _blk for p in c["ps"])
+check("leverage block: 30 new lineups, every one holding him; nobody else in more than 85% of them",
+      len(_blk) == 30 and all(_anc in c["ps"] for c in _blk)
+      and max(v for k, v in _bc.items() if k != _anc.dk_id) <= 25
+      and not ({c["key"] for c in _blk} & {frozenset(p.dk_id for p in r) for r in _ros}), str(len(_blk)))
+check("leverage block: it replaces the lineups holding the most players in 3 lineups or fewer",
+      len(_ros) >= 60 and len(_drop) == 30
+      and min(_sc(_ros[i]) for i in _drop) >= max(_sc(_ros[i]) for i in range(len(_ros)) if i not in _drop),
+      str(len(_ros)))
+# the build: wiring, with the night's rules fixed by hand
+_real_ln = app.leverage_night
+_pick5 = max((p for p in S.read_projections(PROJ5w)[0] if p.salary >= 8500), key=lambda p: p.proj)
+_mid5 = sorted((x for x in R5w if 5 <= x["Ownership %"] < 20 and x["Player"] in _pool5w.split("\n")),
+               key=lambda x: x["Ownership %"])[0]
+def _fake_ln(players, history, n_games, o, R, proj_text):
+    pk = next(p for p in players if p.name == _pick5.name)
+    mp = next(p for p in players if p.name == _mid5["Player"])
+    skip = "none" == (o.get("leverPick") or "").lower()
+    return {"mu": {"ready": True, "line": 0.03, "linePlayers": 99, "figures": {}, "calls": [], "why": ""},
+            "muList": [], "muCalls": [{"name": mp.name, "id": mp.dk_id, "own": mp.ownership, "opp": mp.opponent,
+                                       "figure": 0.08}],
+            "lev": {"named": [{"name": pk.name, "id": pk.dk_id, "nReasons": 2, "own": pk.ownership,
+                               "reasons": ["out", "avg"], "salary": pk.salary, "proj": pk.proj, "inPool": True}],
+                    "studs": 3, "pick": None},
+            "levPick": None if skip else {"name": pk.name, "id": pk.dk_id, "own": pk.ownership, "salary": pk.salary,
+                                          "proj": pk.proj, "inPool": pk.in_pool, "reasons": ["out", "avg"]},
+            "levApplied": not skip, "levWhy": "set to none by hand" if skip else ""}
+app.leverage_night = _fake_ln
+_k71 = _nlog()
+nb71 = app.run_build(PROJ5w, FIELD5, DK5w, {"pool": _pool5w})
+_r71 = _rows_of(_k71)
+_k72 = _nlog()
+nb72 = app.run_build(PROJ5w, FIELD5, DK5w, {"pool": _pool5w, "leverPick": "none",
+                                            "leverage": f"{_pick5.name} — running the offense"})
+_r72 = _rows_of(_k72)
+app.leverage_night = _real_ln
+_b71 = [r for r in _r71 if r["contest_id"] == "900001"]
+_lv71 = [r for r in _b71 if r["source"] == "leverage"]
+check("build: on 5+ games, 30 of the 150 are the leverage block, each holding the pick; the set stays 150",
+      not nb71.get("error") and len(_b71) == 150 and len(_lv71) == 30
+      and all(any(p["name"] == _pick5.name for p in r["players"]) for r in _lv71)
+      and (_r71[0]["settings"]["leverage"]["block"] or {}).get("built") == 30
+      and any("Leverage stud" in n["text"] for n in nb71["notes"]),
+      str(nb71.get("error") or collections.Counter(r["source"] for r in _b71)))
+_sh20 = _r71[0]["settings"]["leverage"].get("shadow20")
+_s20 = json.load(open(_sh20)) if _sh20 and os.path.exists(_sh20) else {}
+check("build: the 20s keep no block; their shadow set with the pick in 6 of 20 is saved",
+      not any(r["source"] == "leverage" for r in _r71 if r["contest_id"] != "900001")
+      and _s20.get("k") == 6 and sum(1 for r in _s20["sets"]["small"][0] if _pick5.name in r) >= 6, str(_sh20))
+_cnt_in = lambda rows, cid: sum(1 for r in rows if r["contest_id"] == cid
+                                and any(p["name"] == _mid5["Player"] for p in r["players"]))
+_want = lambda n: int(round(min(2 * _mid5["Ownership %"] / 100, 0.95) * n))
+check("build: an easy-matchup call is raised toward 2x his projected own (150 and 20), and it is logged",
+      all(_cnt_in(_r72, c) > _cnt_in(_r51, c) or _cnt_in(_r51, c) >= _want(n)
+          for c, n in (("900001", 150), ("900002", 20)))
+      and _r71[0]["settings"]["matchup"]["calls"] == [_mid5["Player"]]
+      and any("Easy matchups" in n["text"] for n in nb71["notes"]),
+      f"150: {_cnt_in(_r51, '900001')} -> {_cnt_in(_r72, '900001')} (2x = {_want(150)}); "
+      f"20: {_cnt_in(_r51, '900002')} -> {_cnt_in(_r72, '900002')} (2x = {_want(20)})")
+check("build: leverage set to None by hand -> no block; the sharp's leverage box is logged",
+      not any(r["source"] == "leverage" for r in _r72) and not _r72[0]["settings"]["leverage"]["applied"]
+      and _r72[0]["settings"]["leverageCalls"][0]["name"] == _pick5.name
+      and _r72[0]["settings"]["leverageCalls"][0]["reason"] == "running the offense")
+_k73 = _nlog()
+app.run_build(PROJ5w, FIELD5, DK5w, {"pool": _pool5w, "matchupOff": True, "leverOff": True})
+_r73 = _rows_of(_k73)
+check("grader override: a night built before Nov 14 rebuilds without either rule",
+      _r73[0]["settings"]["matchup"] is None and _r73[0]["settings"]["leverage"] is None
+      and not any(r["source"] == "leverage" for r in _r73))
+
 # The summary and exit MUST stay last — appending a new section after them
 # silently skips it and the suite still reports a clean pass.
 print(f"\n{'=' * 56}\n  {ok} passed, {fail} failed\n{'=' * 56}")

@@ -479,10 +479,12 @@ def main(argv):
     old = {kind_of.get(cid): v for cid, v in (old_by_id or {}).items()}
 
     # The build as it was that night: role marks read only the box scores before
-    # it, and a build saved before the weak chalk rule (Nov 13) is rebuilt
-    # without the rule, so seed 0 still reproduces the played set.
+    # it, and a build saved before the weak chalk rule (Nov 13) or the matchup
+    # floor and leverage block (Nov 14) is rebuilt without them, so seed 0 still
+    # reproduces the played set.
     st = typed.get("settings") or {}
-    options = dict(options, slateDate=day, weakChalkOff=("weakChalk" not in st))
+    options = dict(options, slateDate=day, weakChalkOff=("weakChalk" not in st),
+                   matchupOff=("matchup" not in st), leverOff=("leverage" not in st))
     if "filePick" not in ((st.get("sets") or {}).get("big") or {}):
         options["filePick"] = "top10"          # built before the Nov 13 file pick
     spread = seed_spread(inp, options, date)
