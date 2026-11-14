@@ -307,7 +307,7 @@ def marks(active, takeover_ids, logs):
         under = 0 < mins < UNDER_MINS
         # a teammate at his position, projected 10+, who missed the team's last
         # game after playing in an earlier one
-        back = []
+        back, back_info = [], []
         dates = TD.get(p.team) or []
         if dates:
             last = dates[-1]
@@ -318,6 +318,20 @@ def marks(active, takeover_ids, logs):
                 qh = [x for x in G.get(jk(q), []) if x["team"] == p.team]
                 if qh and qh[-1]["date"] < last:
                     back.append(q.name)
+                    # Teammate Back report (Nov 14): log who came back, so the split
+                    # "a regular starter back" against "a bench player back" can be
+                    # read again at 30 calls. Logged only.
+                    q8 = [x for x in qh if x["mins"] >= 8] or qh    # the review's games of 8+ minutes
+                    back_info.append({
+                        "name": q.name,
+                        "startedShare": round(sum(1 for x in q8 if x["starter"]) / len(q8), 2),
+                        "regularStarter": bool(sum(1 for x in q8 if x["starter"]) * 2 >= len(q8)
+                                               or q.starting is True),
+                        "mpgBefore": round(sum(x["mins"] for x in q8) / len(q8), 1),
+                        "games": len(q8),
+                        "missed": sum(1 for d in dates if d > qh[-1]["date"]),
+                        "projMins": round(float(q.minutes or 0), 1),
+                        "startingTonight": q.starting})
         n = len(H)
         tot_m = sum(x["mins"] for x in H)
         ppm = (sum(x["dk"] for x in H) / tot_m) if tot_m else None
@@ -343,7 +357,7 @@ def marks(active, takeover_ids, logs):
                   "dk5": None if dk5 is None else round(dk5, 2),
                   "dkLast": L5[-1]["dk"] if L5 else None,
                   "starts5": starts5, "takeover": tk, "lift": lift, "newStart": newstart,
-                  "bench": bench, "under22": under, "back": back,
+                  "bench": bench, "under22": under, "back": back, "backInfo": back_info,
                   "ppm": None if ppm is None else round(ppm, 2), "n6xSmall": n6x_small,
                   "weak": weak, "why": "; ".join(why) if weak else "", "bones": bones}
     return out

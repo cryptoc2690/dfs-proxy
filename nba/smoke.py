@@ -1698,6 +1698,21 @@ _r73 = _rows_of(_k73)
 check("grader override: a night built before Nov 14 rebuilds without either rule",
       _r73[0]["settings"]["matchup"] is None and _r73[0]["settings"]["leverage"] is None
       and not any(r["source"] == "leverage" for r in _r73))
+from dk import Player as _PB                 # noqa: E402
+_pa = _PB(name="Chalk Guard", dk_id="1", pos="PG", team="AAA", opponent="BBB", salary=6000,
+          proj=30.0, ownership=35.0, minutes=33.0, starting=True)
+_pb = _PB(name="Back Starter", dk_id="2", pos="SG/SF", team="AAA", opponent="BBB", salary=6000,
+          proj=25.0, ownership=5.0, minutes=30.0, starting=True)
+_bg = {"chalk guard": [{"date": _day(i), "team": "AAA", "mins": 33.0, "dk": 30.0, "starter": True}
+                       for i in range(5)],
+       "back starter": [{"date": _day(i), "team": "AAA", "mins": 31.0, "dk": 25.0, "starter": True}
+                        for i in range(4)]}
+_bm = RL.marks([_pa, _pb], set(), {"games": _bg, "team_dates": {"AAA": [_day(i) for i in range(5)]}})
+_bi = _bm["chalk guard"]["backInfo"]
+check("teammate back: who came back is logged (a regular starter, his minutes, games missed, tonight's minutes)",
+      _bm["chalk guard"]["weak"] and len(_bi) == 1 and _bi[0]["name"] == "Back Starter"
+      and _bi[0]["regularStarter"] and _bi[0]["mpgBefore"] == 31.0 and _bi[0]["missed"] == 1
+      and _bi[0]["projMins"] == 30.0, str(_bi))
 
 # The summary and exit MUST stay last — appending a new section after them
 # silently skips it and the suite still reports a clean pass.
