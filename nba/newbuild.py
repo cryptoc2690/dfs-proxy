@@ -23,6 +23,11 @@ Two sources of lineups and almost no rules:
   File lineups        : every legal lineup of active players in every lineups file
                         dropped, picked by projected sum on 5-7 games and by
                         Stokastic's own Top 10% figure on 8+ (Nov 13).
+  One live piece      : on 5-7 games the 150 takes only file lineups whose
+                        fewest-owned player is projected at 2-10% (G14), after
+                        the lineups that floor each stud ($9,000+, projected 30+)
+                        at 5-20% own to 1.5x his own (G12). Win Not Cash and
+                        Juice The Live Piece reports, Nov 15.
   Weak chalk          : on 2-4 games, chalk with a shaky role and no role change
                         is left out of the pick (role.py, app.run_build; Nov 13).
                         On 5+ games it is a shadow build, logged only.
@@ -31,7 +36,7 @@ Two sources of lineups and almost no rules:
                         lineups for the set's most-used player at his salary.
   Not here            : the simulation, the bar, the win-rate score, duplicates,
                         neutral rules, tier caps, core floors, automatic pool adds,
-                        stud floors, fades, any lean in the 150. Each was tested and
+                        stud floors (other than G12), fades, any lean in the 150. Each was tested and
                         lost or did nothing (Full System report, section 1).
 
 Typed by hand: the pool, removals (nothing is shifted to teammates), per-player
@@ -68,6 +73,18 @@ TAKEOVER_K, TAKEOVER_CAP, TAKEOVER_MIN_OWN = 1.5, 0.95, 15.0
 NEW_DRAW = dict(weight=2.5, left=300, n=2000, tries=40000, ranges=True)
 OLD_DRAW = dict(weight=3.0, left=2000, n=4000, tries=80000, ranges=False)
 STUD = 9000
+# One live piece (G14) and the low-owned stud floor (G12), the 150 on 5-7 game
+# slates (Win Not Cash and Juice The Live Piece reports, Nov 15). A lineup has a
+# live piece when its fewest-owned player is projected at LIVE_LO% to under
+# LIVE_HI%; if fewer than LIVE_LEFT_K x the lineups needed have one, the whole
+# file is used. A stud ($9,000+, projected STUD_FLOOR_PROJ+) at 5-20% own whom
+# the plain pick holds under 1.5x his own gets his lineups picked first, from
+# the whole file in its order. RARE_PAIR: the shadow (the two fewest-owned
+# players' ownerships multiplied under 0.75% of the field).
+LIVE_LO, LIVE_HI, LIVE_LEFT_K = 2.0, 10.0, 3
+LIVE_GAMES = (5, 7)
+STUD_FLOOR_LO, STUD_FLOOR_HI, STUD_FLOOR_K, STUD_FLOOR_PROJ = 5.0, 20.0, 1.5, 30.0
+RARE_PAIR = 0.75
 SWAP_BAND = 500           # a re-target or tail swap stays within $500
 
 HISTORY_DIR = os.environ.get("NBA_HISTORY") or os.path.expanduser(
@@ -473,6 +490,84 @@ def file_candidates(field_lineups, active_ids, slotting):
     return out
 
 
+# --- one live piece (G14), the stud floor (G12) ------------------------------
+def win_spec(games, pair=None):
+    """The G14 + G12 spec for a slate, or None when it does not fire."""
+    if not (LIVE_GAMES[0] <= games <= LIVE_GAMES[1]):
+        return None
+    return {"band": (LIVE_LO, LIVE_HI), "pair": pair, "studFloor": True}
+
+
+def live_ok(c, band, pair=None):
+    """Does a lineup have one live piece (and, for the shadow, a rare pair)?"""
+    o = sorted(p.ownership for p in c["ps"])
+    if not (band[0] <= o[0] < band[1]):
+        return False
+    return pair is None or o[0] * o[1] / 100.0 < pair
+
+
+def live_candidates(active):
+    """Players at 2-10% projected own and projected 20+ (logged each night)."""
+    return [p for p in active if LIVE_LO <= p.ownership < LIVE_HI and p.proj >= 20]
+
+
+def top5_own(active):
+    """The five highest projected ownerships, summed (logged each night)."""
+    return round(sum(sorted((p.ownership for p in active), reverse=True)[:5]), 1)
+
+
+def stud_floors(active, base, n, caps=None):
+    """G12: {dk_id: lineups} for each stud at 5-20% own the plain pick holds
+    under 1.5x his own."""
+    held = collections.Counter(p.dk_id for c in base for p in c["ps"])
+    out = {}
+    for p in active:
+        if p.salary < STUD or p.proj < STUD_FLOOR_PROJ:
+            continue
+        if not (STUD_FLOOR_LO <= p.ownership <= STUD_FLOOR_HI):
+            continue
+        up = int(round(STUD_FLOOR_K * p.ownership / 100.0 * n))
+        if caps and p.dk_id in caps:
+            up = min(up, caps[p.dk_id])
+        if up > held[p.dk_id]:
+            out[p.dk_id] = up
+    return out
+
+
+def win_pick(fc, need, cap, n, cnt, taken, key, caps, active, win):
+    """G14 + G12: the file lineups for the 150. -> (chosen, info)"""
+    info = {"band": list(win["band"]), "pair": win.get("pair"), "studFloors": {},
+            "studLineups": 0, "fileLive": 0, "fellBack": False}
+    pre = []
+    if win.get("studFloor"):
+        base = select(fc, need, cap, n, collections.Counter(), set(), key, caps)
+        sfl = stud_floors(active, base, n, caps)
+        info["studFloors"] = sfl
+        for k, up in sorted(sfl.items(), key=lambda t: -t[1]):
+            want = min(up - cnt[k], need - len(pre))
+            if want <= 0:
+                continue
+            sub = [c for c in fc if c["key"] not in taken and any(p.dk_id == k for p in c["ps"])]
+            pre += select(sub, want, cap, n, cnt, taken, key, caps)
+        info["studLineups"] = len(pre)
+    left = need - len(pre)
+    view = [c for c in fc if c["key"] not in taken]
+    live = [c for c in view if live_ok(c, win["band"], win.get("pair"))]
+    info["fileLive"] = len(live)
+    picked = []
+    if live and len(live) >= LIVE_LEFT_K * max(left, 1):
+        if win.get("pair") is not None:      # the shadow: rare pair first, then any live piece
+            picked = select(live, left, cap, n, cnt, taken, key, caps)
+            more = [c for c in view if c["key"] not in taken and live_ok(c, win["band"])]
+            picked += select(more, left - len(picked), cap, n, cnt, taken, key, caps)
+        else:
+            picked = select(live, left, cap, n, cnt, taken, key, caps)
+    else:
+        info["fellBack"] = True
+    rest = select(view, left - len(picked), cap, n, cnt, taken, key, caps)
+    return pre + picked + rest, info
+
+
 # --- selection and exposure ------------------------------------------------
 def select(cands, n, max_exp, total, cnt, taken, key="proj", caps=None):
     """Greedy by `key` under a per-player cap (a share of `total`) and typed caps
@@ -608,7 +703,7 @@ def tail_fix(rosters, by_id, min_count, keep=(), caps=None):
 # --- the build ---------------------------------------------------------------
 def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, seed=0,
               history=None, slotting=None, copies=1, file_pick=None, raises=None,
-              anchor=None):
+              anchor=None, win=None):
     """One set (a 150 or a 20). -> dict(rosters, sources, chunks, notes, meta)
 
     players: every player with DK ids attached, pool flags set and removals
@@ -620,7 +715,9 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
     the set}, floors applied after the pick the way the takeover lean is (the
     easy-matchup floor, G10). anchor: {"id": dk_id, "k": lineups}, a block of k
     lineups built around that player replacing the k lineups that hold the
-    most scattered positions (the leverage block, G11). chunks = [(rosters,
+    most scattered positions (the leverage block, G11). win: win_spec(games),
+    the 150's file pick on 5-7 games takes only lineups with one live piece,
+    after the low-owned studs' floors (G14 + G12). chunks = [(rosters,
     sources)] one per copy."""
     notes = []
     caps = dict(caps or {})
@@ -665,7 +762,22 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
     # file's own Top 10% figure (Shark Edge And Slate Triggers report, Nov 13:
     # projected sum ahead on 8 of 9 5-7 game nights, Top 10% still ahead on 8+).
     file_key = file_pick or ("proj" if 5 <= games <= 7 else "top10")
-    half = select(fc, n_file, cap, n, cnt, taken, file_key, caps) if n_file else []
+    win_info = None
+    if n_file and big and win:
+        half, win_info = win_pick(fc, n_file, cap, n, cnt, taken, file_key, caps, active, win)
+        if win_info["fellBack"]:
+            notes.append(f"One live piece: only {win_info['fileLive']} of Stokastic's lineups "
+                         f"have one, so the whole file was used")
+        else:
+            notes.append(f"One live piece: the 150 is picked from the {win_info['fileLive']} "
+                         f"of Stokastic's lineups whose fewest-owned player is at "
+                         f"{win['band'][0]:.0f}-{win['band'][1]:.0f}% own")
+        if win_info["studFloors"]:
+            notes.append("Low-owned studs floored at 1.5x own: " + "; ".join(
+                f"{by_id[k].name} to {v} of {n} ({by_id[k].ownership:.0f}% projected owned)"
+                for k, v in win_info["studFloors"].items()))
+    else:
+        half = select(fc, n_file, cap, n, cnt, taken, file_key, caps) if n_file else []
     chosen = own + half
     sources = ["mine"] * len(own) + ["vendor"] * len(half)
     if n_file and len(half) < n_file:
@@ -712,14 +824,17 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
                     if ci == 0:
                         tk_lean.append(f"{p.name} to {want} of {len(rosters)} "
                                        f"({p.ownership:.0f}% projected owned)")
+        sfl = (win_info or {}).get("studFloors") or {}
         for k, share in (raises or {}).items():
-            if k not in active_ids:
+            if k not in active_ids or k in sfl:
                 continue
             want = int(round(min(share, 0.95) * len(rosters)))
             if k in caps:
                 want = min(want, caps[k])
             lo_, hi_ = targets.get(k, (None, None))
             targets[k] = (max(lo_ or 0, want), hi_)
+        for k, up in sfl.items():            # G12: the floor stands in for any raise
+            targets[k] = (min(up, len(rosters)), targets.get(k, (None, None))[1])
         if not big:
             top3 = sorted(active, key=lambda p: -p.ownership)[:3]
             for p in top3:
@@ -780,7 +895,12 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
                      "tail": tail, "seed": seed,
                      "raises": {by_id[k].name: round(v, 3) for k, v in (raises or {}).items()
                                 if k in by_id},
-                     "leverage": lev}}
+                     "leverage": lev,
+                     "win": None if win_info is None else dict(
+                         win_info,
+                         studFloors={by_id[k].name: v for k, v in win_info["studFloors"].items()},
+                         liveShare=round(sum(1 for r in rosters if live_ok(
+                             {"ps": r}, win["band"])) / max(len(rosters), 1), 3))}}
 
 
 # --- what the screen says ---------------------------------------------------

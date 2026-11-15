@@ -1256,7 +1256,9 @@ _real_tk = NB.takeover
 NB.takeover = lambda players, active, NM, inj: {p.dk_id: 1.0 for p in active
                                                 if p.name == _tk_row["Player"]}
 _k8 = _nlog()
-nbt = app.run_build(PROJ5, FIELD5, DK5, {"pool": _pool5})
+# liveOff: the made-up slate has every stud at 5-20% own, so G12's floors would
+# fill the whole 150 (tested on its own in the Nov 15 section).
+nbt = app.run_build(PROJ5, FIELD5, DK5, {"pool": _pool5, "liveOff": True})
 NB.takeover = _real_tk
 _r8 = _rows_of(_k8)
 _b8 = [r for r in _r8 if r["contest_id"] == "900001"]
@@ -1503,12 +1505,9 @@ _f61 = _r61[0]["settings"]["field"] if _r61 else {}
 _od = json.load(open(_f61["shadow"])) if _f61.get("shadow") and os.path.exists(_f61["shadow"]) else {}
 _cap150 = int(round(0.5 * _tgt.ownership / 100 * 150))
 _names = lambda rows, cid: [sorted(p["name"] for p in r["players"]) for r in rows if r["contest_id"] == cid]
-check("field: with LineStar the over-draft is named, logged, and its shadow set is saved",
+check("field: with LineStar the over-draft is named and logged; no shadow set (G9 off the shadow list, Nov 15)",
       not nb61.get("error") and _f61.get("over") == [_tgt.name] and _f61.get("lineStar")
-      and len(_f61["players"]) > 50 and _od.get("calls", [{}])[0].get("name") == _tgt.name
-      and len(_od["sets"]["big"][0]) == 150
-      and sum(1 for r in _od["sets"]["big"][0] if _tgt.name in r) <= _cap150
-      and sum(1 for r in _od["sets"]["small"][0] if _tgt.name in r) <= int(round(0.5 * _tgt.ownership / 100 * 20))
+      and len(_f61["players"]) > 50 and "shadow" not in _f61
       and any("over-drafts tonight" in n["text"] for n in nb61["notes"]),
       str(nb61.get("error") or (_f61.get("over"), _f61.get("shadow"))))
 check("field: the entered set is the build without the shadow (identical lineups)",
@@ -1713,6 +1712,81 @@ check("teammate back: who came back is logged (a regular starter, his minutes, g
       _bm["chalk guard"]["weak"] and len(_bi) == 1 and _bi[0]["name"] == "Back Starter"
       and _bi[0]["regularStarter"] and _bi[0]["mpgBefore"] == 31.0 and _bi[0]["missed"] == 1
       and _bi[0]["projMins"] == 30.0, str(_bi))
+
+print("\n-- Nov 15: one live piece (G14) and the low-owned stud floor (G12) --")
+class _WP:
+    def __init__(self, i, own, sal=5000, proj=25.0):
+        self.dk_id, self.name, self.ownership, self.salary, self.proj = str(i), f"P{i}", own, sal, proj
+def _wc(ps):
+    return {"ps": ps, "proj": sum(p.proj for p in ps), "top10": 0.0, "key": frozenset(p.dk_id for p in ps)}
+_rw = random.Random(3)
+_wC = [_WP(i, 15 + 3 * i, proj=40.0) for i in range(10)]          # chalk
+_wF = [_WP(20 + i, 12 + 0.2 * i, proj=10.0) for i in range(10)]     # chalky filler
+_wL = [_WP(40 + i, 3 + i, proj=20.0) for i in range(6)]             # live pieces
+_wstud = _WP(99, 10.0, sal=10000, proj=50.0)
+_wpl = _wC + _wF + _wL + [_wstud]
+_wfc, _seen = [], set()
+def _wadd(ps):
+    k = frozenset(p.dk_id for p in ps)
+    if k not in _seen:
+        _seen.add(k); _wfc.append(_wc(ps))
+while len(_wfc) < 300:
+    _wadd(_rw.sample(_wC + _wF, 8))                                 # all chalk
+while len(_wfc) < 900:
+    _wadd(_rw.sample(_wC + _wF, 7) + [_rw.choice(_wL)])             # one live piece
+while len(_wfc) < 930:
+    _wadd([_wstud] + _rw.sample(_wF, 7))                            # the stud, low in the order
+check("live piece: the fewest-owned player at 2-10% is live; all chalk, or anyone under 2%, is not",
+      NB.live_ok(_wc([_WP(0, 5)] + [_WP(i, 30) for i in range(1, 8)]), (2, 10))
+      and not NB.live_ok(_wc([_WP(i, 12 + i) for i in range(8)]), (2, 10))
+      and not NB.live_ok(_wc([_WP(0, 1.5)] + [_WP(i, 30) for i in range(1, 8)]), (2, 10))
+      and NB.live_ok(_wc([_WP(0, 3), _WP(1, 20)] + [_WP(i, 30) for i in range(2, 8)]), (2, 10), 0.75)
+      and not NB.live_ok(_wc([_WP(0, 5), _WP(1, 20)] + [_WP(i, 30) for i in range(2, 8)]), (2, 10), 0.75))
+check("live piece: fires on 5-7 games only",
+      NB.win_spec(4) is None and NB.win_spec(8) is None and NB.win_spec(5)["band"] == (2.0, 10.0)
+      and NB.win_spec(7)["studFloor"] and NB.win_spec(6, pair=0.75)["pair"] == 0.75)
+check("stud floor: a stud at 5-20% own held under 1.5x gets it; held enough, too chalky or projected under 30 does not",
+      NB.stud_floors([_wstud], [], 150) == {"99": 22}
+      and NB.stud_floors([_wstud], [_wc([_wstud])] * 22, 150) == {}
+      and NB.stud_floors([_WP(98, 25.0, sal=10000, proj=50.0)], [], 150) == {}
+      and NB.stud_floors([_WP(97, 10.0, sal=10000, proj=25.0)], [], 150) == {}
+      and NB.stud_floors([_WP(96, 10.0, sal=8800, proj=45.0)], [], 150) == {})
+_wcnt, _wtk = collections.Counter(), set()
+_wch, _winf = NB.win_pick(_wfc, 150, 0.85, 150, _wcnt, _wtk, "proj", {}, _wpl,
+                          {"band": (2, 10), "pair": None, "studFloor": True})
+_wnst = [c for c in _wch if _wstud not in c["ps"]]
+check("G12 then G14: the stud's floor is met first, the rest of the 150 all have one live piece",
+      len(_wch) == 150 and len({c["key"] for c in _wch}) == 150 and _winf["studFloors"] == {"99": 22}
+      and sum(1 for c in _wch if _wstud in c["ps"]) >= 22 and _winf["studLineups"] == 22
+      and all(NB.live_ok(c, (2, 10)) for c in _wch[22:]) and not _winf["fellBack"],
+      str({k: v for k, v in _winf.items() if k != "band"}))
+check("G14: the pick is in projected order inside the live lineups",
+      all(_wch[i]["proj"] >= _wch[i + 1]["proj"] for i in range(22, 149)))
+_wfew = [c for c in _wfc if not NB.live_ok(c, (2, 10))][:400] + [c for c in _wfc if NB.live_ok(c, (2, 10))][:40]
+_wch2, _winf2 = NB.win_pick(_wfew, 150, 0.85, 150, collections.Counter(), set(), "proj", {}, _wpl,
+                            {"band": (2, 10), "pair": None, "studFloor": False})
+check("G14: under 3x the lineups needed have a live piece -> the whole file is used",
+      _winf2["fellBack"] and len(_wch2) == 150 and _winf2["fileLive"] == 40)
+_k90 = _nlog()
+nb90 = app.run_build(PROJ5, FIELD5, DK5, {"pool": _pool5})
+_r90 = _rows_of(_k90)
+_w90 = _r90[0]["settings"].get("win") or {}
+_sh90 = json.load(open(_w90["shadow"])) if _w90.get("shadow") and os.path.exists(_w90["shadow"]) else {}
+check("build (5 games): G14 + G12 applied to the 150, logged with the nightly numbers and both shadow sets",
+      not nb90.get("error") and _w90.get("applied") and _w90.get("top5Own", 0) > 0
+      and isinstance(_w90.get("liveCandidates"), list) and (_w90.get("big") or {}).get("fileLive", 0) > 0
+      and "liveShare" in _w90["big"] and len(_sh90.get("sets", {}).get("rarepair", [])) == 150
+      and len(_sh90["sets"].get("nolive", [])) == 150 and _sh90.get("rarePair") == 0.75
+      and any("One live piece" in n["text"] for n in nb90["notes"]),
+      str(nb90.get("error") or {k: v for k, v in _w90.items() if k not in ("liveCandidates", "big")}))
+_k91 = _nlog()
+nb91 = app.run_build(PROJ5, FIELD5, DK5, {"pool": _pool5, "liveOff": True})
+_r91 = _rows_of(_k91)
+_nm = lambda rows, cid: [sorted(p["name"] for p in r["players"]) for r in rows if r["contest_id"] == cid]
+check("build: the 20s are untouched by the rule, and liveOff (the grader) builds the 150 as before",
+      _nm(_r90, "900002") == _nm(_r91, "900002") and _nm(_r90, "900001") != _nm(_r91, "900001")
+      and not _r91[0]["settings"]["win"]["applied"] and _r91[0]["settings"]["win"]["big"] is None
+      and _nm(_r91, "900001") == [sorted(r) for r in _sh90["sets"]["nolive"]])
 
 # The summary and exit MUST stay last — appending a new section after them
 # silently skips it and the suite still reports a clean pass.

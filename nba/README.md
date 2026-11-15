@@ -14,7 +14,7 @@ in `app.py`: kept for showdown and for after-the-fact replays only.
 
 | | 2-4 games | 5-7 games | 8+ games |
 |---|---|---|---|
-| 150 | all from your pool | all from Stokastic's lineups | 75 Stokastic / 75 pool (old draw) |
+| 150 | all from your pool | all from Stokastic's lineups, one live piece (G14 + G12) | 75 Stokastic / 75 pool (old draw) |
 | 20-max | from your pool, top three owned raised to 2x | same | same (old draw) |
 
 - Pool lineups: slot-first draw (projection^2.5, within $300 of the cap) kept inside
@@ -39,9 +39,9 @@ in `app.py`: kept for showdown and for after-the-fact replays only.
   his value rank, his last game and last five against tonight's projection, the
   takeover mark, a new starting job; frozen in `field_model.json`, refit with
   `python3 field.py fit`). Logged only: the predicted own, the named over-drafts (3+
-  points over at 5%+ projected own) and under-drafts. A shadow set with every
-  over-draft capped at half his own is saved to `logs/shadow/<date>/`. Needs the
-  LineStar file; without it there are no calls.
+  points over at 5%+ projected own) and under-drafts. Needs the LineStar file;
+  without it there are no calls. (The over-draft cap's shadow set, G9, was dropped
+  Nov 15: flat at the top over 15 fires.)
 - **The easy-matchup floor (G10, Nov 14, Matchup report):** `matchup.py` measures what
   each team has allowed over players' usual rates (box scores before tonight). Pool
   players at 5-20% projected own facing a team at or over the line (75th percentile on
@@ -53,6 +53,22 @@ in `app.py`: kept for showdown and for after-the-fact replays only.
   lineups that hold the most scattered players; chalk is untouched. Settings shows the
   pick; choose another or None. The 20s get a shadow (6 of 20, logged only). A
   "Leverage" box logs the sharp's leverage plays.
+- **One live piece and the low-owned stud floor (G14 + G12, Nov 15, Win Not Cash and
+  Juice The Live Piece reports):** on 5-7 games the 150 was mostly the field's own
+  lineups (the top of Stokastic's order is entered 20-40 times each), so its top
+  finishes were shared. Now each stud ($9,000+, projected 30+) at 5-20% own whom the
+  plain pick holds under 1.5x his own gets that many lineups first, from the whole
+  file in its order; then the rest of the 150 comes only from Stokastic's lineups
+  whose fewest-owned player is projected at 2-10% (no all-chalk lineup, nobody under
+  2%). If fewer than 3x the lineups needed have one, the whole file is used. The cap,
+  the takeover lean, G10 and G11 work as before. Review: +0.99 top-1% lineups a
+  contest with shared finishes split (11 nights, up 7, down 3); cost 1.0 a lineup and
+  the cash rate 36% to 34%. The 20s and the other slates are unchanged. Logged each
+  night (`settings.win`): the five highest ownerships summed, the players at 2-10%
+  own projected 20+, the floors, the set's live share; and two shadow sets in
+  `logs/shadow/<date>/<time>_live.json`: the rare pair (the two fewest-owned players'
+  ownerships multiplied under 0.75%, judged at 20 fires) and the 150 without the
+  rule (for the cash rate with and without it).
 - One cap (85% of a 150, 90% of a 20); a 150 has nobody in fewer than 4 lineups.
 - The 150's takeover lean: a player whose projection is 1.3x his normal because a
   regular is out (the takeover mark), at 15%+ projected own, is floored at 1.5x his own

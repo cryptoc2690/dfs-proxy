@@ -2,6 +2,18 @@
 
 Newest first. One entry per change, in plain words: what changed and why.
 
+## Nov 15, 2026
+
+**On 5-7 game slates the 150 now takes only lineups with one live piece (G14), after floors for the low-owned studs (G12).** From `NBA Win Not Cash Report 11-15.md` and `NBA Juice The Live Piece Report 11-15.md`. Graded with shared finishes split (a finish on a lineup the field entered k times counts 1/k), the new tool's 150 was 32% under the field in the top 1% on Nov 7-14: the top of Stokastic's order, which the tool picks, is the field's own lineups (Nov 14: each of ours entered 25 times on average). Winning lineups are chalk with one live piece: the fewest-owned player near 5%, nobody under 2%.
+- **G12 first:** each stud ($9,000+, projected 30+) at 5-20% projected own whom the plain pick holds under 1.5x his own gets lineups from the whole file, in its order, up to 1.5x his own. The floor also stands in for any raise on him later.
+- **G14:** the rest of the 150 comes from Stokastic's lineups whose fewest-owned player is projected at 2-10%, by projected sum (G1). If fewer than 3x the lineups needed have one, the whole file is used and the build says so.
+- Everything else as before: the 85% cap, the 4-lineup minimum, the takeover lean, G10, G11, late swap. The 20s, 2-4 and 8+ game slates are unchanged.
+- Review, 11 nights: +0.99 split top-1% lineups a contest (up 7, down 3), top 0.1% and top 100 up, one top-10 finish where there was none; mean -1.0 a lineup, cash rate 36.2% -> 34.0%. Spending more bought nothing more at the top; tuning the band on 11 nights did worse held out, so it stays 2-10%.
+- Nov 14 rebuilt from its saved inputs: as played +20.7, 2 top-1% lineups, best 232nd, split top 1% 0.07, cash 41%; with the rule +18.6, 3, best 155th, split 1.26, cash 37%. Cooper Flagg (15% own) was floored to 34 of 150.
+- **Logged** (`settings.win`): the five highest ownerships summed, the players at 2-10% own projected 20+, the floors, how many file lineups had a live piece, the set's live share. **Two shadow sets** in `logs/shadow/<date>/<time>_live.json`: the rare pair (the two fewest-owned players' ownerships multiplied under 0.75% of the field, judged at 20 fires) and the 150 without the rule. `grade_night.py` rebuilds a night built before today without it.
+
+**Dropped from the shadows:** the over-draft cap (G9; flat at the top at 15 fires). The predictor's calls are still logged. (The mid-tier starter floor, S1, was a review-only shadow; nothing in the tool to remove.)
+
 ## Nov 14, 2026
 
 **Logged with every "teammate back" mark: who came back** (`roleMarks[].backInfo`, from `NBA Teammate Back Report 11-14.md`). His name, the share of his games he started before he sat (games of 8+ minutes), whether he is a regular starter (half or more, or starting tonight), his minutes a game before he sat, the team games he missed, and his projected minutes tonight. On record: when a regular starter came back all 6 calls busted, when a bench player came back 1 of 9 did; the review re-reads the split at 30 calls. The mark itself is unchanged: no narrower version beat it in the builds.

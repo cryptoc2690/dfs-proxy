@@ -1246,7 +1246,6 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
     FD = FP.tonight([p for p in players if NB.is_active(p, inj)], R["marks"], ls_map,
                     set(R["hits"]), n_games)
     od_calls = FD["over"] if FD and FD["lineStar"] else []
-    od_shadow = {}
     if FD and not FD["lineStar"]:
         say("info", "No LineStar file: the field predictor's over-draft calls need its "
                     "own (most of the predictor), so there are none tonight. Drop "
@@ -1256,8 +1255,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
             say("info", "The field's over-drafts tonight (predicted 3+ points over projected "
                         "own; shadow only, the build is unchanged): " + "; ".join(
                             f"{r['name']} ({r['own']:.0f}% \u2192 {r['own'] + r['miss']:.0f}%)"
-                            for r in od_calls) + ". The set with them capped at half "
-                        "their own is saved for the review.")
+                            for r in od_calls) + ".")
         if FD["under"]:
             say("info", "Predicted 3+ under projected own (logged): " + "; ".join(
                 f"{r['name']} ({r['own']:.0f}% \u2192 {r['own'] + r['miss']:.0f}%)"
@@ -1313,6 +1311,18 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
             f"{b['name']}{' — ' + b['reason'] if b['reason'] else ''}"
             + ("" if b["matched"] else " (no player by that name)") for b in lever))
 
+    # G14 + G12 (Win Not Cash and Juice The Live Piece reports, Nov 15): on 5-7
+    # games the 150 takes only Stokastic's lineups with one live piece (the
+    # fewest-owned player at 2-10% own), after the lineups that floor each stud
+    # at 5-20% own to 1.5x his own. The 20s and other slates are unchanged.
+    win = None if o.get("liveOff") else NB.win_spec(n_games)
+    win_shadow = {}
+    act_now = [p for p in players if NB.is_active(p, inj)]
+    if win and n_big:
+        say("info", "One live piece tonight (5-7 games): the 150 is picked only from "
+                    "Stokastic's lineups whose fewest-owned player is projected at 2-10% "
+                    "own, and studs at 5-20% own are floored at 1.5x their own.")
+
     sets, all_notes = {}, []
     for kind, n in (("big", n_big), ("small", n_small)):
         if not n:
@@ -1342,7 +1352,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
         res = NB.build_set(players, n, n_games, field, inj, bcaps, floors, seed, history,
                            slotting=C.best_slotting, copies=copies,
                            file_pick=o.get("filePick") or None, raises=mu_raise,
-                           anchor=anc)
+                           anchor=anc, win=win if kind == "big" else None)
         sets[kind] = res
         if kind == "small" and LN["levApplied"]:
             sh = NB.build_set(players, n, n_games, field, inj, bcaps, floors, seed, history,
@@ -1358,15 +1368,15 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                               file_pick=o.get("filePick") or None, raises=mu_raise,
                               anchor=anc)
             shadow[kind] = [[[p.name for p in r] for r in ros] for ros, _s in sh["chunks"]]
-        if od_calls:
-            ocaps = dict(bcaps)
-            for k, v in FP.shadow_caps(od_calls, n).items():
-                ocaps[k] = min(ocaps.get(k, v), v)
-            sh = NB.build_set(players, n, n_games, field, inj, ocaps, floors, seed,
-                              history, slotting=C.best_slotting, copies=copies,
-                              file_pick=o.get("filePick") or None, raises=mu_raise,
-                              anchor=anc)
-            od_shadow[kind] = [[[p.name for p in r] for r in ros] for ros, _s in sh["chunks"]]
+        if win and kind == "big":
+            # G14's two shadows: the rare pair (to 20 fires), and the 150 without
+            # the rule (the cash rate with and without it, graded in the review).
+            for nm, w_ in (("rarepair", NB.win_spec(n_games, pair=NB.RARE_PAIR)), ("nolive", None)):
+                sh = NB.build_set(players, n, n_games, field, inj, bcaps, floors, seed,
+                                  history, slotting=C.best_slotting, copies=copies,
+                                  file_pick=o.get("filePick") or None, raises=mu_raise,
+                                  anchor=anc, win=w_)
+                win_shadow[nm] = [[p.name for p in r] for r in sh["rosters"]]
         label = "150-max" if kind == "big" else "20-max"
         for t in res["notes"]:
             all_notes.append(f"{label}: {t}")
@@ -1481,10 +1491,20 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
         settings["leverage"]["shadow20"] = NB.save_shadow("leverage20", {
             "pick": LN["levPick"]["name"], "k": LV.SHADOW_20, "games": n_games,
             "sets": lev20_shadow})
-    if od_shadow:
-        settings["field"]["shadow"] = NB.save_shadow("overdraft", {
-            "calls": [{k: r[k] for k in ("name", "own", "pred", "miss")} for r in od_calls],
-            "capK": FP.CAP_K, "games": n_games, "sets": od_shadow})
+    # G14's nightly log (for the slate-by-slate question at 20 nights): the five
+    # highest ownerships summed, the live candidates, the set's live share, and
+    # the two shadow sets.
+    settings["win"] = {
+        "applied": bool(win and n_big and not o.get("liveOff")),
+        "off": bool(o.get("liveOff")),
+        "top5Own": NB.top5_own(act_now),
+        "liveCandidates": [{"name": p.name, "own": round(p.ownership, 1),
+                            "proj": round(p.proj, 1), "salary": p.salary}
+                           for p in NB.live_candidates(act_now)],
+        "big": (sets.get("big") or {}).get("meta", {}).get("win")}
+    if win_shadow:
+        settings["win"]["shadow"] = NB.save_shadow("live", {
+            "games": n_games, "rarePair": NB.RARE_PAIR, "sets": win_shadow})
     if shadow:
         settings["weakChalk"]["shadow"] = NB.save_shadow("weakchalk", {
             "calls": [p.name for p in R["calls"] if p.dk_id in R["out_ids"]],
