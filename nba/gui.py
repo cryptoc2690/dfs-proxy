@@ -214,7 +214,8 @@ INDEX_HTML = r"""<!doctype html>
       <label style="margin-top:14px">Weak chalk tonight <span id="weakwho" class="muted">— drop the projections first</span></label>
       <div id="weaklist"></div>
       <div class="picknote">Chalk (20%+ owned) with a shaky role and no role change:
-        off the bench, a teammate at his position back tonight, or projected under
+        off the bench, a teammate at his position back tonight (one he played
+        without), or projected under
         22 minutes, with no takeover, minutes lift or new starting job. On 2–4 games
         a ticked player is left out of every lineup; untick one to keep him. On 5+
         games it is a shadow only: the build is unchanged and the set without them

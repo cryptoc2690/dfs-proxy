@@ -14,7 +14,7 @@ in `app.py`: kept for showdown and for after-the-fact replays only.
 
 | | 2-4 games | 5-7 games | 8+ games |
 |---|---|---|---|
-| 150 | all from your pool | all from Stokastic's lineups, one live piece (G14 + G12) | 75 Stokastic / 75 pool (old draw) |
+| 150 | all from your pool | all from Stokastic's lineups, one live piece (G14) | 75 Stokastic / 75 pool (old draw) |
 | 20-max | from your pool, top three owned raised to 2x | same | same (old draw) |
 
 - Pool lineups: slot-first draw (projection^2.5, within $300 of the cap) kept inside
@@ -27,7 +27,8 @@ in `app.py`: kept for showdown and for after-the-fact replays only.
 - **Weak chalk (Nov 13, Weak Chalk Rebuild report):** chalk at 20%+ projected own
   with no role change (no takeover mark, no minutes lift of 5+ over his real last
   five games, no new starting job) that comes off the bench, has a teammate at his
-  position back tonight, or is projected under 22 minutes. On 2-4 games he is left
+  position back tonight (one he played without; Nov 17: a teammate who was out in the
+  same games does not count), or is projected under 22 minutes. On 2-4 games he is left
   out of every lineup, the 150 and the 20s; on 5+ games it is a shadow build, logged
   only (`logs/shadow/<date>/`). Settings shows the night's calls as soon as the
   projections are dropped; untick one to keep him. Real minutes and starts come from
@@ -53,22 +54,30 @@ in `app.py`: kept for showdown and for after-the-fact replays only.
   lineups that hold the most scattered players; chalk is untouched. Settings shows the
   pick; choose another or None. The 20s get a shadow (6 of 20, logged only). A
   "Leverage" box logs the sharp's leverage plays.
-- **One live piece and the low-owned stud floor (G14 + G12, Nov 15, Win Not Cash and
-  Juice The Live Piece reports):** on 5-7 games the 150 was mostly the field's own
-  lineups (the top of Stokastic's order is entered 20-40 times each), so its top
-  finishes were shared. Now each stud ($9,000+, projected 30+) at 5-20% own whom the
-  plain pick holds under 1.5x his own gets that many lineups first, from the whole
-  file in its order; then the rest of the 150 comes only from Stokastic's lineups
-  whose fewest-owned player is projected at 2-10% (no all-chalk lineup, nobody under
-  2%). If fewer than 3x the lineups needed have one, the whole file is used. The cap,
-  the takeover lean, G10 and G11 work as before. Review: +0.99 top-1% lineups a
-  contest with shared finishes split (11 nights, up 7, down 3); cost 1.0 a lineup and
-  the cash rate 36% to 34%. The 20s and the other slates are unchanged. Logged each
-  night (`settings.win`): the five highest ownerships summed, the players at 2-10%
-  own projected 20+, the floors, the set's live share; and two shadow sets in
-  `logs/shadow/<date>/<time>_live.json`: the rare pair (the two fewest-owned players'
-  ownerships multiplied under 0.75%, judged at 20 fires) and the 150 without the
-  rule (for the cash rate with and without it).
+- **One live piece (G14, Nov 15, Win Not Cash and Juice The Live Piece reports):** on
+  5-7 games the 150 was mostly the field's own lineups (the top of Stokastic's order is
+  entered 20-40 times each), so its top finishes were shared. Now the 150 comes only
+  from Stokastic's lineups whose fewest-owned player is projected at 2-10% (no
+  all-chalk lineup, nobody under 2%). If fewer than 3x the lineups needed have one, the
+  whole file is used. The cap, the takeover lean, G10 and G11 work as before. Review
+  (Contest Review 11-17, 13 nights): +1.10 top-1% lineups a contest with shared
+  finishes split (up 10, down 2); cost 1.7 a lineup and the cash rate 3.1 points. The
+  20s and the other slates are unchanged. Logged each night (`settings.win`): the five
+  highest ownerships summed, the players at 2-10% own projected 20+, the set's live
+  share; and three shadow sets in `logs/shadow/<date>/<time>_live.json`: the rare pair
+  (the two fewest-owned players' ownerships multiplied under 0.75%, judged at 20
+  fires), the 150 without the rule, and the 150 with G12's stud floor (below), with
+  the stud G11 named that night.
+- **G12, the low-owned stud floor, is a shadow (Nov 17, Contest Review 11-17).** Built
+  Nov 15 (studs $9,000+, projected 30+, at 5-20% own floored at 1.5x their own before
+  G14's pick); it lost 1.9 and 1.5 split top-1% lineups on its two live nights and is
+  behind G14 alone over 13. Saved nightly as the `studfloor` shadow; build at 20 fires
+  if ahead by 0.3+ split top-1% lineups a contest. `grade_night.py` rebuilds Nov 15-16
+  with it, as they were played.
+- **The stud load (Nov 17), shown and logged only:** studs ($9,000+) a lineup in
+  Stokastic's best 150, the field as projected (the studs' own summed) and each built
+  set (`settings.studLoad`). A warning when the 150 holds twice the file's rate or more
+  (Nov 16: 0.32 / 0.43 / 0.75). Nothing in the build reads it.
 - One cap (85% of a 150, 90% of a 20); a 150 has nobody in fewer than 4 lineups.
 - The 150's takeover lean: a player whose projection is 1.3x his normal because a
   regular is out (the takeover mark), at 15%+ projected own, is floored at 1.5x his own

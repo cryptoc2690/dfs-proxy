@@ -316,7 +316,11 @@ def marks(active, takeover_ids, logs):
                 if q is p or q.team != p.team or q.proj < BACK_PROJ or _group(q.pos) != grp:
                     continue
                 qh = [x for x in G.get(jk(q), []) if x["team"] == p.team]
-                if qh and qh[-1]["date"] < last:
+                # Contest Review 11-17: he counts only if the called player played
+                # in at least one of the games he missed (Mitchell and Harden were
+                # out together on Nov 14; neither was "back" for the other).
+                if qh and qh[-1]["date"] < last and any(
+                        x["team"] == p.team and x["date"] > qh[-1]["date"] for x in H):
                     back.append(q.name)
                     # Teammate Back report (Nov 14): log who came back, so the split
                     # "a regular starter back" against "a bench player back" can be

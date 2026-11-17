@@ -81,6 +81,9 @@ STUD = 9000
 # the plain pick holds under 1.5x his own gets his lineups picked first, from
 # the whole file in its order. RARE_PAIR: the shadow (the two fewest-owned
 # players' ownerships multiplied under 0.75% of the field).
+# Nov 17 (Contest Review 11-17): G12 is OFF in the live build and back to a
+# shadow (the 150 with the floor, saved each night). It lost 1.9 and 1.5 split
+# top-1% lineups on its two live nights; G14 alone is ahead over 13 nights.
 LIVE_LO, LIVE_HI, LIVE_LEFT_K = 2.0, 10.0, 3
 LIVE_GAMES = (5, 7)
 STUD_FLOOR_LO, STUD_FLOOR_HI, STUD_FLOOR_K, STUD_FLOOR_PROJ = 5.0, 20.0, 1.5, 30.0
@@ -491,11 +494,21 @@ def file_candidates(field_lineups, active_ids, slotting):
 
 
 # --- one live piece (G14), the stud floor (G12) ------------------------------
-def win_spec(games, pair=None):
-    """The G14 + G12 spec for a slate, or None when it does not fire."""
+def win_spec(games, pair=None, stud_floor=False):
+    """The G14 spec for a slate, or None when it does not fire. stud_floor: add
+    G12's floor (a shadow since Nov 17; True only for the shadow set and for
+    rebuilding Nov 15-16, which were built with it)."""
     if not (LIVE_GAMES[0] <= games <= LIVE_GAMES[1]):
         return None
-    return {"band": (LIVE_LO, LIVE_HI), "pair": pair, "studFloor": True}
+    return {"band": (LIVE_LO, LIVE_HI), "pair": pair, "studFloor": bool(stud_floor)}
+
+
+def stud_load(rosters):
+    """Studs ($9,000+) a lineup in a set of rosters (logged, Nov 17)."""
+    rosters = list(rosters)
+    if not rosters:
+        return None
+    return round(sum(1 for r in rosters for p in r if p.salary >= STUD) / len(rosters), 2)
 
 
 def live_ok(c, band, pair=None):
@@ -717,7 +730,8 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
     lineups built around that player replacing the k lineups that hold the
     most scattered positions (the leverage block, G11). win: win_spec(games),
     the 150's file pick on 5-7 games takes only lineups with one live piece,
-    after the low-owned studs' floors (G14 + G12). chunks = [(rosters,
+    after the low-owned studs' floors when win["studFloor"] (G12, a shadow
+    since Nov 17). chunks = [(rosters,
     sources)] one per copy."""
     notes = []
     caps = dict(caps or {})

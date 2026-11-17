@@ -1744,7 +1744,8 @@ check("live piece: the fewest-owned player at 2-10% is live; all chalk, or anyon
       and not NB.live_ok(_wc([_WP(0, 5), _WP(1, 20)] + [_WP(i, 30) for i in range(2, 8)]), (2, 10), 0.75))
 check("live piece: fires on 5-7 games only",
       NB.win_spec(4) is None and NB.win_spec(8) is None and NB.win_spec(5)["band"] == (2.0, 10.0)
-      and NB.win_spec(7)["studFloor"] and NB.win_spec(6, pair=0.75)["pair"] == 0.75)
+      and not NB.win_spec(7)["studFloor"] and NB.win_spec(7, stud_floor=True)["studFloor"]
+      and NB.win_spec(6, pair=0.75)["pair"] == 0.75)
 check("stud floor: a stud at 5-20% own held under 1.5x gets it; held enough, too chalky or projected under 30 does not",
       NB.stud_floors([_wstud], [], 150) == {"99": 22}
       and NB.stud_floors([_wstud], [_wc([_wstud])] * 22, 150) == {}
@@ -1772,8 +1773,10 @@ nb90 = app.run_build(PROJ5, FIELD5, DK5, {"pool": _pool5})
 _r90 = _rows_of(_k90)
 _w90 = _r90[0]["settings"].get("win") or {}
 _sh90 = json.load(open(_w90["shadow"])) if _w90.get("shadow") and os.path.exists(_w90["shadow"]) else {}
-check("build (5 games): G14 + G12 applied to the 150, logged with the nightly numbers and both shadow sets",
+check("build (5 games): G14 alone applied to the 150 (G12 off since Nov 17), logged with the nightly numbers and three shadow sets",
       not nb90.get("error") and _w90.get("applied") and _w90.get("top5Own", 0) > 0
+      and not _w90.get("studFloor") and not (_w90.get("big") or {}).get("studFloors")
+      and len(_sh90.get("sets", {}).get("studfloor", [])) == 150 and "g11Stud" in _sh90
       and isinstance(_w90.get("liveCandidates"), list) and (_w90.get("big") or {}).get("fileLive", 0) > 0
       and "liveShare" in _w90["big"] and len(_sh90.get("sets", {}).get("rarepair", [])) == 150
       and len(_sh90["sets"].get("nolive", [])) == 150 and _sh90.get("rarePair") == 0.75
@@ -1783,10 +1786,34 @@ _k91 = _nlog()
 nb91 = app.run_build(PROJ5, FIELD5, DK5, {"pool": _pool5, "liveOff": True})
 _r91 = _rows_of(_k91)
 _nm = lambda rows, cid: [sorted(p["name"] for p in r["players"]) for r in rows if r["contest_id"] == cid]
+_fb90 = (_w90.get("big") or {}).get("fellBack")
 check("build: the 20s are untouched by the rule, and liveOff (the grader) builds the 150 as before",
-      _nm(_r90, "900002") == _nm(_r91, "900002") and _nm(_r90, "900001") != _nm(_r91, "900001")
+      _nm(_r90, "900002") == _nm(_r91, "900002")
+      and (_nm(_r90, "900001") == _nm(_r91, "900001")) == bool(_fb90)
       and not _r91[0]["settings"]["win"]["applied"] and _r91[0]["settings"]["win"]["big"] is None
-      and _nm(_r91, "900001") == [sorted(r) for r in _sh90["sets"]["nolive"]])
+      and _nm(_r91, "900001") == [sorted(r) for r in _sh90["sets"]["nolive"]],
+      f"fellBack={_fb90} fileLive={(_w90.get('big') or {}).get('fileLive')}")
+
+_sl90 = _r90[0]["settings"].get("studLoad") or {}
+check("stud load: studs a lineup logged for Stokastic's best 150, the field, the 150 and each 20, and shown",
+      all(isinstance(_sl90.get(k), (int, float)) for k in ("file150", "field", "big"))
+      and len(_sl90.get("small") or []) >= 1
+      and any("Studs ($9,000+) a lineup" in n["text"] for n in nb90["notes"]), str(_sl90))
+check("stud load: counts $9,000+ players a lineup",
+      NB.stud_load([[_WP(1, 5, sal=9000), _WP(2, 5, sal=8900)], [_WP(3, 5, sal=10000), _WP(4, 5, sal=11000)]]) == 1.5
+      and NB.stud_load([]) is None)
+_k92 = _nlog()
+nb92 = app.run_build(PROJ5, FIELD5, DK5, {"pool": _pool5, "studFloor": True})
+_w92 = _rows_of(_k92)[0]["settings"]["win"]
+check("grader: a night built with G12 (Nov 15-16) rebuilds with the floor, and matches tonight's G12 shadow",
+      _w92["studFloor"] and "studfloor" not in (json.load(open(_w92["shadow"]))["sets"])
+      and _nm(_rows_of(_k92), "900001") == [sorted(r) for r in _sh90["sets"]["studfloor"]])
+_bg2 = {"chalk guard": [{"date": _day(i), "team": "AAA", "mins": 33.0, "dk": 30.0, "starter": True}
+                        for i in range(4)],
+        "back starter": _bg["back starter"]}
+_bm2 = RL.marks([_pa, _pb], set(), {"games": _bg2, "team_dates": {"AAA": [_day(i) for i in range(5)]}})
+check("teammate back (Nov 17): a teammate who was out in the same games is not 'back'",
+      _bm2["chalk guard"]["back"] == [] and not _bm2["chalk guard"]["weak"], str(_bm2["chalk guard"]["back"]))
 
 # The summary and exit MUST stay last — appending a new section after them
 # silently skips it and the suite still reports a clean pass.

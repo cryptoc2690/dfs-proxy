@@ -486,7 +486,8 @@ def main(argv):
     st = typed.get("settings") or {}
     options = dict(options, slateDate=day, weakChalkOff=("weakChalk" not in st),
                    matchupOff=("matchup" not in st), leverOff=("leverage" not in st),
-                   liveOff=("win" not in st))
+                   liveOff=("win" not in st),
+                   studFloor=("win" in st and st["win"].get("studFloor", True)))
     if "filePick" not in ((st.get("sets") or {}).get("big") or {}):
         options["filePick"] = "top10"          # built before the Nov 13 file pick
     spread = seed_spread(inp, options, date)

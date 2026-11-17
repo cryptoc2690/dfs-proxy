@@ -1311,17 +1311,17 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
             f"{b['name']}{' — ' + b['reason'] if b['reason'] else ''}"
             + ("" if b["matched"] else " (no player by that name)") for b in lever))
 
-    # G14 + G12 (Win Not Cash and Juice The Live Piece reports, Nov 15): on 5-7
-    # games the 150 takes only Stokastic's lineups with one live piece (the
-    # fewest-owned player at 2-10% own), after the lineups that floor each stud
-    # at 5-20% own to 1.5x his own. The 20s and other slates are unchanged.
-    win = None if o.get("liveOff") else NB.win_spec(n_games)
+    # G14 (Win Not Cash and Juice The Live Piece reports, Nov 15): on 5-7 games
+    # the 150 takes only Stokastic's lineups with one live piece (the fewest-owned
+    # player at 2-10% own). The 20s and other slates are unchanged. G12 (the
+    # low-owned stud floor) is a shadow since Nov 17 (Contest Review 11-17);
+    # studFloor=True only when the grader rebuilds Nov 15-16.
+    win = None if o.get("liveOff") else NB.win_spec(n_games, stud_floor=o.get("studFloor"))
     win_shadow = {}
     act_now = [p for p in players if NB.is_active(p, inj)]
     if win and n_big:
         say("info", "One live piece tonight (5-7 games): the 150 is picked only from "
-                    "Stokastic's lineups whose fewest-owned player is projected at 2-10% "
-                    "own, and studs at 5-20% own are floored at 1.5x their own.")
+                    "Stokastic's lineups whose fewest-owned player is projected at 2-10% own.")
 
     sets, all_notes = {}, []
     for kind, n in (("big", n_big), ("small", n_small)):
@@ -1369,9 +1369,13 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                               anchor=anc)
             shadow[kind] = [[[p.name for p in r] for r in ros] for ros, _s in sh["chunks"]]
         if win and kind == "big":
-            # G14's two shadows: the rare pair (to 20 fires), and the 150 without
-            # the rule (the cash rate with and without it, graded in the review).
-            for nm, w_ in (("rarepair", NB.win_spec(n_games, pair=NB.RARE_PAIR)), ("nolive", None)):
+            # G14's shadows: the rare pair (to 20 fires), the 150 without the rule
+            # (the cash rate with and without it), and the 150 with G12's stud
+            # floor (back to shadow Nov 17; build at 20 fires if ahead by 0.3+).
+            shw = [("rarepair", NB.win_spec(n_games, pair=NB.RARE_PAIR)), ("nolive", None)]
+            if not win.get("studFloor"):
+                shw.append(("studfloor", NB.win_spec(n_games, stud_floor=True)))
+            for nm, w_ in shw:
                 sh = NB.build_set(players, n, n_games, field, inj, bcaps, floors, seed,
                                   history, slotting=C.best_slotting, copies=copies,
                                   file_pick=o.get("filePick") or None, raises=mu_raise,
@@ -1391,6 +1395,32 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                 f"{by_id[k].name} {v} of {n}" for k, v in caps.items() if k in by_id))
     for t in all_notes:
         say("info", t, "check", t)
+
+    # The stud load (Contest Review 11-17): studs ($9,000+) a lineup in
+    # Stokastic's best 150, the field as projected (the studs' own summed) and
+    # each built set. Logged and shown only; nothing in the build reads it.
+    _sfc = NB.file_candidates(field or [], {p.dk_id for p in act_now}, C.best_slotting)
+    _sfc = sorted(_sfc, key=lambda c: -c["proj"])[:150]
+    stud_load = {
+        "file150": NB.stud_load(c["ps"] for c in _sfc),
+        "field": round(sum(p.ownership for p in act_now if p.salary >= NB.STUD) / 100.0, 2),
+        "big": NB.stud_load((sets.get("big") or {}).get("rosters") or []),
+        "small": [NB.stud_load(ros) for ros, _s in (sets.get("small") or {}).get("chunks") or []]}
+    _parts = []
+    if stud_load["file150"] is not None:
+        _parts.append(f"Stokastic's best 150 {stud_load['file150']:.2f}")
+    _parts.append(f"the field (projected) {stud_load['field']:.2f}")
+    if stud_load["big"] is not None:
+        _parts.append(f"our 150 {stud_load['big']:.2f}")
+    for i, v in enumerate(stud_load["small"]):
+        if v is not None:
+            _parts.append(f"our 20{' #' + str(i + 1) if len(stud_load['small']) > 1 else ''} {v:.2f}")
+    _heavy = (stud_load["big"] is not None and stud_load["file150"]
+              and stud_load["big"] >= 2 * stud_load["file150"])
+    say("warn" if _heavy else "info",
+        "Studs ($9,000+) a lineup: " + ", ".join(_parts)
+        + (". The 150 holds twice the studs of Stokastic's best lineups or more. Check it "
+           "before entering" if _heavy else "") + ". Shown only; it does not change the build.")
 
     active = [p for p in players if NB.is_active(p, inj)]
     NM = NB.normals(history, players)
@@ -1494,9 +1524,11 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
     # G14's nightly log (for the slate-by-slate question at 20 nights): the five
     # highest ownerships summed, the live candidates, the set's live share, and
     # the two shadow sets.
+    settings["studLoad"] = stud_load
     settings["win"] = {
         "applied": bool(win and n_big and not o.get("liveOff")),
         "off": bool(o.get("liveOff")),
+        "studFloor": bool(win and win.get("studFloor")),
         "top5Own": NB.top5_own(act_now),
         "liveCandidates": [{"name": p.name, "own": round(p.ownership, 1),
                             "proj": round(p.proj, 1), "salary": p.salary}
@@ -1504,7 +1536,9 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
         "big": (sets.get("big") or {}).get("meta", {}).get("win")}
     if win_shadow:
         settings["win"]["shadow"] = NB.save_shadow("live", {
-            "games": n_games, "rarePair": NB.RARE_PAIR, "sets": win_shadow})
+            "games": n_games, "rarePair": NB.RARE_PAIR, "sets": win_shadow,
+            # G12's shadow is read split by whether G11 named a stud (Nov 17)
+            "g11Stud": (LN.get("levPick") or {}).get("name") if LN.get("levApplied") else None})
     if shadow:
         settings["weakChalk"]["shadow"] = NB.save_shadow("weakchalk", {
             "calls": [p.name for p in R["calls"] if p.dk_id in R["out_ids"]],

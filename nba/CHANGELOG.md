@@ -2,6 +2,16 @@
 
 Newest first. One entry per change, in plain words: what changed and why.
 
+## Nov 17, 2026
+
+From `NBA Contest Review Report 11-17.md` (Nov 15 and 16 added, 26 nights).
+
+**G12, the low-owned stud floor, is off; G14 runs alone on 5-7 game 150s.** The floor was built Nov 15 ahead of its own pass line because it halved G14's cost. On its two live nights it lost 1.9 and 1.5 split top-1% lineups; on Nov 16 it put 71 lineups on Sengun and Davis on a night the top 1% held almost no studs. Over 13 nights G14 alone is +1.10 split top-1% lineups a contest (up 10, down 2) against +0.90 with the floor, for 0.4 of a point more cost (mean -1.67 a lineup, cash rate -3.1). The floor is saved each night as a shadow (`studfloor` in `logs/shadow/<date>/<time>_live.json`, with the stud G11 named), judged at 20 fires. `grade_night.py` rebuilds Nov 15-16 with the floor, as played.
+
+**"Teammate back" no longer counts a teammate who was out in the same games.** A returning teammate counts only if the called player played in at least one game the teammate missed. Nov 16 is the only time it has happened (Mitchell and Harden both missed Nov 14 and each was called for the other). It feeds G7 (2-4 games) and the G8 shadow; it has changed no live build.
+
+**The stud load is shown and logged before lock** (`settings.studLoad`): studs ($9,000+) a lineup in Stokastic's best 150, the field as projected and each built set, with a warning when the 150 holds twice the file's rate. Nov 16 was 0.32 / 0.43 / 0.75. Nothing in the build reads it.
+
 ## Nov 15, 2026
 
 **On 5-7 game slates the 150 now takes only lineups with one live piece (G14), after floors for the low-owned studs (G12).** From `NBA Win Not Cash Report 11-15.md` and `NBA Juice The Live Piece Report 11-15.md`. Graded with shared finishes split (a finish on a lineup the field entered k times counts 1/k), the new tool's 150 was 32% under the field in the top 1% on Nov 7-14: the top of Stokastic's order, which the tool picks, is the field's own lineups (Nov 14: each of ours entered 25 times on average). Winning lineups are chalk with one live piece: the fewest-owned player near 5%, nobody under 2%.
