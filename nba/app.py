@@ -912,9 +912,10 @@ def _bad_chalk(text, players):
 
 
 def _optimal(text, players):
-    """Stokastic's Optimal % export (Data Hub), dropped in slot 6: {norm name: %}.
-    Any CSV with a player-name column and a column whose name has "optimal" in
-    it. Logged only (Sim Chalk report, Nov 19: the sim against the real night)."""
+    """Stokastic's Optimal % from the projections file when it is the Data Hub
+    export (the same numbers as the Pre-Contest export, plus Optimal % and
+    Leverage): {norm name: %}, empty for the Pre-Contest file. Logged only (Sim
+    Chalk report, Nov 19: the sim against the real night)."""
     import csv
     import io
     out = {}
@@ -1790,7 +1791,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                | {p.dk_id for p in R["box"]["pointsInStarts"]}
                | {p.dk_id for p, _m in R["box"]["firstStarts"]}
                | {r["id"] for r in lmc_lines} | {p.dk_id for p in pool_warn})
-    opt = _optimal(o.get("optimalText"), players)
+    opt = _optimal(proj_text, players)        # the Data Hub export carries it
     settings["boxRead"] = {
         "complete": R["complete"],
         "outs": R["box"]["outs"],
@@ -1861,11 +1862,10 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
             "removed": [r["name"] for r in removed],
             "projection": {"source": "stokastic", "columns": rep["matched"]},
             "contest_state": {}}
-    inputs = {"proj.csv": proj_text, "dk.csv": dk_text, "linestar.csv": linestar_text,
-              "optimal.csv": o.get("optimalText") or ""}
+    inputs = {"proj.csv": proj_text, "dk.csv": dk_text, "linestar.csv": linestar_text}
     for i, t in enumerate(fields):
         inputs[f"lineups_{i + 1}.csv"] = t
-    NB.save_inputs(inputs, {"options": {k: v for k, v in o.items() if k not in ("fieldMore", "optimalText")},
+    NB.save_inputs(inputs, {"options": {k: v for k, v in o.items() if k != "fieldMore"},
                             "settings": settings})
     dk_csv, log_lus, log_ros = None, [], []
     if contests:
@@ -3141,7 +3141,8 @@ def _describe(kind, text):
             # whichever night's file it was.
             return {"ok": True, "format": "showdown" if len(teams) <= 2 else "classic",
                     "teams": teams,
-                    "msg": f"Stokastic ✓ (Std Dev) — {len(live)} players, "
+                    "msg": f"Stokastic ✓ (Std Dev{', Optimal %' if _optimal(text, []) else ''})"
+                           f" — {len(live)} players, "
                            + (" @ ".join(teams) if len(teams) <= 2
                               else f"{len(teams) // 2} games: "
                                    + ", ".join(sorted({p.game for p in live
@@ -3187,11 +3188,6 @@ def _describe(kind, text):
                                             "with the DK standings instead"}
             return {"ok": True, "msg": f"{rep['players']} players, Vegas for "
                                        f"{len(rep['teams'])} teams (logged only)"}
-        if kind == "optimal":
-            opt = _optimal(text, [])
-            if not opt:
-                return {"ok": False, "msg": "no player column and Optimal % column found"}
-            return {"ok": True, "msg": f"Optimal % for {len(opt)} players (logged only)"}
         if kind == "standings":
             rows, rep = read_standings(text)
             if rep.get("error"):

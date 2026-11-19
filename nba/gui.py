@@ -166,16 +166,14 @@ INDEX_HTML = r"""<!doctype html>
 
 <div id="filerail">
   <div class="fslot req" id="s_proj"><b>1 · Stokastic projections</b>
-    <span class="fstate">required — drop or click</span></div>
+    <span class="fstate">required — Pre-Contest or Data Hub export, drop or click</span></div>
   <div class="fslot req" id="s_field"><b>2 · Stokastic lineups</b>
     <span class="fstate">the 150 uses them on 5+ games — drop one or more</span></div>
   <div class="fslot req" id="s_dk"><b>3 · DK entries export</b>
     <span class="fstate">needed to upload — drop or click</span></div>
   <div class="fslot" id="s_ls"><b>4 · LineStar <span style="opacity:.6">(optional)</span></b>
     <span class="fstate">only warns if it has a player at 0</span></div>
-  <div class="fslot" id="s_opt"><b>5 · Stokastic Optimal % <span style="opacity:.6">(optional)</span></b>
-    <span class="fstate">Data Hub export at the build — logged only</span></div>
-  <div class="fslot" id="s_st"><b>6 · DK contest standings <span style="opacity:.6">(live or final)</span></b>
+  <div class="fslot" id="s_st"><b>5 · DK contest standings <span style="opacity:.6">(live or final)</span></b>
     <span class="fstate">grade last night's build — drop or click</span></div>
 </div>
 
@@ -319,7 +317,7 @@ INDEX_HTML = r"""<!doctype html>
 
 <script>
 const $ = s => document.querySelector(s);
-const files = {proj:null, field:null, fieldMore:[], dk:null, linestar:null, optimal:null, standings:null};
+const files = {proj:null, field:null, fieldMore:[], dk:null, linestar:null, standings:null};
 const fileNames = {};
 let result = null, roster = [], fmt = 'showdown', fmtFromDk = false;
 // Which teams each file covers, and the slots themselves, so the projections
@@ -446,7 +444,6 @@ slot('proj', $('#s_proj'));
 slot('field', $('#s_field'));
 slot('dk', $('#s_dk'));
 slot('linestar', $('#s_ls'));
-slot('optimal', $('#s_opt'));
 slot('standings', $('#s_st'));
 
 // Projections and DK entries must be the same night. Either can be the stale
@@ -805,8 +802,7 @@ $('#go').addEventListener('click', async () => {
           matchupSkip: matchupSkip(),
           leverPick: leverPick(),
           leverage: $('#leverbox').value,
-          dkCalls: $('#dkcalls').value,
-          optimalText: files.optimal || ''
+          dkCalls: $('#dkcalls').value
         }
       })
     });

@@ -1927,8 +1927,9 @@ check("DK calls: starter, bench and if/then lines are read and named",
                                           _mk("Kevon Looney", 5, False, 20),
                                           _mk("Deni Avdija", 5, True, 20)])]
       == ["notStarting", "starting", "ifthen"])
-check("Optimal %: any CSV with a player column and an Optimal % column",
-      app._optimal("Player,Salary,Optimal %\nA B,3000,12.5%\n", []) == {"a b": 12.5})
+check("Optimal %: read from the Data Hub projections export; none from the Pre-Contest one",
+      app._optimal("Player,Salary,Projection,Optimal %\nA B,3000,20,12.5\n", []) == {"a b": 12.5}
+      and app._optimal("Player,Salary,Projected FP\nA B,3000,20\n", []) == {})
 _sum = {"header": {"competitions": [{"competitors": [
             {"team": {"id": "1", "abbreviation": "AAA"}, "homeAway": "home"},
             {"team": {"id": "2", "abbreviation": "BBB"}, "homeAway": "away"}]}]},

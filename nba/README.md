@@ -85,8 +85,8 @@ in `app.py`: kept for showdown and for after-the-fact replays only.
   - **Shown only:** the tip waves and when to pull for each (G22), players at 5%+ own
     not in the pool with their box-score line (G23), the low-minute chalk line (G24),
     first starts Stokastic is guessing at, the center split.
-  - **Shadows** in `logs/shadow/<date>/<time>_nov19.json`; DK's calls box and the
-    Optimal % slot are logged only; the rotation record is saved each morning in
+  - **Shadows** in `logs/shadow/<date>/<time>_nov19.json`; DK's calls box is logged only (slot 1 takes the Data Hub
+    export too; its Optimal % is logged); the rotation record is saved each morning in
     `logs/espn/rot_<date>.json`.
 - **The stud load (Nov 17), shown and logged only:** studs ($9,000+) a lineup in
   Stokastic's best 150, the field as projected (the studs' own summed) and each built
