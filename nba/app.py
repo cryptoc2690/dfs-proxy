@@ -33,6 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import classic as C
 import engine as E
+import boxread as BR
 import field as FP
 import leverage as LV
 import matchup as MU
@@ -910,6 +911,66 @@ def _bad_chalk(text, players):
     return out
 
 
+def _optimal(text, players):
+    """Stokastic's Optimal % export (Data Hub), dropped in slot 6: {norm name: %}.
+    Any CSV with a player-name column and a column whose name has "optimal" in
+    it. Logged only (Sim Chalk report, Nov 19: the sim against the real night)."""
+    import csv
+    import io
+    out = {}
+    if not (text or "").strip():
+        return out
+    try:
+        rows = list(csv.DictReader(io.StringIO(text.lstrip("﻿"))))
+    except csv.Error:
+        return out
+    if not rows:
+        return out
+    cols = list(rows[0].keys())
+    name_c = next((c for c in cols if (c or "").strip().lower() in ("player", "name", "player name")),
+                  None)
+    opt_c = next((c for c in cols if "optimal" in (c or "").lower()
+                  and "cpt" not in (c or "").lower()), None)
+    if not name_c or not opt_c:
+        return out
+    for r in rows:
+        k = normalize_name(r.get(name_c) or "")
+        if k:
+            out[k] = _f(str(r.get(opt_c) or "").replace("%", "").strip(), None)
+    return out
+
+
+def _dk_calls(text, players):
+    """DK's (the usual sharp's) starter and if/then calls, one per line, typed as he
+    posted them ("Looney starts", "Shannon bench — Cody Williams instead", "If
+    Avdija out: Dame, Jrue usage; Scoot minutes", "4:16pm ..."). -> [{typed,
+    names, kind, matched}]. Logged only (Rotation Read, Nov 19): graded against
+    Stokastic's starters at about 20 calls."""
+    by_name = {normalize_name(p.name): p for p in players}
+    last = collections.defaultdict(list)
+    for k in by_name:
+        parts = k.split()
+        if len(parts) >= 2:
+            last[parts[-1]].append(k)
+    out = []
+    for raw in re.split(r"[\r\n]+", text or ""):
+        line = raw.strip()
+        if not line:
+            continue
+        low = normalize_name(line)
+        found = [by_name[k].name for k in by_name if len(k) > 4 and k in low]
+        for w in low.split():
+            if len(last.get(w, [])) == 1 and by_name[last[w][0]].name not in found:
+                found.append(by_name[last[w][0]].name)
+        kind = ("ifthen" if re.match(r"\s*if\b", line, re.I) else
+                "notStarting" if re.search(r"bench|n't start|not start|not starting", line, re.I)
+                else "starting" if re.search(r"\bstart", line, re.I) else "other")
+        tm = re.search(r"\b(\d{1,2}:\d{2}\s*[ap]m)\b", line, re.I)
+        out.append({"typed": line, "names": found, "kind": kind, "matched": bool(found),
+                    "posted": tm.group(1) if tm else None})
+    return out
+
+
 def role_night(players, inj, history, n_games, o):
     """The night's role marks (role.py): weak chalk calls, the Bones-type list,
     the slate traits. Fetches any missing ESPN box scores first.
@@ -937,7 +998,18 @@ def role_night(players, inj, history, n_games, o):
     applied = n_games <= 4 and complete and not o.get("weakChalkOff")
     bones = sorted((p for p in active if M[normalize_name(p.name)]["bones"]),
                    key=lambda p: -p.proj)
-    return {"day": day.isoformat(), "date": day, "logs": logs, "active": active,
+    # The Nov 19 box-score reads (boxread.py): G20's part-time starters, G21's
+    # owned bench players whose role has not changed (left out on every slate,
+    # unless kept by hand or given a minimum), and the shown and shadow lists.
+    import boxread as BR
+    jk = RL._joiner(logs["games"])
+    BX = BR.night(players, active, logs, jk)
+    g21_kept = [p for p in BX["g21"] if normalize_name(p.name) in keep or p.dk_id in floors]
+    g21_out = ({p.dk_id for p in BX["g21"] if p not in g21_kept}
+               if complete and not o.get("g21Off") else set())
+    g20 = BX["g20"] if complete and not o.get("g20Off") else []
+    return {"day": day.isoformat(), "date": day, "logs": logs, "active": active, "jk": jk,
+            "box": BX, "g21Kept": g21_kept, "g21Out": g21_out, "g20": g20,
             "sync": sync, "days": logs["days"],
             "complete": complete, "applied": applied, "marks": M, "hits": hits,
             "calls": calls, "kept": kept, "out_ids": out_ids, "bones": bones,
@@ -1032,6 +1104,10 @@ def weak_preview(proj_text, options=None):
                        "mins": mk(p)["mins"], "ppm": mk(p)["ppm"],
                        "n6x": mk(p)["n6xSmall"]} for p in R["bones"]],
             "noGames": R["noGames"],
+            "g21": [{"name": p.name, "team": p.team, "salary": p.salary,
+                     "own": round(p.ownership, 1), "proj": round(p.proj, 1),
+                     "mins": R["box"]["reads"][p.dk_id]["mins"],
+                     "last3": R["box"]["reads"][p.dk_id]["rA"]} for p in R["box"]["g21"]],
             "matchup": {"ready": bool(L["mu"] and L["mu"]["ready"]),
                         "why": (L["mu"] or {}).get("why", "box scores missing"),
                         "line": (L["mu"] or {}).get("line"),
@@ -1239,6 +1315,63 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                 p.name == b["name"] for p in R["calls"]) else "") for b in bad))
     weak_caps = R["out_ids"] if R["applied"] else set()
     shadow = {}
+    BXr = R["box"]["reads"]
+    if R["complete"]:
+        g21_live = [p for p in R["box"]["g21"] if p.dk_id in R["g21Out"]]
+        if g21_live:
+            say("info", "Owned bench players whose role hasn't changed, left out of every "
+                        "lineup (G21): " + "; ".join(
+                            f"{p.name} (${p.salary:,}, {p.ownership:.0f}% own, Stokastic "
+                            f"{BXr[p.dk_id]['mins']:.0f} min, last 3 avg {BXr[p.dk_id]['rA']:.0f})"
+                            for p in g21_live)
+                + ". To keep one, untick him under Weak chalk and build again.",
+                "check", f"bench role unchanged out: {len(g21_live)}")
+        if R["g21Kept"]:
+            say("info", "Bench role-unchanged kept by hand: "
+                + ", ".join(p.name for p in R["g21Kept"]))
+        if R["g20"]:
+            say("info", "Part-time starters floored at 2x their own in the 150 and the 20s "
+                        "(G20): " + "; ".join(
+                            f"{p.name} (${p.salary:,}, {p.ownership:.0f}% own, "
+                            f"{BXr[p.dk_id]['starts']} start{'s' if BXr[p.dk_id]['starts'] != 1 else ''}"
+                            f" this season, {BXr[p.dk_id]['minStarts']:.0f} min and "
+                            f"{BXr[p.dk_id]['dkStarts']:.1f} DK in them; out: "
+                            f"{', '.join(BXr[p.dk_id]['regularOut'][:2])})" for p in R["g20"]),
+                "check", f"part-time starters: {len(R['g20'])}")
+        fs = R["box"]["firstStarts"]
+        if fs:
+            say("warn", "Stokastic has these starting and they have NOT started a game this "
+                        "season; their lineups aren't out yet, so the start is a guess "
+                        "(68% of these really started): " + "; ".join(
+                            f"{p.name} ({BXr[p.dk_id]['games']} games, 0 starts"
+                            + (f", tips in {m} min" if m is not None else "") + ")"
+                            for p, m in fs)
+                + ". A fresh pull after his lineup is out settles it.")
+    waves = BR.tip_waves([p for p in players if NB.is_active(p, inj)])
+    if waves:
+        say("info", "Later tip waves — pull a fresh Stokastic file and run late swap (outs "
+                    "only) by: " + "; ".join(
+                        f"{BR.clock(w['pullBy'])} for the {BR.clock(w['tip'])} tip "
+                        f"({', '.join(w['teams'])})" for w in waves)
+            + ". Each wave's lineups are out about 30 minutes before its tip (G22).")
+    dk_calls = _dk_calls(o.get("dkCalls"), players)
+    if dk_calls:
+        say("info", "DK's calls (logged, no effect on the build): " + "; ".join(
+            c["typed"] + ("" if c["matched"] else " (no player by that name)")
+            for c in dk_calls))
+    splits = []
+    if R["complete"]:
+        try:
+            import rotation as RT
+            splits = RT.center_splits(R["box"]["outs"], R["active"], R["jk"], R["date"])
+        except Exception:                                    # noqa: BLE001
+            splits = []
+        sp = [s for s in splits if s["split"]]
+        if sp:
+            say("info", "Center split tonight (logged, no effect): " + "; ".join(
+                f"{s['backup']} with {s['out']} out ({100 * s['shared']:.0f}% of their "
+                f"minutes together; {s['own']:.0f}% own, Stokastic {s['mins']:.0f} min)"
+                for s in sp))
 
     # The field predictor (Predicting The Field report, Nov 13): every player's
     # predicted own and the named over-drafts, logged; a shadow set with each
@@ -1323,7 +1456,25 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
         say("info", "One live piece tonight (5-7 games): the 150 is picked only from "
                     "Stokastic's lineups whose fewest-owned player is projected at 2-10% own.")
 
+    # The Nov 19 build (Step Back, Box Score Read, Rotation Read, Sim Chalk):
+    # G17 the 20s from the 150 on 5+ games; G20 the part-time-starter floor
+    # (2x own, in the 150 and the 20s, beside G10's raises); G21 the owned bench
+    # player whose role has not changed, left out on every slate.
+    BX = R["box"]
+    g20_raise = {p.dk_id: BR.G20_K * p.ownership / 100.0 for p in R["g20"]}
+    raises = dict(mu_raise)
+    for k, v in g20_raise.items():
+        raises[k] = max(raises.get(k, 0.0), v)
+    g21_caps = {k: 0 for k in R["g21Out"]}
+    from150 = n_games >= NB.FROM150_GAMES and not o.get("from150Off")
+    top_owned = max(act_now, key=lambda p: p.ownership) if act_now else None
+    nb_shadow = {}            # the Nov 19 shadow sets: {name: {kind: [[names]]}}
+
+    def names_of(chunks_):
+        return [[[p.name for p in r] for r in ros] for ros, _s in chunks_]
+
     sets, all_notes = {}, []
+    base150 = None            # the 150 the 20s are drawn from (G17)
     for kind, n in (("big", n_big), ("small", n_small)):
         if not n:
             continue
@@ -1348,39 +1499,117 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
             copies = max(1, sum(1 for _c, _n, es in contests if 1 < len(es) <= NB.SMALL_SET))
         bcaps = dict(caps)
         bcaps.update({k: 0 for k in weak_caps})
+        bcaps.update(g21_caps)
         anc = lev_anchor if kind == "big" else None
-        res = NB.build_set(players, n, n_games, field, inj, bcaps, floors, seed, history,
-                           slotting=C.best_slotting, copies=copies,
-                           file_pick=o.get("filePick") or None, raises=mu_raise,
-                           anchor=anc, win=win if kind == "big" else None)
+
+        def bset(n_=n, caps_=None, raises_=None, anchor_=anc, win_=win if kind == "big" else None,
+                 copies_=copies, upper_=None, floors_=floors):
+            return NB.build_set(players, n_, n_games, field, inj,
+                                bcaps if caps_ is None else caps_, floors_, seed, history,
+                                slotting=C.best_slotting, copies=copies_,
+                                file_pick=o.get("filePick") or None,
+                                raises=raises if raises_ is None else raises_,
+                                anchor=anchor_, win=win_, upper=upper_)
+
+        def shadow_of(name, **kw):
+            sh = bset(**kw)
+            nb_shadow.setdefault(name, {})[kind] = names_of(sh["chunks"])
+            return sh
+
+        if kind == "small" and from150:
+            # G17: each 20-max takes 20 of the 150, every 7th lineup.
+            if base150 is None:
+                fl150 = {k: min(v, 150) for k, v in floors.items()}
+                c150 = {k: int(round(v * 150)) for k, v in pc.items()}
+                c150.update({k: 0 for k in weak_caps})
+                c150.update(g21_caps)
+                base150 = bset(n_=150, anchor_=lev_anchor, win_=win, copies_=1,
+                               caps_=c150, floors_=fl150)
+            res = {"rosters": [], "sources": [], "notes": [], "meta": dict(base150["meta"])}
+            res["chunks"] = NB.twenties_from(base150["rosters"], base150["sources"], copies)
+            res["rosters"], res["sources"] = res["chunks"][0]
+            res["meta"]["from150"] = {"step": NB.FROM150_STEP, "copies": len(res["chunks"]),
+                                      "starts": [ci % NB.FROM150_STEP + 1
+                                                 for ci in range(len(res["chunks"]))],
+                                      "entered150": bool(n_big)}
+            res["notes"].append(f"{n_games} games: each 20-max takes 20 of the 150, every "
+                                f"{NB.FROM150_STEP}th lineup (contest 1 from lineup 1, contest 2 "
+                                f"from lineup 2, ...)" + ("" if n_big else
+                                "; the 150 was built for this and not entered"))
+            # G18 (shadow, 5-7 games): the 20s skip the most-owned player.
+            if win and top_owned is not None:
+                nb_shadow.setdefault("g18_skipTopOwned", {})[kind] = names_of(
+                    NB.twenties_from(base150["rosters"], base150["sources"], copies,
+                                     skip=top_owned.dk_id))
+            # Sim Chalk (shadow): the pool-built 20s picked by their upper end, the
+            # Std Dev halved for players projected 24 minutes or under.
+            shadow_of("narrowedSpread20", upper_=NB.upper_sd(act_now))
+        else:
+            res = bset()
         sets[kind] = res
-        if kind == "small" and LN["levApplied"]:
-            sh = NB.build_set(players, n, n_games, field, inj, bcaps, floors, seed, history,
-                              slotting=C.best_slotting, copies=copies,
-                              file_pick=o.get("filePick") or None, raises=mu_raise,
-                              anchor={"id": LN["levPick"]["id"], "k": LV.SHADOW_20})
-            lev20_shadow[kind] = [[[p.name for p in r] for r in ros] for ros, _s in sh["chunks"]]
-        if R["out_ids"] and not R["applied"] and R["complete"] and not o.get("weakChalkOff"):
-            scaps = dict(caps)
+        if kind == "big":
+            base150 = res
+        if kind == "small" and LN["levApplied"] and not from150:
+            sh = bset(anchor_={"id": LN["levPick"]["id"], "k": LV.SHADOW_20})
+            lev20_shadow[kind] = names_of(sh["chunks"])
+        if (R["out_ids"] and not R["applied"] and R["complete"] and not o.get("weakChalkOff")
+                and not (kind == "small" and from150)):
+            scaps = dict(bcaps)
             scaps.update({k: 0 for k in R["out_ids"]})
-            sh = NB.build_set(players, n, n_games, field, inj, scaps, floors, seed,
-                              history, slotting=C.best_slotting, copies=copies,
-                              file_pick=o.get("filePick") or None, raises=mu_raise,
-                              anchor=anc)
-            shadow[kind] = [[[p.name for p in r] for r in ros] for ros, _s in sh["chunks"]]
+            sh = bset(caps_=scaps, win_=None)
+            shadow[kind] = names_of(sh["chunks"])
+            # Box Score Read (shadow): G8's bench calls are dropped when a
+            # box-score minutes read is 3+ over Stokastic's.
+            boxed = {k for k in R["out_ids"] if not (
+                by_id[k].starting is False and k in BX["reads"]
+                and BR.any_over(BX["reads"][k]))}
+            if boxed != R["out_ids"]:
+                scaps = dict(bcaps)
+                scaps.update({k: 0 for k in boxed})
+                shadow_of("weakChalkBoxChecked", caps_=scaps, win_=None)
         if win and kind == "big":
             # G14's shadows: the rare pair (to 20 fires), the 150 without the rule
             # (the cash rate with and without it), and the 150 with G12's stud
             # floor (back to shadow Nov 17; build at 20 fires if ahead by 0.3+).
-            shw = [("rarepair", NB.win_spec(n_games, pair=NB.RARE_PAIR)), ("nolive", None)]
+            # G19 (Step Back, Nov 19): no live piece in more than 5% of the 150.
+            shw = [("rarepair", NB.win_spec(n_games, pair=NB.RARE_PAIR)), ("nolive", None),
+                   ("g19spread", NB.win_spec(n_games, spread=NB.G19_SPREAD))]
             if not win.get("studFloor"):
                 shw.append(("studfloor", NB.win_spec(n_games, stud_floor=True)))
             for nm, w_ in shw:
-                sh = NB.build_set(players, n, n_games, field, inj, bcaps, floors, seed,
-                                  history, slotting=C.best_slotting, copies=copies,
-                                  file_pick=o.get("filePick") or None, raises=mu_raise,
-                                  anchor=anc, win=w_)
+                sh = bset(win_=w_)
                 win_shadow[nm] = [[p.name for p in r] for r in sh["rosters"]]
+        if kind == "big" or not from150:
+            if lev_anchor and kind == "big":
+                # Step Back (shadow): G11's block at 45 lineups instead of 30.
+                shadow_of("g11Block45", anchor_={"id": lev_anchor["id"], "k": LV.SHADOW_BLOCK})
+            if R["g20"]:
+                shadow_of("noG20", raises_=dict(mu_raise))
+            if R["g21Out"]:
+                c_ = dict(caps)
+                c_.update({k: 0 for k in weak_caps})
+                shadow_of("noG21", caps_=c_)
+            cap_own = lambda ps: dict(bcaps, **{p.dk_id: min(bcaps.get(p.dk_id, n),
+                                                            int(round(p.ownership / 100.0 * n)))
+                                                for p in ps})
+            fs = [p for p, _m in BX["firstStarts"]]
+            if fs:
+                # Rotation Read (shadow): a first start Stokastic is guessing at,
+                # held at his projected own.
+                shadow_of("firstStartAtOwn", caps_=cap_own(fs))
+            lmc = [p for p in BX["lowMinuteChalk"] if BR.is_center(p)
+                   and p.dk_id not in R["out_ids"] and p.dk_id not in R["g21Out"]]
+            if lmc:
+                # Sim Chalk (shadow): the low-minute chalk center held at his own.
+                shadow_of("lowMinuteCenterAtOwn", caps_=cap_own(lmc))
+            for nm, ps in (("sensabaughFloor", BX["sensabaugh"]),
+                           ("pointsInStartsFloor", BX["pointsInStarts"])):
+                if ps:
+                    # Box Score Read (shadows): floored at 1.5x own.
+                    r_ = dict(raises)
+                    for p in ps:
+                        r_[p.dk_id] = max(r_.get(p.dk_id, 0.0), BR.SHADOW_K * p.ownership / 100.0)
+                    shadow_of(nm, raises_=r_)
         label = "150-max" if kind == "big" else "20-max"
         for t in res["notes"]:
             all_notes.append(f"{label}: {t}")
@@ -1395,6 +1624,17 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                 f"{by_id[k].name} {v} of {n}" for k, v in caps.items() if k in by_id))
     for t in all_notes:
         say("info", t, "check", t)
+    lmc_lines = []
+    for p in R["box"]["lowMinuteChalk"]:
+        r = BXr.get(p.dk_id) or {}
+        lmc_lines.append({
+            "id": p.dk_id, "name": p.name, "salary": p.salary, "own": round(p.ownership, 1),
+            "proj": round(p.proj, 1), "mins": round(p.minutes or 0, 1),
+            "ppm": round(p.proj / p.minutes, 2) if p.minutes else 0.0,
+            "center": BR.is_center(p), "starting": p.starting,
+            "calledBy": ("G21" if p.dk_id in R["g21Out"] else
+                         "G7" if p.dk_id in weak_caps else ""),
+            "avg10": r.get("avg10"), "best10": r.get("best10")})
 
     # The stud load (Contest Review 11-17): studs ($9,000+) a lineup in
     # Stokastic's best 150, the field as projected (the studs' own summed) and
@@ -1427,6 +1667,24 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
     hits = NB.takeover(players, active, NM, inj)
     for w in NB.before_build(players, active, NM, hits, removed_names, inj):
         say("warn", w)
+    # G23, the pool warning (Box Score Read, Nov 19): every player at 5%+ projected
+    # own not in your pool, with his box-score line. Shown only: nothing is added.
+    pool_warn = []
+    if pool_names:
+        pool_warn = sorted((p for p in active if not p.in_pool and p.ownership >= BR.G23_OWN),
+                           key=lambda p: -p.ownership)
+        if pool_warn:
+            def _mark(p):
+                r = BXr.get(p.dk_id)
+                return bool(r and p.starting is True and r["rD"] is not None
+                            and r["rD"] - r["mins"] >= BR.OVER)
+            say("info", "Not in your pool at 5%+ projected own (shown only; add one to the "
+                        "pool to use him): " + " | ".join(
+                            f"{'★ ' if _mark(p) else ''}{p.name} (${p.salary:,}, "
+                            f"{p.ownership:.0f}%, {p.proj:.0f} proj) — "
+                            + BR.line(p, BXr.get(p.dk_id)) for p in pool_warn)
+                + (". ★ = he's starting and his minutes in his starts are 3+ over "
+                   "Stokastic's." if any(_mark(p) for p in pool_warn) else ""))
     studs_off = NB.off_pool_studs(players, active) if pool_names else []
     if studs_off:
         say("info", "Studs off your pool under 12% projected owned (shown, not used): "
@@ -1517,6 +1775,61 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                     "applied": LN["levApplied"], "why": LN["levWhy"],
                     "block": (sets.get("big") or {}).get("meta", {}).get("leverage")},
                 "leverageCalls": lever}
+    # The Nov 19 logs: every box-score read for players at 10%+ own (and every
+    # player any rule touched), G20 / G21 and the shadow lists, the tip waves,
+    # DK's calls, the center split, the pool warning, the low-minute chalk line,
+    # and the sim against the real night (Stokastic's Optimal % when dropped).
+    def _shares(lus):
+        n_ = max(1, len(lus))
+        c_ = collections.Counter(p.dk_id for lu in lus for p in lu.players)
+        return lambda p: round(100.0 * c_.get(p.dk_id, 0) / n_, 1)
+    share_big = _shares(chosen.get("big") or [])
+    share_small = _shares((chunks.get("small") or [[]])[0])
+    touched = ({p.dk_id for p in R["box"]["g20"]} | {p.dk_id for p in R["box"]["g21"]}
+               | {p.dk_id for p in R["box"]["sensabaugh"]}
+               | {p.dk_id for p in R["box"]["pointsInStarts"]}
+               | {p.dk_id for p, _m in R["box"]["firstStarts"]}
+               | {r["id"] for r in lmc_lines} | {p.dk_id for p in pool_warn})
+    opt = _optimal(o.get("optimalText"), players)
+    settings["boxRead"] = {
+        "complete": R["complete"],
+        "outs": R["box"]["outs"],
+        "reads": [dict(BXr[k], ours150=share_big(by_id[k]), ours20=share_small(by_id[k]))
+                  for k in BXr if k in by_id and (by_id[k].ownership >= 10 or k in touched)],
+        "g20": [dict(name=p.name, own=round(p.ownership, 1), mins=round(p.minutes or 0, 1),
+                     floor=round(BR.G20_K * p.ownership, 1), ours150=share_big(p),
+                     ours20=share_small(p)) for p in R["g20"]],
+        "g20Off": bool(o.get("g20Off")),
+        "g21": [p.name for p in R["box"]["g21"]],
+        "g21Out": [by_id[k].name for k in R["g21Out"] if k in by_id],
+        "g21Kept": [p.name for p in R["g21Kept"]],
+        "g21Off": bool(o.get("g21Off")),
+        "sensabaugh": [p.name for p in R["box"]["sensabaugh"]],
+        "pointsInStarts": [p.name for p in R["box"]["pointsInStarts"]],
+        "firstStarts": [{"name": p.name, "tipsIn": m, "ours150": share_big(p),
+                         "own": round(p.ownership, 1)} for p, m in R["box"]["firstStarts"]],
+        "centerSplits": splits,
+        "poolWarning": [p.name for p in pool_warn],
+        "lowMinuteChalk": [dict(r, ours150=share_big(by_id[r["id"]]),
+                                ours20=share_small(by_id[r["id"]])) for r in lmc_lines]}
+    settings["from150"] = {"applied": bool(from150 and n_small), "step": NB.FROM150_STEP,
+                           "games": n_games, "off": bool(o.get("from150Off")),
+                           "note": "the 20s of any 150 shadow are its every 7th lineup, "
+                                   "contest i from lineup i"}
+    settings["tipWaves"] = waves
+    settings["dkCalls"] = dk_calls
+    settings["simVsReal"] = {
+        "optimalDropped": bool(opt),
+        "players": [{"name": p.name, "own": round(p.ownership, 1), "proj": round(p.proj, 1),
+                     "salary": p.salary, "mins": round(p.minutes or 0, 1),
+                     "optimal": opt.get(normalize_name(p.name)),
+                     "ours150": share_big(p), "ours20": share_small(p)}
+                    for p in active if p.ownership >= 15]}
+    if nb_shadow:
+        settings["nov19Shadows"] = NB.save_shadow("nov19", {
+            "games": n_games, "sets": nb_shadow,
+            "note": "big = the 150, small = the 20s (one list per copy); a shadow with no "
+                    "'small' on 5+ games: its 20s are every 7th lineup of its 150"})
     if lev20_shadow:
         settings["leverage"]["shadow20"] = NB.save_shadow("leverage20", {
             "pick": LN["levPick"]["name"], "k": LV.SHADOW_20, "games": n_games,
@@ -1548,10 +1861,11 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
             "removed": [r["name"] for r in removed],
             "projection": {"source": "stokastic", "columns": rep["matched"]},
             "contest_state": {}}
-    inputs = {"proj.csv": proj_text, "dk.csv": dk_text, "linestar.csv": linestar_text}
+    inputs = {"proj.csv": proj_text, "dk.csv": dk_text, "linestar.csv": linestar_text,
+              "optimal.csv": o.get("optimalText") or ""}
     for i, t in enumerate(fields):
         inputs[f"lineups_{i + 1}.csv"] = t
-    NB.save_inputs(inputs, {"options": {k: v for k, v in o.items() if k != "fieldMore"},
+    NB.save_inputs(inputs, {"options": {k: v for k, v in o.items() if k not in ("fieldMore", "optimalText")},
                             "settings": settings})
     dk_csv, log_lus, log_ros = None, [], []
     if contests:
@@ -1616,6 +1930,17 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                                    "exposure": _exposure(lus, "classic")})
     used = collections.Counter(p.dk_id for lu in show for p in lu.players)
     pct = lambda p: round(100.0 * used.get(p.dk_id, 0) / max(1, len(show)))
+    # G24, the low-minute chalk line (Sim Chalk report, Nov 19). Shown only.
+    if lmc_lines:
+        say("info", "Low-minute chalk (the sim overrates the owned ones; the top 1% hold "
+                    "them at the field's level; shown only): " + " | ".join(
+                        f"{r['name']} (${r['salary']:,}, {r['mins']:.0f} min at "
+                        f"{r['ppm']:.2f} a minute, {'C, ' if r['center'] else ''}"
+                        f"{'starting' if r['starting'] else 'bench'}"
+                        f"{', ' + r['calledBy'] + ' leaves him out' if r['calledBy'] else ''}; "
+                        f"last 10: {r['avg10'] if r['avg10'] is not None else '?'} min, best "
+                        f"{r['best10'] if r['best10'] is not None else '?'}; ours "
+                        f"{pct(by_id[r['id']])}% vs {r['own']:.0f}% own)" for r in lmc_lines))
     zero_chalk = [p for p in active if p.ownership >= 15 and not used.get(p.dk_id)]
     info = {
         "checks": [x["label"] for x in notes if x.get("tag") == "check"],
@@ -2862,6 +3187,11 @@ def _describe(kind, text):
                                             "with the DK standings instead"}
             return {"ok": True, "msg": f"{rep['players']} players, Vegas for "
                                        f"{len(rep['teams'])} teams (logged only)"}
+        if kind == "optimal":
+            opt = _optimal(text, [])
+            if not opt:
+                return {"ok": False, "msg": "no player column and Optimal % column found"}
+            return {"ok": True, "msg": f"Optimal % for {len(opt)} players (logged only)"}
         if kind == "standings":
             rows, rep = read_standings(text)
             if rep.get("error"):
@@ -2947,8 +3277,10 @@ def serve():
     url = f"http://127.0.0.1:{PORT}/"
     print(f"NBA optimizer (classic and showdown) — {url}")
     print("Drop your files in the browser. Ctrl-C here to stop.")
-    import role
-    role.warm()           # last night's box scores, fetched in the background
+    import rotation
+    # last night's box scores, then each day's substitutions (the rotation
+    # record) and the weekly ESPN rosters, all in the background (Nov 19)
+    rotation.warm()
     try:
         webbrowser.open(url)
     except Exception:                                        # noqa: BLE001

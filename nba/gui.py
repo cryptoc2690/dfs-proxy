@@ -173,7 +173,9 @@ INDEX_HTML = r"""<!doctype html>
     <span class="fstate">needed to upload — drop or click</span></div>
   <div class="fslot" id="s_ls"><b>4 · LineStar <span style="opacity:.6">(optional)</span></b>
     <span class="fstate">only warns if it has a player at 0</span></div>
-  <div class="fslot" id="s_st"><b>5 · DK contest standings <span style="opacity:.6">(live or final)</span></b>
+  <div class="fslot" id="s_opt"><b>5 · Stokastic Optimal % <span style="opacity:.6">(optional)</span></b>
+    <span class="fstate">Data Hub export at the build — logged only</span></div>
+  <div class="fslot" id="s_st"><b>6 · DK contest standings <span style="opacity:.6">(live or final)</span></b>
     <span class="fstate">grade last night's build — drop or click</span></div>
 </div>
 
@@ -243,6 +245,12 @@ INDEX_HTML = r"""<!doctype html>
                 placeholder="Alperen Sengun — running the offense&#10;Franz Wagner — Banchero out"></textarea>
       <div class="picknote">One player per line, then a word of why. Saved with the
         build so the reviews can grade the calls. It changes nothing in the build.</div>
+      <label style="margin-top:14px">DK's calls — starters and if/then</label>
+      <textarea id="dkcalls" rows="3" spellcheck="false"
+                placeholder="4:16pm Shannon not starting — Cody Williams or Lyles&#10;Looney starts over Sandro&#10;If Avdija out: Dame, Jrue usage; Jrue starts; Scoot minutes"></textarea>
+      <div class="picknote">One call per line, as he posted it, with the time if you
+        have it. Saved with the build and graded against Stokastic's starters. It
+        changes nothing in the build.</div>
     </div>
     <div>
       <label>Cap individual players <span id="capwho" class="muted">— none set</span></label>
@@ -311,7 +319,7 @@ INDEX_HTML = r"""<!doctype html>
 
 <script>
 const $ = s => document.querySelector(s);
-const files = {proj:null, field:null, fieldMore:[], dk:null, linestar:null, standings:null};
+const files = {proj:null, field:null, fieldMore:[], dk:null, linestar:null, optimal:null, standings:null};
 const fileNames = {};
 let result = null, roster = [], fmt = 'showdown', fmtFromDk = false;
 // Which teams each file covers, and the slots themselves, so the projections
@@ -438,6 +446,7 @@ slot('proj', $('#s_proj'));
 slot('field', $('#s_field'));
 slot('dk', $('#s_dk'));
 slot('linestar', $('#s_ls'));
+slot('optimal', $('#s_opt'));
 slot('standings', $('#s_st'));
 
 // Projections and DK entries must be the same night. Either can be the stale
@@ -508,6 +517,15 @@ function drawWeak(){
     + (d.applied ? '' : ' disabled') + '> ' + esc(c.name)
     + ' <span class="muted">$' + c.salary.toLocaleString() + ', ' + Math.round(c.own)
     + '% own — ' + esc(c.why) + '</span></label>').join('');
+  const g = d.g21 || [];
+  if(g.length) h += '<div class="picknote" style="margin-top:8px">Owned bench, role unchanged '
+    + '(left out on every slate; untick to keep):</div>'
+    + g.map(c => '<label style="display:block;font-weight:400;margin:3px 0">'
+      + '<input type="checkbox" data-n="' + esc(c.name) + '" checked'
+      + (d.complete ? '' : ' disabled') + '> ' + esc(c.name)
+      + ' <span class="muted">$' + c.salary.toLocaleString() + ', ' + Math.round(c.own)
+      + '% own — bench, Stokastic ' + Math.round(c.mins) + ' min, last 3 avg '
+      + Math.round(c.last3) + '</span></label>').join('');
   if(d.bones.length) h += '<div class="picknote">Bones type (small role, has smashed in it; shown, not used): '
     + d.bones.map(b => esc(b.name) + ' ($' + b.salary.toLocaleString() + ', '
       + Math.round(b.own) + '%)').join(', ') + '</div>';
@@ -786,7 +804,9 @@ $('#go').addEventListener('click', async () => {
           badChalk: $('#badchalk').value,
           matchupSkip: matchupSkip(),
           leverPick: leverPick(),
-          leverage: $('#leverbox').value
+          leverage: $('#leverbox').value,
+          dkCalls: $('#dkcalls').value,
+          optimalText: files.optimal || ''
         }
       })
     });

@@ -380,6 +380,31 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
             for n, why in sorted(news.items())[:12]))
     else:
         say("info", "No news found on any unlocked player.")
+    # G22 (Rotation Read, Nov 19): every lost start and new starter this pull
+    # shows, with how many of your entries hold him. Logged; the swap stays outs
+    # only (replacing a held player who lost his start lost $723 over 28 nights).
+    held_n = {}
+    for e in dk["entries"]:
+        for c in e.get("cells") or []:
+            if c:
+                k_ = normalize_name(c["name"])
+                held_n[k_] = held_n.get(k_, 0) + 1
+    role_moves = {"lostStarts": [], "newStarters": []}
+    for m in bench_moves:
+        k_ = normalize_name(m["name"])
+        b_ = baseline.get(k_) or {}
+        q_ = by_norm.get(k_)
+        row = {"name": m["name"], "held": held_n.get(k_, 0), "projWas": b_.get("proj"),
+               "projNow": round(q_.proj, 1) if q_ else None, "minWas": b_.get("minutes"),
+               "minNow": round(q_.minutes or 0, 1) if q_ else None, "locked": k_ in locked}
+        role_moves["lostStarts" if m["to"] == "bench" else "newStarters"].append(row)
+    if role_moves["lostStarts"]:
+        say("info", "Lost his start since the build (logged; outs only, so not swapped): "
+            + "; ".join(f"{r['name']} (in {r['held']} of your entries)"
+                        for r in role_moves["lostStarts"]))
+    if role_moves["newStarters"]:
+        say("info", "New starters since the build (logged): " + "; ".join(
+            f"{r['name']} (in {r['held']} of your entries)" for r in role_moves["newStarters"]))
     quiet = [m for m in bench_moves if not m["counted"]]
     if quiet:
         say("info", "Role change only, not news (projection and minutes moved under "
@@ -981,6 +1006,7 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
            "bars": {"news": SWAP_NEWS_GAIN, "noNews": SWAP_DISC_GAIN if allow_free else None,
                     "offPool": SWAP_OFF_POOL_GAIN},
            "news": {k: v for k, v in news.items()}, "benchMoves": bench_moves,
+           "roleMoves": role_moves,
            "swaps": results, "csvHeader": lines[0],
            "dkCsv": "\n".join(lines) + "\n"}
     _log_swap(out, players, baseline, games, o,
@@ -1060,6 +1086,7 @@ def _log_swap(out, players, baseline, games, options, inputs=None):
                "games": games, "mode": out["mode"], "bars": out["bars"],
                "hadBaseline": bool(baseline), "news": out["news"],
                "benchMoves": out.get("benchMoves"), "noNewsSwaps": out.get("noNewsSwaps"),
+               "roleMoves": out.get("roleMoves"),
                "neutral": out.get("neutral"), "inputs": saved,
                "projectionsMoved": moved, "risersNotActed": out.get("risersNotActed"),
                "swaps": [{k: v for k, v in s.items() if k not in ("rowBefore", "rowAfter", "before", "after")}

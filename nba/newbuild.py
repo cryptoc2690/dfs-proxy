@@ -11,9 +11,11 @@ Two sources of lineups and almost no rules:
   150-max   2-4 games : all 150 from the typed pool (our own candidates)
             5-7 games : all 150 from Stokastic's contest-lineup file(s)
             8+ games  : 75 from the file, 75 from the pool drawn the old way
-  20-max    always    : 20 from the pool candidates, then the top three by
+  20-max    2-4 games : 20 from the pool candidates, then the top three by
                         projected ownership (15%+) raised to 2x their projected
                         ownership (at most 95%); no file lineups
+            5+ games  : 20 of the 150, every 7th lineup, a different start for
+                        each contest (G17, Step Back report, Nov 19; app.py)
 
   Own candidates      : slot-first from the pool, weight projection^2.5, within
                         $300 of the cap, kept only inside the "blueprint" ranges
@@ -88,7 +90,16 @@ LIVE_LO, LIVE_HI, LIVE_LEFT_K = 2.0, 10.0, 3
 LIVE_GAMES = (5, 7)
 STUD_FLOOR_LO, STUD_FLOOR_HI, STUD_FLOOR_K, STUD_FLOOR_PROJ = 5.0, 20.0, 1.5, 30.0
 RARE_PAIR = 0.75
+G19_SPREAD = 0.05         # G19's shadow: no live piece in more than 5% of the 150
 SWAP_BAND = 500           # a re-target or tail swap stays within $500
+# G17 (Step Back report, Nov 19): on 5+ game slates each 20-max contest's 20 are
+# taken evenly from the 150 (every 7th lineup, a different start for each
+# contest). +$1,459 over 28 nights against the pool-built 20s.
+FROM150_GAMES, FROM150_STEP = 5, 7
+# Sim Chalk report (Nov 19), shadow: the narrowed-spread 20s, picked by each
+# lineup's upper end with the Std Dev halved for players projected 24 minutes
+# or under.
+UPPER_Z, UPPER_MINS, UPPER_HALF = 1.28, 24.0, 0.5
 
 HISTORY_DIR = os.environ.get("NBA_HISTORY") or os.path.expanduser(
     "~/Downloads/NBA Results 1/Main")
@@ -494,13 +505,15 @@ def file_candidates(field_lineups, active_ids, slotting):
 
 
 # --- one live piece (G14), the stud floor (G12) ------------------------------
-def win_spec(games, pair=None, stud_floor=False):
+def win_spec(games, pair=None, stud_floor=False, spread=None):
     """The G14 spec for a slate, or None when it does not fire. stud_floor: add
     G12's floor (a shadow since Nov 17; True only for the shadow set and for
-    rebuilding Nov 15-16, which were built with it)."""
+    rebuilding Nov 15-16, which were built with it). spread: G19's shadow, no
+    live piece in more than this share of the set (Step Back, Nov 19)."""
     if not (LIVE_GAMES[0] <= games <= LIVE_GAMES[1]):
         return None
-    return {"band": (LIVE_LO, LIVE_HI), "pair": pair, "studFloor": bool(stud_floor)}
+    return {"band": (LIVE_LO, LIVE_HI), "pair": pair, "studFloor": bool(stud_floor),
+            "spread": spread}
 
 
 def stud_load(rosters):
@@ -568,24 +581,62 @@ def win_pick(fc, need, cap, n, cnt, taken, key, caps, active, win):
     live = [c for c in view if live_ok(c, win["band"], win.get("pair"))]
     info["fileLive"] = len(live)
     picked = []
+    g = gc = None
+    gcnt = collections.Counter()
+    if win.get("spread"):                    # G19's shadow: each live piece in 5% at most
+        band = win["band"]
+        gc = max(1, int(win["spread"] * n + 1e-9))
+
+        def g(c):
+            lo = min(c["ps"], key=lambda p: p.ownership)
+            return lo.dk_id if band[0] <= lo.ownership < band[1] else None
     if live and len(live) >= LIVE_LEFT_K * max(left, 1):
         if win.get("pair") is not None:      # the shadow: rare pair first, then any live piece
             picked = select(live, left, cap, n, cnt, taken, key, caps)
             more = [c for c in view if c["key"] not in taken and live_ok(c, win["band"])]
             picked += select(more, left - len(picked), cap, n, cnt, taken, key, caps)
         else:
-            picked = select(live, left, cap, n, cnt, taken, key, caps)
+            picked = select(live, left, cap, n, cnt, taken, key, caps, g, gc, gcnt)
     else:
         info["fellBack"] = True
-    rest = select(view, left - len(picked), cap, n, cnt, taken, key, caps)
+    rest = select(view, left - len(picked), cap, n, cnt, taken, key, caps, g, gc, gcnt)
     return pre + picked + rest, info
 
 
+# --- the 20s from the 150 (G17) and its shadows -------------------------------
+def twenties_from(rosters, sources, copies, k=SMALL_SET, step=FROM150_STEP, skip=None):
+    """G17: each copy's k lineups taken evenly from the 150, every `step`th
+    lineup from a different start (copy i starts at lineup i, wrapping after
+    `step` copies). skip: a dk_id; lineups holding him are passed over (G18's
+    shadow), and the step is then the remaining count over k. -> chunks"""
+    idx = [i for i, r in enumerate(rosters) if skip is None or all(p.dk_id != skip for p in r)]
+    st = step if skip is None else max(1, len(idx) // k)
+    chunks = []
+    for ci in range(max(1, copies)):
+        pick = idx[ci % st::st][:k]
+        if len(pick) < k:                       # a short 150: fill from the rest in order
+            pick += [i for i in idx if i not in pick][:k - len(pick)]
+        chunks.append(([list(rosters[i]) for i in pick],
+                       [(sources[i] if i < len(sources) else "vendor") for i in pick]))
+    return chunks
+
+
+def upper_sd(active):
+    """{dk_id: Std Dev} with the Std Dev halved for players projected 24 minutes
+    or under (the Sim Chalk report's narrowed spread)."""
+    return {p.dk_id: (p.sd or 0.0) * (UPPER_HALF if 0 < (p.minutes or 0) <= UPPER_MINS else 1.0)
+            for p in active}
+
+
 # --- selection and exposure ------------------------------------------------
-def select(cands, n, max_exp, total, cnt, taken, key="proj", caps=None):
+def select(cands, n, max_exp, total, cnt, taken, key="proj", caps=None, group=None,
+           gcap=None, gcnt=None):
     """Greedy by `key` under a per-player cap (a share of `total`) and typed caps
-    (counts). -> chosen candidates; `cnt` and `taken` are updated."""
+    (counts). group / gcap: at most gcap lineups per group(c) (None = no group;
+    G19's shadow, one live piece in at most 5% of the set). -> chosen
+    candidates; `cnt` and `taken` are updated."""
     chosen = []
+    gcnt = gcnt if gcnt is not None else collections.Counter()
     for c in sorted(cands, key=lambda c: -c[key]):
         if len(chosen) >= n:
             break
@@ -595,6 +646,11 @@ def select(cands, n, max_exp, total, cnt, taken, key="proj", caps=None):
             continue
         if caps and any(cnt[p.dk_id] + 1 > caps[p.dk_id] for p in c["ps"] if p.dk_id in caps):
             continue
+        g = group(c) if group else None
+        if g is not None and gcnt[g] + 1 > gcap:
+            continue
+        if g is not None:
+            gcnt[g] += 1
         chosen.append(c)
         taken.add(c["key"])
         for p in c["ps"]:
@@ -716,7 +772,7 @@ def tail_fix(rosters, by_id, min_count, keep=(), caps=None):
 # --- the build ---------------------------------------------------------------
 def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, seed=0,
               history=None, slotting=None, copies=1, file_pick=None, raises=None,
-              anchor=None, win=None):
+              anchor=None, win=None, upper=None):
     """One set (a 150 or a 20). -> dict(rosters, sources, chunks, notes, meta)
 
     players: every player with DK ids attached, pool flags set and removals
@@ -732,7 +788,9 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
     the 150's file pick on 5-7 games takes only lineups with one live piece,
     after the low-owned studs' floors when win["studFloor"] (G12, a shadow
     since Nov 17). chunks = [(rosters,
-    sources)] one per copy."""
+    sources)] one per copy. upper: {dk_id: Std Dev} picks our own lineups by
+    their upper end (summed projection + 1.28 x the lineup's Std Dev) instead of
+    the projection (the Sim Chalk report's narrowed-spread 20s, a shadow)."""
     notes = []
     caps = dict(caps or {})
     floors = dict(floors or {})
@@ -771,7 +829,13 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
 
     cap = CAP_BIG if big else CAP_SMALL
     cnt, taken = collections.Counter(), set()
-    own = select(cands, n_own * copies, cap, n * copies, cnt, taken, "proj", caps)
+    own_key = "proj"
+    if upper is not None:
+        own_key = "upper"
+        for c in cands:
+            c["upper"] = c["proj"] + UPPER_Z * sum(upper.get(p.dk_id, 0.0) ** 2
+                                                   for p in c["ps"]) ** 0.5
+    own = select(cands, n_own * copies, cap, n * copies, cnt, taken, own_key, caps)
     # Which of Stokastic's lineups: on 5-7 games by projected sum, on 8+ by the
     # file's own Top 10% figure (Shark Edge And Slate Triggers report, Nov 13:
     # projected sum ahead on 8 of 9 5-7 game nights, Top 10% still ahead on 8+).
@@ -923,12 +987,7 @@ def before_build(players, active, NM, hits, removed_names, inj):
     W = []
     sheet = any(p.in_pool for p in players)
     if sheet:
-        top5 = sorted(active, key=lambda p: -p.ownership)[:5]
-        miss = [f"{p.name} ({p.ownership:.0f}%)" for p in top5 if not p.in_pool]
-        if miss:
-            W.append("Top-5 projected owned not in your pool: " + ", ".join(miss)
-                     + ". The 150 can still get them from Stokastic's lineups on 5+ "
-                       "games; your pool lineups and the 20-max cannot.")
+        # The top-5-owned line is replaced by the pool warning (G23, app.py, Nov 19).
         tk = [f"{p.name} ({p.ownership:.0f}%, {p.proj:.0f} against a normal "
               f"{hits[p.dk_id]:.0f})" for p in active if p.dk_id in hits
               and not p.in_pool and p.ownership >= 15]

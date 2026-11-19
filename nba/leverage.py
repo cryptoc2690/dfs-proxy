@@ -56,6 +56,7 @@ EXP_MIN = 5              # the usual-ownership cell needs 5+ players
 MIN_GAMES = 5            # 5+ game slates only
 BLOCK = 30               # lineups in the 150
 SHADOW_20 = 6            # the 20s: shadow only, 6 of the 20
+SHADOW_BLOCK = 45        # Step Back (Nov 19), shadow: the block at 45 of the 150
 # the block itself (the draw, the 85% cap, the scattered lineups it replaces) is
 # newbuild.leverage_block / newbuild._dust_drop
 

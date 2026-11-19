@@ -1189,7 +1189,17 @@ _small = [r for r in _lr if r["contest_id"] == "900002"]
 check("new build: 5-7 games, the 150 is all Stokastic's lineups",
       len(_big) == 150 and all(r["source"] == "vendor" for r in _big),
       str(collections.Counter(r["source"] for r in _big)))
-check("new build: the 20-max is its own set from the pool, no Stokastic lineups",
+# G17 (Step Back, Nov 19): on 5+ games the 20-max is 20 of the 150, every 7th.
+_key = lambda r: frozenset(p["id"] for p in r["players"])
+check("G17: on 5+ games the 20-max is every 7th lineup of the 150, from lineup 1",
+      len(_small) == 20 and [_key(r) for r in _small] == [_key(r) for r in _big[0::7][:20]]
+      and _small[0]["settings"]["from150"]["applied"],
+      str(len(_small)))
+check("G17: the build says so", any("every 7th lineup" in n["text"] for n in nb5["notes"]))
+_k0b = _nlog()
+nb5off = app.run_build(PROJ5, FIELD5, DK5, {"pool": _pool5, "from150Off": True})
+_small = [r for r in _rows_of(_k0b) if r["contest_id"] == "900002"]
+check("new build (G17 off): the 20-max is its own set from the pool, no Stokastic lineups",
       len(_small) == 20 and all(r["source"] == "mine" for r in _small)
       and all(p["pool"] for r in _small for p in r["players"]))
 _ex20 = collections.Counter(p["name"] for r in _small for p in r["players"])
@@ -1258,7 +1268,7 @@ NB.takeover = lambda players, active, NM, inj: {p.dk_id: 1.0 for p in active
 _k8 = _nlog()
 # liveOff: the made-up slate has every stud at 5-20% own, so G12's floors would
 # fill the whole 150 (tested on its own in the Nov 15 section).
-nbt = app.run_build(PROJ5, FIELD5, DK5, {"pool": _pool5, "liveOff": True})
+nbt = app.run_build(PROJ5, FIELD5, DK5, {"pool": _pool5, "liveOff": True, "from150Off": True})
 NB.takeover = _real_tk
 _r8 = _rows_of(_k8)
 _b8 = [r for r in _r8 if r["contest_id"] == "900001"]
@@ -1300,7 +1310,7 @@ DK5b = dk_classic(R5, GAMES5, contests=((150, "NBA $15K mini-MAX", "900001", "$0
                                         (20, "NBA $50K Four Point Play", "900004", "$4"),
                                         (1, "NBA $10K Free Contest", "900003", "$0")))
 _k8 = _nlog()
-nb2 = app.run_build(PROJ5, FIELD5, DK5b, {"pool": _pool5})
+nb2 = app.run_build(PROJ5, FIELD5, DK5b, {"pool": _pool5, "from150Off": True})
 _r8 = _rows_of(_k8)
 _a1 = [frozenset(p["id"] for p in r["players"]) for r in _r8 if r["contest_id"] == "900002"]
 _a2 = [frozenset(p["id"] for p in r["players"]) for r in _r8 if r["contest_id"] == "900004"]
@@ -1313,6 +1323,15 @@ check("new build: two 20-max contests get two different sets (the next 20 in the
 check("new build: the second 20-max gets its own top-3 raise",
       _e2[_top3[0]["Player"]] >= int(round(min(2 * _top3[0]["Ownership %"] / 100, 0.95) * 20)),
       f"{_top3[0]['Player']} {_e2[_top3[0]['Player']]}/20")
+_k8g = _nlog()
+nb2g = app.run_build(PROJ5, FIELD5, DK5b, {"pool": _pool5})
+_r8g = _rows_of(_k8g)
+_g150 = [_key(r) for r in _r8g if r["contest_id"] == "900001"]
+_g1 = [_key(r) for r in _r8g if r["contest_id"] == "900002"]
+_g2 = [_key(r) for r in _r8g if r["contest_id"] == "900004"]
+check("G17: two 20-max contests take every 7th lineup from different starts",
+      not nb2g.get("error") and _g1 == _g150[0::7][:20] and _g2 == _g150[1::7][:20]
+      and not set(_g1) & set(_g2), f"{len(_g1)} {len(_g2)}")
 _dd = app._describe("dk", DK5b)
 check("new build: the DK check lists every contest for the tick boxes",
       [c["id"] for c in _dd.get("contests", [])] == ["900001", "900002", "900004", "900003"]
@@ -1441,7 +1460,7 @@ check("weak chalk: on 5+ games the build is unchanged and the set without him is
       not nb51.get("error") and [r["players"] for r in _r51] == [r["players"] for r in _r52]
       and _shj.get("calls") == [_wk5] and len(_shj["sets"]["big"][0]) == 150
       and not any(_wk5 in r for r in _shj["sets"]["big"][0])
-      and not any(_wk5 in r for r in _shj["sets"]["small"][0]), str(_shp))
+      and "small" not in _shj["sets"], str(_shp))   # G17: the 20s are the 150's every 7th
 check("file pick: 5-7 games by projected sum, 8+ games by Stokastic's Top 10%",
       _r51[0]["settings"]["sets"]["big"]["filePick"] == "proj"
       and _r9[0]["settings"]["sets"]["big"]["filePick"] == "top10",
@@ -1496,6 +1515,9 @@ check("field: the shadow cap is half his projected own, in lineups",
 _LS5 = "Name,Team,Projected,ProjOwn\n" + "".join(
     f"{x['Player']},{x['Team']},{x['Projection']},{_lsm.get(normalize_name(x['Player']), {}).get('own', x['Ownership %'])}\n"
     for x in R5w)
+_k60 = _nlog()
+app.run_build(PROJ5w, FIELD5, DK5w, {"pool": _pool5w})     # the same box scores, no LineStar
+_r60 = _rows_of(_k60)
 FP._MODEL = _fake
 _k61 = _nlog()
 nb61 = app.run_build(PROJ5w, FIELD5, DK5w, {"pool": _pool5w}, linestar_text=_LS5)
@@ -1511,7 +1533,7 @@ check("field: with LineStar the over-draft is named and logged; no shadow set (G
       and any("over-drafts tonight" in n["text"] for n in nb61["notes"]),
       str(nb61.get("error") or (_f61.get("over"), _f61.get("shadow"))))
 check("field: the entered set is the build without the shadow (identical lineups)",
-      _names(_r61, "900001") == _names(_r51, "900001") and _names(_r61, "900002") == _names(_r51, "900002")
+      _names(_r61, "900001") == _names(_r60, "900001") and _names(_r61, "900002") == _names(_r60, "900002")
       and sum(1 for r in _r61 if r["contest_id"] == "900001"
               and any(p["name"] == _tgt.name for p in r["players"])) > _cap150)
 check("field: no LineStar file -> no calls and no shadow, and the build says why",
@@ -1674,9 +1696,26 @@ check("build: on 5+ games, 30 of the 150 are the leverage block, each holding th
       str(nb71.get("error") or collections.Counter(r["source"] for r in _b71)))
 _sh20 = _r71[0]["settings"]["leverage"].get("shadow20")
 _s20 = json.load(open(_sh20)) if _sh20 and os.path.exists(_sh20) else {}
-check("build: the 20s keep no block; their shadow set with the pick in 6 of 20 is saved",
-      not any(r["source"] == "leverage" for r in _r71 if r["contest_id"] != "900001")
+# G17 (Nov 19): on 5+ games the 20s are every 7th lineup of the 150, block and all,
+# so the 20s' own block shadow (6 of 20) is no longer built there.
+_s71 = [r for r in _r71 if r["contest_id"] == "900002"]
+check("build (G17): the 20s are the 150's every 7th, the block's lineups among them; no 20s block shadow",
+      [_key(r) for r in _s71] == [_key(r) for r in _b71[0::7][:20]]
+      and any(r["source"] == "leverage" for r in _s71) and _sh20 is None, str(_sh20))
+_k73 = _nlog()
+app.leverage_night = _fake_ln
+nb73 = app.run_build(PROJ5w, FIELD5, DK5w, {"pool": _pool5w, "from150Off": True})
+app.leverage_night = _real_ln
+_r73 = _rows_of(_k73)
+_sh20 = _r73[0]["settings"]["leverage"].get("shadow20")
+_s20 = json.load(open(_sh20)) if _sh20 and os.path.exists(_sh20) else {}
+check("build (G17 off): the 20s keep no block; their shadow set with the pick in 6 of 20 is saved",
+      not any(r["source"] == "leverage" for r in _r73 if r["contest_id"] != "900001")
       and _s20.get("k") == 6 and sum(1 for r in _s20["sets"]["small"][0] if _pick5.name in r) >= 6, str(_sh20))
+_nb19 = json.load(open(_r71[0]["settings"]["nov19Shadows"])) if _r71[0]["settings"].get("nov19Shadows") else {}
+check("Step Back shadow: G11's block at 45 is saved beside the 30",
+      len((_nb19.get("sets") or {}).get("g11Block45", {}).get("big", [[]])[0]) == 150,
+      str(list((_nb19.get("sets") or {}).keys())))
 _cnt_in = lambda rows, cid: sum(1 for r in rows if r["contest_id"] == cid
                                 and any(p["name"] == _mid5["Player"] for p in r["players"]))
 _want = lambda n: int(round(min(2 * _mid5["Ownership %"] / 100, 0.95) * n))
@@ -1814,6 +1853,99 @@ _bg2 = {"chalk guard": [{"date": _day(i), "team": "AAA", "mins": 33.0, "dk": 30.
 _bm2 = RL.marks([_pa, _pb], set(), {"games": _bg2, "team_dates": {"AAA": [_day(i) for i in range(5)]}})
 check("teammate back (Nov 17): a teammate who was out in the same games is not 'back'",
       _bm2["chalk guard"]["back"] == [] and not _bm2["chalk guard"]["weak"], str(_bm2["chalk guard"]["back"]))
+
+# --- Nov 19: the box-score reads (G20, G21, G23, G24), G17's draw, G19's spread ---
+print("\n-- Nov 19: box-score reads, the 20s from the 150, the shadows --")
+import boxread as BR
+import rotation as RT
+from dk import Player as _P
+_d0 = __import__("datetime").date(2026, 11, 1)
+_dd = lambda i: _d0 + __import__("datetime").timedelta(days=i)
+def _g(i, team, mins, dk, st):
+    return {"date": _dd(i), "team": team, "mins": float(mins), "dk": float(dk), "starter": st,
+            "name": "x"}
+_G = {
+    # a regular (33 min) who is out tonight: not in the file
+    "out regular": [_g(i, "AAA", 33, 35, True) for i in range(6)],
+    # part-time starter: started 1 of his last 5, Stokastic has him starting
+    "part timer": [_g(i, "AAA", 20 if i != 3 else 34, 18, i == 3) for i in range(6)],
+    # bench, minutes flat: last 3 = 22, Stokastic 22
+    "flat bench": [_g(i, "AAA", 22, 20, False) for i in range(6)],
+    # bench, minutes climbing 18 -> 24 -> 30 (trend read 30 against Stokastic 22)
+    "climbing bench": [_g(i, "AAA", m, 20, False) for i, m in enumerate([15, 15, 15, 18, 24, 30])],
+    # never started, 6 games
+    "never started": [_g(i, "AAA", 25, 22, False) for i in range(6)],
+}
+for k, H in _G.items():
+    for x in H:
+        x["name"] = k
+_LG = {"games": _G, "team_dates": {"AAA": [_dd(i) for i in range(6)]}, "days": 6}
+_mk = lambda nm, own, st, mins, proj=25.0, sal=5000, pos="SF": _P(nm, nm, pos, "AAA", "BBB", sal, proj, own,
+                                                                  minutes=mins, starting=st)
+_pt = _mk("part timer", 12.0, True, 30)
+_fb = _mk("flat bench", 15.0, False, 22)
+_cb = _mk("climbing bench", 15.0, False, 22)
+_ns = _mk("never started", 9.0, True, 28)
+_act = [_pt, _fb, _cb, _ns]
+_jk = RL._joiner(_G)
+_bx = BR.night(_act, _act, _LG, _jk)
+check("box read: a regular missing from the file is out",
+      [r["name"] for r in _bx["outs"]["AAA"]] == ["out regular"], str(_bx["outs"]))
+check("G20: a part-time starter (started 1 of 5, has started) with a regular out, 5-20% own, is floored",
+      [p.name for p in _bx["g20"]] == ["part timer"], str([p.name for p in _bx["g20"]]))
+check("G21: a bench player at 10%+ own with flat minutes is left out; one whose minutes climb is not",
+      [p.name for p in _bx["g21"]] == ["flat bench"]
+      and [p.name for p in _bx["sensabaugh"]] == ["climbing bench"], str([p.name for p in _bx["g21"]]))
+check("first start: starting tonight, 0 starts in 6 games, no tip time -> warned",
+      [p.name for p, _m in _bx["firstStarts"]] == ["never started"])
+_lm = BR.low_minute_chalk([_mk("cheap big", 20.0, True, 20, sal=4000, pos="C"),
+                           _mk("cheap wing", 30.0, True, 30, sal=4000),
+                           _mk("pricey", 25.0, True, 20, sal=6000)])
+check("G24: under $5,500, 24 minutes or under, owned -> listed (and a center is marked)",
+      [p.name for p in _lm] == ["cheap big"] and BR.is_center(_lm[0]), str([p.name for p in _lm]))
+check("box line: says starts, last three and the same-teammates-out games",
+      "no starts this season" in BR.line(_ns, _bx["reads"][_ns.dk_id])
+      and "1 start this season" in BR.line(_pt, _bx["reads"][_pt.dk_id]))
+_ros = [[_WP(i * 8 + j, 5) for j in range(8)] for i in range(150)]
+_ch = NB.twenties_from(_ros, ["vendor"] * 150, 3)
+check("G17: three 20s are lineups 1, 8, 15... / 2, 9, 16... / 3, 10, 17...",
+      [[r[0].dk_id for r in c[0]] for c in _ch]
+      == [[_ros[i][0].dk_id for i in range(s, 150, 7)][:20] for s in (0, 1, 2)])
+_skip = _ros[0][0].dk_id
+_ch18 = NB.twenties_from(_ros, ["vendor"] * 150, 1, skip=_skip)
+check("G18 shadow: the 20s skip the most-owned player", len(_ch18[0][0]) == 20
+      and not any(p.dk_id == _skip for r in _ch18[0][0] for p in r))
+_gc = __import__("collections").Counter()
+_c19 = [{"ps": [_WP(1, 5)] + [_WP(100 + i * 8 + j, 30) for j in range(7)], "proj": 300 - i,
+         "key": frozenset([1, i])} for i in range(20)]
+_sel = NB.select(_c19, 20, 1.0, 150, __import__("collections").Counter(), set(), "proj",
+                 group=lambda c: min(c["ps"], key=lambda p: p.ownership).dk_id, gcap=7, gcnt=_gc)
+check("G19 shadow: one live piece in at most 7 lineups (5% of 150)", len(_sel) == 7)
+check("DK calls: starter, bench and if/then lines are read and named",
+      [c["kind"] for c in app._dk_calls("4:16pm Shannon not starting\nLooney starts\nIf Avdija out: Jrue starts",
+                                         [_mk("Terrence Shannon Jr.", 5, True, 20),
+                                          _mk("Kevon Looney", 5, False, 20),
+                                          _mk("Deni Avdija", 5, True, 20)])]
+      == ["notStarting", "starting", "ifthen"])
+check("Optimal %: any CSV with a player column and an Optimal % column",
+      app._optimal("Player,Salary,Optimal %\nA B,3000,12.5%\n", []) == {"a b": 12.5})
+_sum = {"header": {"competitions": [{"competitors": [
+            {"team": {"id": "1", "abbreviation": "AAA"}, "homeAway": "home"},
+            {"team": {"id": "2", "abbreviation": "BBB"}, "homeAway": "away"}]}]},
+        "boxscore": {"players": [
+            {"team": {"abbreviation": t}, "statistics": [{"names": ["MIN"], "athletes": [
+                {"athlete": {"id": f"{t}{i}", "displayName": f"{t} P{i}", "position": {"abbreviation": "C" if i == 0 else "G"}},
+                 "starter": i < 5, "stats": [str(48 if i < 4 else 24)]} for i in range(6)]}]}
+            for t in ("AAA", "BBB")]},
+        "plays": [{"period": {"number": p}, "clock": {"displayValue": "6:00"}, "team": {"id": tid},
+                   "type": {"text": "Substitution"}, "sequenceNumber": str(p * 10 + int(tid)),
+                   "participants": [{"athlete": {"id": f"{t}5" if p % 2 else f"{t}4"}},
+                                    {"athlete": {"id": f"{t}4" if p % 2 else f"{t}5"}}]}
+                  for p in (1, 2, 3, 4) for tid, t in (("1", "AAA"), ("2", "BBB"))]}
+_rec = RT.game_record("9", _sum)
+_tot = sum(v["sec"] for v in _rec["team"]["AAA"]["players"].values())
+check("rotation: five on the floor every second, and the substitutions saved",
+      abs(_tot - 5 * 2880) < 1 and len(_rec["subs"]) == 8, f"{_tot} {_rec['subs'][:2]}")
 
 # The summary and exit MUST stay last — appending a new section after them
 # silently skips it and the suite still reports a clean pass.

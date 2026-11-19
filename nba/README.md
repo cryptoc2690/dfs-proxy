@@ -15,7 +15,7 @@ in `app.py`: kept for showdown and for after-the-fact replays only.
 | | 2-4 games | 5-7 games | 8+ games |
 |---|---|---|---|
 | 150 | all from your pool | all from Stokastic's lineups, one live piece (G14) | 75 Stokastic / 75 pool (old draw) |
-| 20-max | from your pool, top three owned raised to 2x | same | same (old draw) |
+| 20-max | from your pool, top three owned raised to 2x | 20 of the 150, every 7th lineup (G17) | same as 5-7 |
 
 - Pool lineups: slot-first draw (projection^2.5, within $300 of the cap) kept inside
   the winners' ranges from earlier nights of the same slate size (read from
@@ -74,6 +74,20 @@ in `app.py`: kept for showdown and for after-the-fact replays only.
   behind G14 alone over 13. Saved nightly as the `studfloor` shadow; build at 20 fires
   if ahead by 0.3+ split top-1% lineups a contest. `grade_night.py` rebuilds Nov 15-16
   with it, as they were played.
+- **The Nov 19 build** (Step Back, Box Score Read, Rotation Read, Sim Chalk reports;
+  `boxread.py`, `rotation.py`; details in CHANGELOG.md):
+  - **G17:** on 5+ games each 20-max takes 20 of the 150, every 7th lineup, a
+    different start per contest.
+  - **G20:** a part-time starter (Stokastic has him starting, a regular out, under 60%
+    of his last five started, has started before, 5-20% own) floored at 2x own.
+  - **G21:** an owned bench player (10%+) whose role has not changed by the box scores
+    is left out on every slate; untick him under Weak chalk to keep him.
+  - **Shown only:** the tip waves and when to pull for each (G22), players at 5%+ own
+    not in the pool with their box-score line (G23), the low-minute chalk line (G24),
+    first starts Stokastic is guessing at, the center split.
+  - **Shadows** in `logs/shadow/<date>/<time>_nov19.json`; DK's calls box and the
+    Optimal % slot are logged only; the rotation record is saved each morning in
+    `logs/espn/rot_<date>.json`.
 - **The stud load (Nov 17), shown and logged only:** studs ($9,000+) a lineup in
   Stokastic's best 150, the field as projected (the studs' own summed) and each built
   set (`settings.studLoad`). A warning when the 150 holds twice the file's rate or more

@@ -480,14 +480,17 @@ def main(argv):
 
     # The build as it was that night: role marks read only the box scores before
     # it, and a build saved before the weak chalk rule (Nov 13), the matchup
-    # floor and leverage block (Nov 14) or the live piece (Nov 15) is rebuilt
-    # without them, so seed 0 still
+    # floor and leverage block (Nov 14), the live piece (Nov 15) or the Nov 19
+    # rules (G17, G20, G21) is rebuilt without them, so seed 0 still
     # reproduces the played set.
     st = typed.get("settings") or {}
     options = dict(options, slateDate=day, weakChalkOff=("weakChalk" not in st),
                    matchupOff=("matchup" not in st), leverOff=("leverage" not in st),
                    liveOff=("win" not in st),
-                   studFloor=("win" in st and st["win"].get("studFloor", True)))
+                   studFloor=("win" in st and st["win"].get("studFloor", True)),
+                   # Nov 19: G17 (the 20s from the 150), G20 and G21
+                   from150Off=("from150" not in st),
+                   g20Off=("boxRead" not in st), g21Off=("boxRead" not in st))
     if "filePick" not in ((st.get("sets") or {}).get("big") or {}):
         options["filePick"] = "top10"          # built before the Nov 13 file pick
     spread = seed_spread(inp, options, date)

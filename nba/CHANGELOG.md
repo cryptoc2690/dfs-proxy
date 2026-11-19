@@ -2,6 +2,32 @@
 
 Newest first. One entry per change, in plain words: what changed and why.
 
+## Nov 19, 2026 — the big build
+
+From `NBA Step Back Report 11-19.md`, `NBA Box Score Read Report 11-19.md`, `NBA Rotation Read Report 11-19.md` and `NBA Sim Chalk Report 11-19.md` (28 nights), collected in `NBA Build List (running).md`. The three that change the build are together +$1,943 smoothed over the tool across 28 nights in the review's harness, ahead on 21 and behind on 3.
+
+**G17: on 5+ game slates the 20s come from the 150.** Each 20-max contest takes 20 of the 150, every 7th lineup: contest 1 from lineup 1, contest 2 from lineup 2, and so on. The 150's rules (G14, G11's block, G20, G21, G10, the takeover lean) carry into them; the 20s' own top-3 raise is not applied. If no 150 is entered, one is built for the draw and not entered. Step Back: +$1,459 (ahead 17, behind 3). 2-4 game 20s are built from the pool as before. Option `from150Off` (the grader).
+
+**G20: the part-time-starter floor** (`boxread.py`). Stokastic has him starting; a regular on his team is out (by the box scores: 3+ games, 20+ minutes a game over his last 10, in one of the team's last 8 games, and not an active player tonight); he started under 60% of his last five games; he has started at least once this season; he is at 5-20% projected own. Floored at 2x his own in the 150 and the 20s, the way G10's calls are. Rotation Read: +$227 (ahead 10, behind 5; placebo +$18); Grimes Nov 17 and Hezonja Nov 18 were this player. The tool's calls match the review's lists on Nov 16-18. Option `g20Off`.
+
+**G21: the owned bench player whose role has not changed is left out, on every slate.** Stokastic has him on the bench, projected 10+, 10%+ own, 3+ games, Stokastic's minutes under his last-3 average + 3, and no box-score minutes read 3+ over Stokastic's (last-3 average; the trend, a last three that climbed 6+; the same-teammates-out games). Box Score Read: these 37 reached projection 7 times and were never a night-winner; +$783 (ahead 12, behind 3; placebo -$450). Shown under Weak chalk with a tick box: untick one to keep him, or give him a minimum. G7's own calls are unchanged. The tool's calls match the review's on Nov 16-18. Option `g21Off`.
+
+**G22: the tip waves.** Before the build the tool names each later tip wave and the time to pull a fresh Stokastic file and run late swap (20 minutes before the tip). Late swap stays outs only; it now logs every lost start and new starter it sees, with how many of your entries hold him (`roleMoves` in `nba_swaps.jsonl`). Rotation Read: catching every late scratch +$79, never behind; replacing a held player who lost his start -$723, so it is not done.
+
+**G23: the pool warning** (shown only). Every player at 5%+ projected own who is not in your pool, with his box-score line: starting or bench, his starts this season with his minutes and DK in them, his last three games, his games with the same teammates out. A star when he is starting and his minutes in his starts are 3+ over Stokastic's. Replaces the top-5-owned line.
+
+**G24: the low-minute chalk line** (shown only). Each player under $5,500 projected 24 minutes or under who is owned (15%+, or one of the three most-owned under $5,000): minutes and points a minute, center or not, starting or bench, whether G7 or G21 leaves him out, his last ten games' minutes and best score, and our share beside his own. Sim Chalk: the sim puts him in 4.3x his share of the real best lineups; holding him down lost money, so nothing is built on it.
+
+**First-start warning.** Stokastic has him starting, he has not started all season (5+ games), and his game tips 31+ minutes from now: the start is a guess (68% of these really started).
+
+**Shadows** (saved each night, never entered), in `logs/shadow/<date>/<time>_nov19.json` unless noted: G18 (the 20s skip the most-owned player, 5-7 games); G19 (no live piece in more than 5% of the 150, 5-7 games, `g19spread` in the `_live.json` file); G11's block at 45; G8 with the box-score check (a bench call dropped when a minutes read is 3+ over); a first start held at his own; the low-minute chalk center held at his own; the owned bench player with a minutes read over, floored 1.5x; a starter whose DK in his starts is 5+ over tonight's projection, floored 1.5x; the narrowed-spread 20s (pool 20s picked by summed projection + 1.28 x the lineup's Std Dev, Std Dev halved at 24 minutes or under); the build without G20 and without G21. On 5+ games a shadow 150's 20s are its every 7th lineup.
+
+**Logged** (`settings.boxRead`, `from150`, `tipWaves`, `dkCalls`, `simVsReal`): every box-score read for players at 10%+ own and everyone a rule touched; the regulars out; G20 and G21; the center split (a regular center out and his backup, with the share of minutes they shared; shown when under 10%); DK's calls; and for every player at 15%+ own, Stokastic's Optimal % (when dropped), our share and his own.
+
+**New inputs.** A box for **DK's calls** (starters and if/then lines, as posted, with the time): saved and graded, no effect on the build. A **slot for Stokastic's Optimal % export**, saved with the build, no effect.
+
+**The rotation record** (`rotation.py`): each morning, every game's substitutions from ESPN's play-by-play, who was on the floor every second, the closers' seconds (last 5:00 of the 4th) and the centers' overlap, in `logs/espn/rot_<date>.json`, backfilled to Oct 20 (29 days). ESPN's team rosters (position, height) weekly in `logs/espn/rosters_<date>.json`. Data only.
+
 ## Nov 17, 2026
 
 From `NBA Contest Review Report 11-17.md` (Nov 15 and 16 added, 26 nights).
