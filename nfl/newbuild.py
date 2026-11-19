@@ -25,23 +25,45 @@ import random
 
 from dk import SALARY_CAP, normalize_name
 
-SPEC = "stage3-2026-11-09+dstfirst"
+SPEC = "stage3-2026-11-19+relsum"
 # DST drawn right after the stack (README_PORT 7b, DST deep dive 2026-11-08),
 # not last in the $400 window. Builds logged before this change (the 11-8 main
 # slate, week 9) used DST-last; that is why the Cardinals sat at the 55% cap
 # there (capped by hand to 40%). False restores the graded Stage 3 rule.
 DST_FIRST = True
 
-# The winners' ranges, refit on all 7 graded main slates (27,946 top-1%
-# lineups). The analysis chat refits these as new slates arrive (README_PORT
-# section 8); change them here and nowhere else.
+# The winners' ranges. The analysis chat refits these as new slates arrive;
+# change them here and nowhere else.
+#
+# Nov 19 (Contest Lens Rework 11-17, build items 1 and 2): the own sum is
+# measured against the SLATE, not a fixed 86.4-145.0. A lineup is kept when its
+# summed projected own less the field's expected sum (every player's projected
+# own squared, summed, / 100) is between -26.5 and +36.9, the winners' 10th-90th
+# percentile on nine slates. The fixed ceiling cut 93% of the top 1% on 11-15
+# (Emmett Johnson 72%). The QB game total keeps its 41.5 floor and loses its
+# 53.5 ceiling (it cut SF@DAL 55.5, 80% of the 11-15 top 1%'s QBs).
+# "pown" is filled in per slate by slate_ranges(); the fixed values the old
+# spec used are kept in FIXED_RANGES for the record and the shadow.
+POWN_REL = (-26.5, 36.9)
 RANGES = {
-    "pown": (86.4, 145.0),   # projected-ownership sum, 10th-90th percentile
+    "pown": None,            # set per slate: field expected sum + POWN_REL
     "lt5p": (0, 3),          # players under 5% projected
     "lt2p": (0, 1),          # players under 2% projected
     "left": (0, 400),        # salary left
-    "vt": (41.5, 53.5),      # the QB's game total (LineStar VegasTotals)
+    "vt": (41.5, float("inf")),  # the QB's game total (LineStar VegasTotals)
 }
+FIXED_RANGES = dict(RANGES, pown=(86.4, 145.0), vt=(41.5, 53.5))
+
+
+def field_own_sum(players):
+    """The field's expected own sum: sum of projected own squared / 100 over
+    every player in the projections file (11-17 report, G1)."""
+    return sum((p.ownership or 0.0) ** 2 for p in players) / 100.0
+
+
+def slate_ranges(expected):
+    """RANGES with the own-sum window placed on this slate."""
+    return dict(RANGES, pown=(expected + POWN_REL[0], expected + POWN_REL[1]))
 FLEX_W = {"RB": 0.34, "WR": 0.25, "TE": 0.41}
 STACK_PROBS = {1: 0.35, 2: 0.65}   # draw mix; the quota at selection sets the set
 P_BB = 0.60                        # bring-back draw probability
@@ -308,6 +330,8 @@ def build_set(P, elig, n, seed, nqb, caps=None, floors=None, ranges=None,
               dst_first=None):
     """-> {"lineups": [name tuples], "quota", "candidates", "tries", "notes"}"""
     R = ranges or RANGES
+    if R.get("pown") is None:
+        raise ValueError("ranges need a per-slate own-sum window: use slate_ranges()")
     rng = random.Random(seed)
     quota = qb_quotas(P, elig, n, nqb, ALPHA, vt_range=R["vt"])
     notes = []

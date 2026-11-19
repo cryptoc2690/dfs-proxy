@@ -31,9 +31,36 @@ any late scratches and caps. Tick the contests. Build.
 | never | the QB's own RB; a DST facing a team in the lineup |
 | defense | drawn right after the QB and stack, weighted by projection², never facing a team in the lineup (Nov 9, see below) |
 | fill | budget-aware, weighted by projection²; the last offensive slot takes the $400 window |
-| ranges (kept only if inside) | projected-ownership sum 86.4–145.0; ≤3 under 5%; ≤1 under 2%; ≤$400 left; QB game total 41.5–53.5 (LineStar VegasTotals) |
+| ranges (kept only if inside) | projected-ownership sum within −26.5 / +36.9 of the slate's expected sum (Nov 19, below); ≤3 under 5%; ≤1 under 2%; ≤$400 left; QB game total 41.5 or more (LineStar VegasTotals), no ceiling |
 | pick | by projected points under a 55% cap on every player, the QB quotas and the QB+2 quota |
 | not in it | no simulation, no Stokastic half, no cores, no value/owned adds, no lottery, no QB floor, no tier leverage, no tilt |
+
+**Ranges change, Nov 19 — read before reviewing week 11.** From the Contest
+Lens Rework (report 11-17, build items 1 and 2), approved Nov 19:
+- **The own-sum window moves with the slate.** The field's expected own sum is
+  every player's projected own squared, summed, ÷ 100, over the whole
+  projections file (10-4: 101; 11-15: 157). A lineup is kept when its summed
+  projected own less that number is between −26.5 and +36.9 (the winners'
+  10th–90th percentile on nine slates). It replaces the fixed 86.4–145.0, which
+  cut 93% of the 11-15 top 1% (Emmett Johnson at 72%). On 11-15 the window is
+  131–194 and the build holds Johnson at about 65% with no minimum.
+- **No ceiling on the QB's game total.** The 41.5 floor stays. The 53.5 ceiling
+  cut SF@DAL (55.5), where 80% of the 11-15 top 1%'s QBs came from.
+- The numbers: +0.73 split top-1% lineups a contest over the old spec refit
+  (up on 6 of 9 slates, down on none), no measured cost. It gives up 10-11 and
+  11-1, where the field piled into a big game that failed. Decided at 8 live
+  slates against the fixed-range set (rebuilt by the analysis chat from the
+  saved inputs); it comes out if level then. The 20s take the same change.
+- Logged in each build: `build` `stage3-2026-11-19+relsum`, `ranges` as applied
+  that slate, `fieldOwnSum`, `ownSumRel`, `fixedRanges`, `topGameTotal`,
+  `qbsWithLineups`. Builds before Nov 19 used the fixed ranges.
+
+**Every build saves its inputs (Nov 19).** `logs/inputs/<date>/<HHMMSS>/` holds
+the projections, Stokastic lineups, DK and LineStar files given to that build
+and `typed.json` (the pool, scratches, caps, minimums, ticked contests and every
+other option). The log row's `settings.inputsDir` points to it. This is what the
+analysis chat rebuilds the shadow sets from, so nothing depends on the
+Downloads folder. Showdown builds save theirs too.
 
 **Defense change, Nov 9 — read before reviewing week 9.** The 11-8 main slate
 (week 9) was built with the defense picked LAST, in the $400 window left after

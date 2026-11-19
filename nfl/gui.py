@@ -167,8 +167,9 @@ INDEX_HTML = r"""<!doctype html>
         style="width:auto"> Use the OLD main-slate build (fallback)</label>
       <div class="hint newcl">Main slate runs the Stage 3 build: QB+1/QB+2 (55% QB+2),
         bring-back ~60%, never the QB's RB, the defense picked right after the stack, 55% cap, 15 QBs by projection², every
-        lineup inside the winners' ranges (ownership sum 86–145, ≤3 under 5%, ≤1
-        under 2%, ≤$400 left, QB game total 41.5–53.5 from LineStar), picked by
+        lineup inside the winners' ranges (ownership sum within −26.5/+36.9 of the
+        field's expected sum for the slate, ≤3 under 5%, ≤1 under 2%, ≤$400 left,
+        QB game total 41.5+ from LineStar), picked by
         projected points. No Stokastic half, no cores, no add-ons.</div>
     </div>
     <div class="oldset">

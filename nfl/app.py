@@ -1027,6 +1027,31 @@ def _floor_lines(text, players):
     return out, bad
 
 
+def _save_inputs(files, typed):
+    """Every build's input files and what was typed, so the analysis chat can
+    rebuild the night (and its shadow sets) exactly. -> folder or None
+
+    logs/inputs/<date>/<HHMMSS>/: proj.csv, field.csv, dk.csv, linestar.csv
+    (whichever were given) and typed.json. logs/ is not committed."""
+    try:
+        now = datetime.now().astimezone()
+        folder = os.path.join(os.path.dirname(LOG_PATH), "inputs",
+                              now.date().isoformat(), now.strftime("%H%M%S"))
+        os.makedirs(folder, exist_ok=True)
+        for name, text in files.items():
+            if (text or "").strip():
+                with open(os.path.join(folder, name), "w", encoding="utf-8") as fh:
+                    fh.write(text)
+        typed = dict(typed, saved_at=now.isoformat(timespec="seconds"),
+                     code=_CODE_VERSION)
+        with open(os.path.join(folder, "typed.json"), "w", encoding="utf-8") as fh:
+            json.dump(typed, fh, indent=1, default=str)
+        return folder
+    except OSError as exc:
+        print(f"  ! inputs not saved: {exc}", file=sys.stderr)
+        return None
+
+
 def run_build(proj_text, field_text="", dk_text="", options=None,
               linestar_text=""):
     """The build (Nov 9). Main slate: newbuild.py, the Stage 3 spec. Showdown:
@@ -1093,6 +1118,11 @@ def run_build(proj_text, field_text="", dk_text="", options=None,
                 + "; ".join(f"{nm or cid} ({len(es)}, {builds(len(es), i)})"
                             for i, (cid, nm, es) in enumerate(contests)))
 
+    o["_inputsDir"] = _save_inputs(
+        {"proj.csv": proj_text, "field.csv": field_text, "dk.csv": dk_text,
+         "linestar.csv": linestar_text},
+        {"format": fmt, "options": {k: v for k, v in o.items()
+                                    if not k.startswith("_")}})
     if fmt == "classic" and not o.get("oldBuild"):
         return _run_main(players0, rep0, dk0, dk_text, contests, skipped, big, small,
                          o, proj_text, field_text, linestar_text, size_of)
@@ -1171,6 +1201,11 @@ def _run_main(players, rep, dk, dk_text, contests, skipped, big, small, o,
         say("warn", f"{len(rep['bad_proj'])} player(s) have a non-numeric projection "
                     f"and were treated as 0: " + ", ".join(rep["bad_proj"][:6]))
     own_sum = sum(p.ownership for p in players)
+    # The own-sum window is placed on this slate (Nov 19): the field's expected
+    # own sum over every player in the projections file, as the analysis chat
+    # computes it (10-4: 101.0, 11-15: 157.3).
+    field_sum = NB.field_own_sum(players)
+    R = NB.slate_ranges(field_sum)
     if not 800 <= own_sum <= 1000:
         say("warn", f"Ownership: {own_sum:.0f}% across nine roster slots. Expected "
                     f"about 900. The ranges are on projected ownership, so check "
@@ -1209,7 +1244,7 @@ def _run_main(players, rep, dk, dk_text, contests, skipped, big, small, o,
         vegas = lrep.get("teams") or None
     P, obj, tmap = NB.player_table(players, ls)
     if not ls:
-        say("warn", "No LineStar file, so the QB game-total range (41.5-53.5) is NOT "
+        say("warn", "No LineStar file, so the QB game-total floor (41.5) is NOT "
                     "applied: QBs from every game are eligible. The tested build "
                     "used it — drop the pre-game LineStar export.")
     else:
@@ -1270,7 +1305,7 @@ def _run_main(players, rep, dk, dk_text, contests, skipped, big, small, o,
     for label, n, nqb, sd, _cs in plan:
         caps = {key_of[i]: int(round(v * n)) for i, v in pcaps.items() if i in key_of}
         fl = {key_of[i]: min(v, n) for i, v in floors.items() if i in key_of}
-        res = NB.build_set(P, elig, n, sd, nqb, caps=caps, floors=fl)
+        res = NB.build_set(P, elig, n, sd, nqb, caps=caps, floors=fl, ranges=R)
         if not res["lineups"]:
             return {"error": f"Built no legal lineups for the {label} set"
                              + (f" — {res['notes'][0]}" if res["notes"] else "")
@@ -1374,6 +1409,7 @@ def _run_main(players, rep, dk, dk_text, contests, skipped, big, small, o,
     bg = max(contests, key=lambda c: (len(c[2]), size_of(c))) if contests else None
     if bg is not None and size_of(bg):
         bits.append(f"contest size {size_of(bg):,}")
+    bits.append(f"own sum {R['pown'][0]:.0f}–{R['pown'][1]:.0f} (field {field_sum:.0f})")
     bits.append(f"LineStar totals for {len(tmap)} of {len(teams)} teams" if ls
                 else "NO LineStar — game-total range off")
     bits.append(f"pool {sum(1 for p in players if p.in_pool)}" if pool else "whole board")
@@ -1392,7 +1428,16 @@ def _run_main(players, rep, dk, dk_text, contests, skipped, big, small, o,
                 # "first" from 11-9 on; builds before that (the 11-8 main
                 # slate, week 9) were DST-last and carry no dstRule key.
                 "dstRule": "first" if NB.DST_FIRST else "last",
-                "ranges": {k: list(v) for k, v in NB.RANGES.items()},
+                "ranges": {k: [None if x == float("inf") else round(x, 2) for x in v]
+                           for k, v in R.items()},
+                "fieldOwnSum": round(field_sum, 2),
+                "ownSumRel": list(NB.POWN_REL),
+                "fixedRanges": {k: [None if x == float("inf") else x for x in v]
+                                for k, v in NB.FIXED_RANGES.items()},
+                "topGameTotal": max(tmap.values()) if tmap else None,
+                "qbsWithLineups": sorted({lu.qb().name.strip() for lus in sets.values()
+                                          for lu in lus}),
+                "inputsDir": o.get("_inputsDir"),
                 "cap": NB.CAP, "share2": NB.SHARE2, "p_bb": NB.P_BB,
                 "stack_probs": NB.STACK_PROBS, "alpha": NB.ALPHA,
                 "sets": set_meta,
@@ -2590,6 +2635,7 @@ def run_build_old(proj_text, field_text="", dk_text="", options=None,
                 "ownedAdds": [p.name for p in owned_adds],
                 "ceilingRank": ceil_rank,
                 "gameFirst": game_src or False,
+                "inputsDir": o.get("_inputsDir"),
                 "qbFloor": {p.name: qb_floors[p.dk_id]
                             for p in players if p.dk_id in qb_floors}}
     if fmt == "showdown":
