@@ -2,6 +2,31 @@
 
 Newest first. One entry per change, in plain words: what changed and why.
 
+## Nov 20, 2026 — the chalk sheet
+
+From `NBA Chalk Sheet Handover 11-20.md`. The data chat's code is copied as handed over (`chalk_sheet.py`, `fit_needs.py`, `needs.json`); the tool calls it.
+
+**The chalk sheet shows on the page** once the projections are dropped, and again when LineStar is dropped, the pool changes or a late scratch is typed. One line per chalk player (15%+ projected own, the three most-owned under $5,000, and anyone an old rule votes on):
+- what he needs at his price and ownership (the break-even), the gap to his projection, the big-game score, the chance of each, and how many of his games reached them;
+- Stokastic's and LineStar's projected own;
+- the marks: heavily owned and under what he needs (25%+ own, 1.5+ under); cheap and under (found after the fact); under his line and on the bench; fails both checks; cheap and clears; clears by the most;
+- the old rules as votes, shown only, with whether the box score agrees;
+- his role, the box-score line, and his team's notes that name him.
+
+**Ticks.** Nothing starts ticked and nothing moves without a tick. On a chalk line: cap at half (suggested only on the heavy mark), cap at three-quarters, out. On the off-pool list: hold at his projected own, and "left off on purpose". A tick becomes a cap or a minimum, added to what is typed; a typed line for the same player wins. The typed boxes are saved as typed.
+
+**Hold at his projected own.** A minimum of his own share of the 150 (and his own share of a 20 on a 2 to 4 game slate). On 2 to 4 and 8+ game slates, where the pool is a source, the same number is also his cap: a minimum alone put a 5% player in 17 of 150 on Nov 19, because a minimum adds him to the pool.
+
+**The off-pool list** now uses the rules as tested: A and B take players projected 10 or more; C is one of the three highest-projected off-pool studs under 10% own, shown when he is under 5%.
+
+**Saved for grading.** The whole sheet, every tick, every suggested tick with taken or not, the marks, the left-off names, the before and after of the 150, and the 150 without the ticks (`sheet_noTicks`).
+
+**The break-even table is refit in the background** when the app starts and after a night is graded (`logs/needs.json`, cache in `logs/needs_cache.json`). The sheet says when the table was fitted and warns past 7 days.
+
+**The tool's saved nights now see a night saved only as the Data Hub export** (Nov 19 on).
+
+**Checked.** The tool's sheet against the data chat's check sheets for Nov 14, Nov 17 and Nov 19: no differences. Its ten test cases pass against the tool. With no tick, the lineups are unchanged.
+
 ## Nov 20, 2026 — T1: built to win
 
 From `NBA Top 10 Report 11-20.md`, `NBA Chalk Check And The Pick Report 11-20.md` and `NBA The 20s, The Spread And The Pool Report 11-20.md`. Judged on where the set's best lineup finishes, not on dollars or cash rate.

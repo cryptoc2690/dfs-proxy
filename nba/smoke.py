@@ -2053,6 +2053,54 @@ _sh = ((_s1.get("nov19Shadows") or {}))
 check("T1: the stop rule's two 150s are saved beside the live one (plain, and limit + cap with no shape)",
       bool(_sh), str(_sh)[:120])
 
+# ---- the chalk sheet (Chalk Sheet handover, Nov 20) ---------------------------
+print("\n-- the chalk sheet --")
+import chalk_sheet as _CS                    # noqa: E402
+_sp = app.sheet_preview(PROJ5, "", {"pool": _pool5})
+_sh5 = _sp.get("sheet") or {}
+check("sheet: the page's preview makes a sheet: a line for every 15%+ player, nothing ticked",
+      not _sp.get("error") and _sh5.get("lines")
+      and all(x["own"] >= 15 or x["why_on_sheet"] != "15%+ projected own" for x in _sh5["lines"])
+      and _sp["plan"]["text"].startswith("No ticks"), str(_sp.get("error") or len(_sh5.get("lines", []))))
+check("sheet: every chalk line carries what he needs, the gap and three ticks, none suggested without the mark",
+      all(abs(x["gap"] - (x["projection"] - x["break_even"])) < 0.11 and
+          ([t["tick"] for t in x["ticks"]] == ["cap at half", "cap at three-quarters", "out"] or not x["ticks"])
+          and (any(m["suggested_tick"] for m in x["marks"]) or not any(t["suggested"] for t in x["ticks"]))
+          for x in _sh5["lines"]))
+_top = max((x for x in _sh5["lines"] if x["ticks"]), key=lambda x: x["own"])
+_half = next(t for t in _top["ticks"] if t["tick"] == "cap at half")
+_kt = _nlog()
+_bt = _real_run_build(PROJ5, FIELD5, DK5b, {"pool": _pool5, "sheetTicks": {_top["name"]: "cap at half"}})
+_rt = _rows_of(_kt)
+_ct = sum(1 for r in _rt if r["contest_id"] == "900001" and any(p["name"] == _top["name"] for p in r["players"]))
+_st = (_rt[0].get("settings") or {}) if _rt else {}
+check("sheet: a ticked cap at half holds him at half his projected own in the 150",
+      not _bt.get("error") and _ct <= _half["lineups_of_150"], f"{_top['name']} {_ct} of 150, cap {_half['lineups_of_150']}")
+check("sheet: the tick is saved with the build, and the typed boxes are saved as typed",
+      (_st.get("chalkSheet") or {}).get("ticked") == {_top["name"]: "cap at half"}
+      and (_st.get("capPlayers") or "") == "" and (_st.get("chalkSheet") or {}).get("file"),
+      str((_st.get("chalkSheet") or {}).get("ticked")))
+_kn = _nlog()
+_bn = _real_run_build(PROJ5, FIELD5, DK5b, {"pool": _pool5})
+_cn = sum(1 for r in _rows_of(_kn) if r["contest_id"] == "900001" and any(p["name"] == _top["name"] for p in r["players"]))
+_ky = _nlog()
+_by = _real_run_build(PROJ5, FIELD5, DK5b, {"pool": _pool5, "capPlayers": f"{_top['name']} 100%",
+                                           "sheetTicks": {_top["name"]: "out"}})
+_cy = sum(1 for r in _rows_of(_ky) if r["contest_id"] == "900001" and any(p["name"] == _top["name"] for p in r["players"]))
+check("sheet: with no tick the sheet moves nothing; a typed cap for the same player wins over a tick",
+      _cy == _cn and _cn > 0, f"no tick {_cn}, typed 100% with an 'out' tick {_cy}")
+check("sheet: a tick the sheet does not offer is ignored",
+      app.sheet_ticks({"sheetTicks": {"A": "floor at 2x", "B": "out"}}) == {"B": "out"})
+app.left_off_save(app._slate_day({"slateDate": "2026-11-18"}), ["Some Player Jr."])
+app.left_off_save(app._slate_day({"slateDate": "2026-11-19"}), ["Some Player Jr.", "Other Guy"])
+check("sheet: 'left off on purpose' is saved by name with the night and counted on later nights only",
+      app.left_off_counts(app._slate_day({"slateDate": "2026-11-20"})) == {"some player": 2, "other guy": 1}
+      and app.left_off_counts(app._slate_day({"slateDate": "2026-11-19"})) == {"some player": 1},
+      str(app.left_off_counts(app._slate_day({"slateDate": "2026-11-20"}))))
+check("sheet: the break-even is read by price band and ownership band from the fitted table",
+      _CS.need({"break_even_multiple": {"40|4500": 5.94}, "big_game_multiple": {"4500": 7.5}}, 5000, 47)
+      == (5.94 * 5.0, 7.5 * 5.0))
+
 # The summary and exit MUST stay last — appending a new section after them
 # silently skips it and the suite still reports a clean pass.
 print(f"\n{'=' * 56}\n  {ok} passed, {fail} failed\n{'=' * 56}")

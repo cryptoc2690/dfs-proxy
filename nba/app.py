@@ -1124,6 +1124,147 @@ def weak_preview(proj_text, options=None):
 
 T1_OFF = ("weakChalkOff", "matchupOff", "leverOff", "liveOff", "g20Off", "g21Off")
 
+# ---- the chalk sheet (Chalk Sheet handover, Nov 20; chalk_sheet.py) ----------
+# One line per chalk player: what he needs at his price and ownership, the
+# marks, the old rules as votes, and ticks. Nothing on it moves the build until
+# a line is ticked; a tick becomes a cap or a minimum, the same as typing one.
+NOTES_PATH = os.environ.get("NBA_NOTES") or os.path.expanduser(
+    "~/Downloads/NBA Results 1/NBA Team Notes (master).md")
+SHEET_TICKS = ("cap at half", "cap at three-quarters", "out", "hold at his projected own")
+
+
+def _needs_path():
+    """The break-even table: the morning's refit (logs/needs.json) when there is
+    one, else the table shipped with the tool."""
+    import newbuild as NB
+    p = os.path.join(NB.LOG_DIR, "needs.json")
+    return p if os.path.exists(p) else os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                    "needs.json")
+
+
+_REFIT = {"running": False}
+
+
+def refit_needs(wait=False):
+    """Refit the break-even table from the saved nights (fit_needs.py) into
+    logs/needs.json. A finished night is kept in logs/needs_cache.json, so only
+    a new night is worked out (10 seconds to 3 minutes). Runs in the background:
+    when the app starts and after a night is graded."""
+    import threading
+    import newbuild as NB
+
+    def work():
+        try:
+            import fit_needs as FN
+            os.makedirs(NB.LOG_DIR, exist_ok=True)
+            os.environ["NBA_NEEDS_CACHE"] = os.path.join(NB.LOG_DIR, "needs_cache.json")
+            T = FN.fit()
+            if T.get("nights"):
+                path = os.path.join(NB.LOG_DIR, "needs.json")
+                with open(path + ".tmp", "w", encoding="utf-8") as fh:
+                    json.dump(T, fh, indent=1)
+                os.replace(path + ".tmp", path)
+        except Exception as e:                # the shipped table stays in use
+            print(f"break-even table not refit: {type(e).__name__}: {e}")
+        finally:
+            _REFIT["running"] = False
+
+    if _REFIT["running"]:
+        return
+    _REFIT["running"] = True
+    if wait:
+        work()
+    else:
+        threading.Thread(target=work, daemon=True).start()
+
+
+def _left_off_path():
+    import newbuild as NB
+    return os.path.join(NB.LOG_DIR, "left_off.json")
+
+
+def _left_off_read():
+    try:
+        with open(_left_off_path(), encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def left_off_counts(day):
+    """{name key: how many EARLIER nights he was marked "left off on purpose"}."""
+    iso = day.isoformat()
+    return {k: sum(1 for d in v if d < iso) for k, v in _left_off_read().items()
+            if any(d < iso for d in v)}
+
+
+def left_off_save(day, names):
+    """Tonight's "left off on purpose" marks, by name with the night (it replaces
+    anything saved for the same night by an earlier build)."""
+    iso = day.isoformat()
+    cur = _left_off_read()
+    keys = {normalize_name(n) for n in (names or []) if (n or "").strip()}
+    for k in list(cur):
+        cur[k] = [d for d in cur[k] if d != iso]
+    for k in keys:
+        cur.setdefault(k, []).append(iso)
+    cur = {k: sorted(v) for k, v in cur.items() if v}
+    try:
+        os.makedirs(os.path.dirname(_left_off_path()), exist_ok=True)
+        with open(_left_off_path(), "w", encoding="utf-8") as fh:
+            json.dump(cur, fh, indent=1)
+    except OSError:
+        pass
+
+
+def sheet_night(players, active, logs, history, n_games, ls_map, pool_names, day, proj_text, inj):
+    """Tonight's chalk sheet, from what the build already has."""
+    import chalk_sheet as CS
+    import leverage as LV
+    return CS.chalk_sheet(players, active, logs, history, n_games, ls_map or {}, pool_names,
+                          today=day, ceil=LV.ceilings(proj_text), inj=inj, needs=_needs_path(),
+                          notes=NOTES_PATH, left_off=left_off_counts(day))
+
+
+def sheet_ticks(o):
+    """The ticks the page sent: {player name: tick}, only the ticks the sheet offers."""
+    t = (o or {}).get("sheetTicks") or {}
+    return {str(k): v for k, v in t.items() if v in SHEET_TICKS} if isinstance(t, dict) else {}
+
+
+def sheet_preview(proj_text, linestar_text="", options=None):
+    """What the page shows once the projections are dropped: the chalk sheet."""
+    import chalk_sheet as CS
+    import newbuild as NB
+    import role as RL
+    o = options or {}
+    players, rep = read_projections(proj_text or "")
+    if rep.get("error"):
+        return {"error": rep["error"]}
+    inj = NB.injury_tags(proj_text)
+    n_games = len({p.game for p in players if "@" in (p.game or "") and p.proj > 0})
+    pool_names = read_sharp(o.get("pool") or "") | read_sharp(o.get("cores") or "")
+    for p in players:
+        p.in_pool = normalize_name(p.name) in pool_names
+    apply_removals(players, read_sharp(o.get("remove") or ""))
+    ls_map = {}
+    if (linestar_text or "").strip():
+        ls, lrep = read_linestar(linestar_text)
+        if not lrep.get("error") and not lrep.get("is_results"):
+            ls_map = ls
+    day = _slate_day(o)
+    sync = RL.sync(day)
+    logs = RL.load_logs(day)
+    history = NB.load_history()
+    active = [p for p in players if NB.is_active(p, inj)]
+    S = sheet_night(players, active, logs, history, n_games, ls_map, pool_names, day,
+                    proj_text, inj)
+    if sync["missing"]:
+        S["top"]["alerts"].append("ESPN box scores are missing for "
+                                  + ", ".join(sync["missing"][:4])
+                                  + (f" ({sync['error']})" if sync["error"] else "") + ".")
+    return {"sheet": S, "plan": CS.tick_plan(S, sheet_ticks(o), n_games)}
+
 
 def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=""):
     """The build (Nov 7 spec, newbuild.py). Showdown still goes to the old build.
@@ -1499,12 +1640,72 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
     def names_of(chunks_):
         return [[[p.name for p in r] for r in ros] for ros, _s in chunks_]
 
+    # The chalk sheet (Chalk Sheet handover, Nov 20). A ticked line becomes a
+    # cap (a percent of the set) or a minimum (lineups), added to what is typed
+    # in the two boxes; a typed line for the same player wins.
+    import chalk_sheet as CS
+    typed_caps, typed_floors = o.get("capPlayers") or "", o.get("floorPlayers") or ""
+    try:
+        sheet = sheet_night(players, R["active"], R["logs"], history, n_games, ls_map,
+                            pool_names, R["date"], proj_text, inj)
+    except Exception as e:                    # the sheet is never worth losing the build over
+        sheet = None
+        say("warn", f"The chalk sheet could not be made ({type(e).__name__}: {e}); the "
+                    f"build is unchanged and no tick is applied.")
+    ticked = sheet_ticks(o) if sheet else {}
+    plan, tick_small, sheet_effect = None, {}, None
+    caps_text, floors_text = typed_caps, typed_floors    # what the build reads: typed + ticks
+    if sheet:
+        plan = CS.tick_plan(sheet, ticked, n_games)
+        by_nm_ = {normalize_name(p.name): p for p in players}
+        has_cap = set(_player_caps(typed_caps, players)[0])
+        has_floor = set(_player_floors(typed_floors, players)[0])
+        add_c, add_f, skipped = [], [], []
+        for nm_, pct_ in plan["caps_percent"].items():
+            q = by_nm_.get(normalize_name(nm_))
+            if q is None or q.dk_id in has_cap:
+                skipped.append(nm_)
+            else:
+                add_c.append(f"{q.name} {pct_:g}%")
+        for nm_, k_ in plan["minimums_lineups_150"].items():
+            q = by_nm_.get(normalize_name(nm_))
+            if q is None or q.dk_id in has_floor:
+                skipped.append(nm_)
+            else:
+                add_f.append(f"{q.name} {int(k_)}")
+                if n_games <= 4:              # a 20 takes his own share of 20, not the 150's number
+                    tick_small[q.dk_id] = int(plan["minimums_lineups_20"].get(nm_, 1))
+                # A minimum also puts him in the pool. Where the pool is a source
+                # (2-4 and 8+ games) the pick would then take him well past his
+                # own (Nov 19: a minimum of 8 became 17), so there he is held at
+                # that number: the same count is his cap. On 5-7 games the file
+                # is the source and only the minimum is set.
+                if not (5 <= n_games <= 7) and q.dk_id not in has_cap:
+                    add_c.append(f"{q.name} {100.0 * int(k_) / CS.SET_BIG:.4g}%")
+        if add_c:
+            caps_text = "\n".join([typed_caps] + add_c).strip()
+        if add_f:
+            floors_text = "\n".join([typed_floors] + add_f).strip()
+        if ticked:
+            say("info", "Chalk sheet ticks: " + "; ".join(f"{k} ({v})" for k, v in ticked.items())
+                + ". " + plan["text"]
+                + (" A typed cap or minimum for the same player wins, so the tick was "
+                   "skipped for: " + ", ".join(skipped) + "." if skipped else "")
+                + (" Not understood: " + "; ".join(plan["not_understood"]) + "."
+                   if plan["not_understood"] else ""))
+        sug_ = [f"{x['name']} ({t['tick']}, {t['cap_percent']:g}%)" for x in sheet["lines"]
+                for t in x["ticks"] if t["suggested"]]
+        left_ = [x for x in sug_ if x.split(" (")[0] not in ticked]
+        if left_:
+            say("warn", "Heavily owned and projected under what he needs, with a suggested "
+                        "tick you did not take: " + "; ".join(left_) + ".")
+
     sets, all_notes = {}, []
     base150 = None            # the 150 the 20s are drawn from (G17)
     for kind, n in (("big", n_big), ("small", n_small)):
         if not n:
             continue
-        pc, pmiss, pbad, pbig = _player_caps(o.get("capPlayers"), players, n)
+        pc, pmiss, pbad, pbig = _player_caps(caps_text, players, n)
         caps = {k: int(round(v * n)) for k, v in pc.items()}
         if kind == "big" or not n_big:
             if pmiss:
@@ -1516,8 +1717,10 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
             if pbig:
                 say("warn", "These caps are more lineups than the set, so they cap "
                             "nothing: " + "; ".join(pbig))
-        floors, fmiss, fbad = _player_floors(o.get("floorPlayers"), players)
+        floors, fmiss, fbad = _player_floors(floors_text, players)
         floors = {k: min(v, n) for k, v in floors.items()}
+        if kind == "small":
+            floors.update({k: min(v, n) for k, v in tick_small.items() if k in floors})
         if (kind == "big" or not n_big) and (fmiss or fbad):
             say("warn", "Minimum lines not read: " + "; ".join(fmiss + fbad))
         copies = 1
@@ -1606,6 +1809,25 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
             for nm, w_ in shw:
                 sh = bset(win_=w_)
                 win_shadow[nm] = [[p.name for p in r] for r in sh["rosters"]]
+        if ticked and kind == "big" and (caps_text != typed_caps or floors_text != typed_floors):
+            pc0 = _player_caps(typed_caps, players, n)[0]
+            c0 = {k: int(round(v * n)) for k, v in pc0.items()}
+            c0.update({k: 0 for k in weak_caps})
+            c0.update(g21_caps)
+            f0 = {k: min(v, n) for k, v in _player_floors(typed_floors, players)[0].items()}
+            sh = bset(caps_=c0, floors_=f0)
+            nb_shadow.setdefault("sheet_noTicks", {})["big"] = names_of(sh["chunks"])
+            sheet_effect = CS.tick_effect(sh["rosters"], res["rosters"])
+            say("info", f"Your ticks changed {sheet_effect['lineups_changed']} of the 150's "
+                        f"{sheet_effect['of']} lineups"
+                + (" (on a slate drawn from your pool, a player added to the pool redraws "
+                   "the set)." if plan["minimums_lineups_150"] and not (5 <= n_games <= 7) else ".")
+                + (" Up: " + ", ".join(f"{g['name']} {g['before']} to {g['after']}"
+                                       for g in sheet_effect["gained"][:5]) + "."
+                   if sheet_effect["gained"] else "")
+                + (" Down: " + ", ".join(f"{g['name']} {g['before']} to {g['after']}"
+                                         for g in sheet_effect["lost"][:5]) + "."
+                   if sheet_effect["lost"] else ""))
         if spread and (kind == "big" or (kind == "small" and from150 and not n_big)):
             # T1's stop rule reads these (the scoreboard): the same night's 150
             # with no spread at all (plain + G17), and with the limit and the
@@ -1723,41 +1945,17 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                             + BR.line(p, BXr.get(p.dk_id)) for p in pool_warn)
                 + (". ★ = he's starting and his minutes in his starts are 3+ over "
                    "Stokastic's." if any(_mark(p) for p in pool_warn) else ""))
-    # T2's off-pool list (20s, Spread And Pool report, Nov 20): A = not in your
-    # pool at 5%+ projected own; B = under 5% by Stokastic and 10%+ by LineStar;
-    # C = an off-pool stud (over $7,500) under 5% own, the three highest by
-    # projection. Shown only. To hold one at his projected own in the 150, paste
-    # his line into the minimums box.
-    off_pool = []
-    if pool_names:
-        ls_own = lambda p: (ls_map.get(normalize_name(p.name)) or {}).get("own")
-        offp = [p for p in active if not p.in_pool and p.proj > 0]
-        A_ = [(p, "A") for p in pool_warn]
-        B_ = [(p, "B") for p in offp if p.ownership < BR.G23_OWN and (ls_own(p) or 0) >= 10]
-        C_ = [(p, "C") for p in sorted((p for p in offp if p.ownership < BR.G23_OWN
-                                        and p.salary > 7500), key=lambda p: -p.proj)[:3]]
-        seen_ = set()
-        for p, why in A_ + B_ + C_:
-            if p.dk_id in seen_:
-                continue
-            seen_.add(p.dk_id)
-            off_pool.append({"name": p.name, "list": why, "salary": p.salary,
-                             "own": round(p.ownership, 1), "lsOwn": ls_own(p),
-                             "proj": round(p.proj, 1),
-                             "lineups150": max(1, int(round(p.ownership / 100.0 * 150)))})
-        if off_pool:
-            tot = sum(r["lineups150"] for r in off_pool)
-            say("info", f"Off-pool list ({len(off_pool)} names; shown only, nothing is added). "
-                        "A = 5%+ projected own, B = under 5% by Stokastic and 10%+ by LineStar, "
-                        "C = stud under 5% own. To hold one at his projected own in the 150, "
-                        "paste his line into Minimums: " + " | ".join(
-                            f"[{r['list']}] {r['name']} {r['lineups150']} (${r['salary']:,}, "
-                            f"{r['own']:.0f}% own"
-                            + (f", LineStar {r['lsOwn']:.0f}%" if r["lsOwn"] is not None else "")
-                            + f", {r['proj']:.0f} proj)" for r in off_pool)
-                + f". All of them together: {tot} lineup spots of the 150's 1,200."
-                + (" On a 2-4 game slate a minimum is the same NUMBER in the 20s, so keep "
-                   "it small tonight." if n_games <= 4 else ""))
+    # The off-pool list, from the chalk sheet (the rules as tested: A and B take
+    # players projected 10+; C is one of the three highest-projected off-pool
+    # studs under 10% own, shown when he is under 5%). Shown only; a tick on the
+    # sheet holds a player at his projected own.
+    off_pool = (sheet or {}).get("off_pool", {}).get("rows", []) if pool_names else []
+    if off_pool:
+        say("info", (sheet["off_pool"]["text"] + " " + " | ".join(
+            f"[{r['list']}] {r['name']} (${r['price']:,}, {r['own']:.0f}% own"
+            + (f", LineStar {r['linestar_own']:.0f}%" if r["linestar_own"] is not None else "")
+            + f", {r['projection']:.0f} proj, {r['minimum_lineups_of_150']} of 150 at his own)"
+            + (" ticked" if ticked.get(r["name"]) else "") for r in off_pool)))
     studs_off = NB.off_pool_studs(players, active) if pool_names else []
     if studs_off:
         say("info", "Studs off your pool under 12% projected owned (shown, not used): "
@@ -1886,6 +2084,20 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
         "offPool": off_pool,
         "lowMinuteChalk": [dict(r, ours150=share_big(by_id[r["id"]]),
                                 ours20=share_small(by_id[r["id"]])) for r in lmc_lines]}
+    left_off_names = [str(x) for x in (o.get("leftOff") or []) if str(x).strip()]
+    if sheet:
+        left_off_save(R["date"], left_off_names)
+        rec_ = CS.saved_record(sheet, ticked, left_off_names, plan)
+        settings["chalkSheet"] = {
+            "file": NB.save_shadow("chalkSheet", rec_),
+            "ticked": ticked, "leftOff": sorted(left_off_names),
+            "typedCaps": typed_caps, "typedMinimums": typed_floors,
+            "caps": plan["caps_percent"], "minimums150": plan["minimums_lineups_150"],
+            "minimums20": plan["minimums_lineups_20"], "moved": plan["lineup_spots_moved"],
+            "suggested": rec_["suggested"], "marks": rec_["marks"],
+            "effect": sheet_effect,
+            "night": sheet["top"]["night"], "slate": sheet["top"]["slate"],
+            "needsTable": sheet["top"]["needs_table"]}
     settings["t1"] = {
         "options": {k_: bool(o.get(k_)) for k_ in T1_OFF + ("from150Off", "spreadOff", "studFloor")},
         "filePick": o.get("filePick"),
@@ -3304,7 +3516,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path not in ("/api/build", "/api/players", "/api/check", "/api/grade",
-                             "/api/lateswap", "/api/weak"):
+                             "/api/lateswap", "/api/weak", "/api/sheet"):
             return self._send(404, json.dumps({"error": "not found"}))
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -3323,10 +3535,15 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/weak":
                 r = weak_preview(p.get("proj") or "", p.get("options") or {})
                 return self._send(400 if r.get("error") else 200, json.dumps(r))
+            if self.path == "/api/sheet":
+                r = sheet_preview(p.get("proj") or "", p.get("linestar") or "",
+                                  p.get("options") or {})
+                return self._send(400 if r.get("error") else 200, json.dumps(r))
             if self.path == "/api/grade":
                 lad = payout_ladder(p.get("prizePool"), p.get("firstPrize"),
                                     p.get("paidFrom"), p.get("paidTo"))
                 g = grade(p.get("standings") or "", p.get("slate"), lad)
+                refit_needs()                 # the morning refit of the break-even table
                 return self._send(400 if g.get("error") else 200, json.dumps(g))
             if self.path == "/api/lateswap":
                 import lateswap
@@ -3351,6 +3568,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def serve():
+    refit_needs()                 # the break-even table, in the background
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     url = f"http://127.0.0.1:{PORT}/"
     print(f"NBA optimizer (classic and showdown) — {url}")

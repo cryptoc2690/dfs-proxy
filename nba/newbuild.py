@@ -181,18 +181,22 @@ def _nights(folder=None):
     now = datetime.now()
     today = _season_key(now.month, now.day)
     found = {}
-    for path in glob.glob(os.path.join(folder, "NBA Stokastic Projections Main *.csv")):
-        m = _DATE.search(os.path.basename(path))
-        if not m:
-            continue
-        key = _season_key(int(m.group(1)), int(m.group(2)))
-        if key >= today:
-            continue
-        date = f"{int(m.group(1))}-{int(m.group(2))}"
-        if date in found and not os.path.basename(path).endswith(f"{date}.csv"):
-            continue
-        st = os.path.join(folder, f"NBA Contest Standing Main mini-MAX {date}.csv")
-        found[date] = (key, date, path, st if os.path.exists(st) else None)
+    # The plain projections export first; a night saved only as the Data Hub
+    # export (Nov 19 on) is read from that (Chalk Sheet handover, Nov 20).
+    for pat, hub in (("NBA Stokastic Projections Main *.csv", False),
+                     ("NBA Stokastic Data Hub Projections Main *.csv", True)):
+        for path in glob.glob(os.path.join(folder, pat)):
+            m = _DATE.search(os.path.basename(path))
+            if not m:
+                continue
+            key = _season_key(int(m.group(1)), int(m.group(2)))
+            if key >= today:
+                continue
+            date = f"{int(m.group(1))}-{int(m.group(2))}"
+            if date in found and (hub or not os.path.basename(path).endswith(f"{date}.csv")):
+                continue
+            st = os.path.join(folder, f"NBA Contest Standing Main mini-MAX {date}.csv")
+            found[date] = (key, date, path, st if os.path.exists(st) else None)
     return sorted(found.values())
 
 

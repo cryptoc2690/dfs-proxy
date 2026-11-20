@@ -55,6 +55,31 @@ INDEX_HTML = r"""<!doctype html>
   #advwrap>.setgrid{padding:12px 0 0}
   .hint{font-size:11.5px;color:var(--muted);margin-top:5px;line-height:1.45}
 
+  details#sheetwrap{border-bottom:1px solid var(--line);background:var(--panel)}
+  details#sheetwrap>summary{cursor:pointer;padding:9px 22px;font-size:12.5px;
+    color:var(--muted);list-style:none}
+  details#sheetwrap>summary::-webkit-details-marker{display:none}
+  details#sheetwrap>summary:hover{color:var(--text)}
+  #sheetbody{padding:4px 22px 18px;max-width:1180px;font-size:13px;line-height:1.5}
+  #sheetbody .stop{margin:2px 0}
+  #sheetbody .stotal{margin:8px 0;padding:7px 10px;border:1px solid var(--line);
+    border-radius:8px;background:var(--panel2)}
+  .sline{border:1px solid var(--line);border-radius:9px;padding:8px 11px;margin:7px 0;
+    background:var(--panel2)}
+  .sline.warned{border-color:#7a5a1e}
+  .sline.heavy{border-color:#b9892e;background:#26200f}
+  .sline .sname{font-weight:650;font-size:14px}
+  .sline .snum{font-variant-numeric:tabular-nums}
+  .sline .under{color:#ff9f9f;font-weight:650} .sline .over{color:#6ee7a0;font-weight:650}
+  .smark{margin-top:3px;color:#e8cf9a} .smark.ok{color:#a8e0c4}
+  .svote,.sbox,.snote{color:var(--muted);font-size:12.5px;margin-top:2px}
+  .sticks{margin-top:6px;display:flex;flex-wrap:wrap;gap:4px 16px}
+  .sticks label,.soff label{display:inline;margin:0;font-size:12.5px;color:var(--text)}
+  .sticks .sug{color:#e8cf9a;font-weight:650}
+  .soff{border-bottom:1px solid var(--line);padding:6px 0}
+  .shead{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
+    margin:14px 0 2px}
+
   main{padding:18px 22px;max-width:1180px}
   button{background:var(--accent);color:#06101f;border:0;border-radius:9px;
     padding:11px 22px;font-size:14.5px;font-weight:650;cursor:pointer}
@@ -260,6 +285,11 @@ INDEX_HTML = r"""<!doctype html>
   </div>
 </details>
 
+<details id="sheetwrap" open>
+  <summary>Chalk sheet <span id="sheetwho">— drop the projections first</span></summary>
+  <div id="sheetbody"></div>
+</details>
+
 <main>
   <div class="row">
     <button id="go" disabled>Build lineups</button>
@@ -384,13 +414,14 @@ function slot(key, el){
           if(d.format) setFmt(d.format, key === 'dk');
           if(key === 'standings') $('#graderow').style.display = '';
           if(key === 'dk') showContests(d.contests || []);
-          if(key === 'proj') { loadRoster(text); loadWeak(text); }
+          if(key === 'proj') { loadRoster(text); loadWeak(text); sheetTicks = {}; leftOff = new Set(); }
+          if(key === 'proj' || key === 'linestar') loadSheet();
           crossCheck();
         } else {
           files[key] = null; slates[key] = null;
           // A refused projections file must not leave the LAST file's players
           // in the pickers — that is how a pasted pool matched nobody.
-          if(key === 'proj') clearRoster();
+          if(key === 'proj') { clearRoster(); clearSheet(); }
           mark('bad', '✗ ' + f.name + ' — ' + d.msg);
           crossCheck();
         }
@@ -553,6 +584,149 @@ function weakKeep(){
     .filter(x => !x.checked && !x.disabled).map(x => x.dataset.n).join('\n');
 }
 
+// ---- the chalk sheet (Chalk Sheet handover, Nov 20) ----
+// One line per chalk player: what he needs at his price and ownership, the
+// marks, the old rules as votes, and ticks. Nothing starts ticked and nothing
+// moves the build without a tick. A tick is sent with the build and becomes a
+// cap or a minimum.
+let sheet = null, sheetTicks = {}, leftOff = new Set(), sheetTimer = null, sheetSeq = 0;
+function clearSheet(){
+  sheet = null; sheetTicks = {}; leftOff = new Set();
+  $('#sheetbody').innerHTML = '';
+  $('#sheetwho').textContent = '— drop the projections first';
+}
+function sheetSoon(){
+  if(!files.proj) return;
+  clearTimeout(sheetTimer);
+  sheetTimer = setTimeout(loadSheet, 700);
+}
+async function loadSheet(){
+  if(!files.proj || fmt === 'showdown'){ return; }
+  const seq = ++sheetSeq;
+  $('#sheetwho').textContent = '— reading the box scores…';
+  try{
+    const res = await fetch('/api/sheet', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({proj: files.proj, linestar: files.linestar, options: {
+        pool: [...sel.pool].join('\n'), cores: [...sel.core].join('\n'),
+        remove: $('#remove').value}})
+    });
+    const d = await res.json();
+    if(seq !== sheetSeq) return;            // a newer request is on its way
+    if(d.error){ $('#sheetwho').textContent = '— ' + d.error; return; }
+    sheet = d.sheet;
+    // keep only the ticks that are still on the sheet
+    const names = new Set(sheet.lines.map(x => x.name).concat(sheet.off_pool.rows.map(r => r.name)));
+    Object.keys(sheetTicks).forEach(n => { if(!names.has(n)) delete sheetTicks[n]; });
+    leftOff = new Set([...leftOff].filter(n => names.has(n)));
+    drawSheet();
+  }catch(e){ if(seq === sheetSeq) $('#sheetwho').textContent = '— could not make the sheet'; }
+}
+function sheetTotal(){
+  if(!sheet) return '';
+  let freed = 0, held = 0, n = 0;
+  sheet.lines.forEach(x => {
+    const t = (x.ticks || []).find(t => t.tick === sheetTicks[x.name]);
+    if(t){ freed += Math.max(0, x.own - t.cap_percent) / 100 * 150; n++; }
+  });
+  sheet.off_pool.rows.forEach(r => {
+    if(sheetTicks[r.name] === 'hold at his projected own'){ held += r.minimum_lineups_of_150; n++; }
+  });
+  return !n ? 'No ticks: the build is untouched.'
+    : n + ' tick' + (n > 1 ? 's' : '') + '. They move about ' + (Math.round(freed) + held)
+      + " of the 150's 1,200 lineup spots (" + Math.round(freed) + ' freed by caps, ' + held
+      + ' held by minimums). From projected own; the build shows the real before and after.';
+}
+function drawSheet(){
+  const S = sheet; if(!S) return;
+  const T = S.top, pct = v => Math.round(100 * v) + '%';
+  $('#sheetwho').textContent = '— ' + T.slate.text;
+  let h = '<div class="stop">' + esc(T.night.text) + '</div>'
+    + '<div class="stop muted">Break-even table: fitted ' + esc(T.needs_table.fitted_on || '?')
+    + ' on ' + esc(T.needs_table.nights || '?') + ' nights (through '
+    + esc(T.needs_table.last_night || '?') + ').</div>'
+    + (T.alerts || []).map(a => '<div class="note warn" style="margin:6px 0">' + esc(a) + '</div>').join('')
+    + '<div class="stotal" id="sheettotal">' + esc(sheetTotal()) + '</div>';
+  h += S.lines.map((x, i) => {
+    const warn = x.marks.filter(m => m.mark !== 'cheap and clears' && m.mark !== 'clears by the most');
+    const heavy = x.marks.some(m => m.suggested_tick);
+    const cur = sheetTicks[x.name] || '';
+    let r = '<div class="sline' + (heavy ? ' heavy' : warn.length ? ' warned' : '') + '">'
+      + '<div><span class="sname">' + esc(x.name) + '</span> <span class="muted">' + esc(x.team)
+      + ' · $' + x.price.toLocaleString() + ' · ' + esc(x.starting) + ', ' + Math.round(x.minutes)
+      + ' min' + (x.in_pool === false ? ' · <span class="offsheet">not in your pool</span>' : '')
+      + (x.why_on_sheet !== '15%+ projected own' ? ' · on the sheet: ' + esc(x.why_on_sheet) : '')
+      + '</span></div>'
+      + '<div class="snum">own <b>' + Math.round(x.own) + '%</b>'
+      + ' <span class="muted">(LineStar ' + (x.linestar_own === null ? 'none' : Math.round(x.linestar_own) + '%') + ')</span>'
+      + ' · projected <b>' + x.projection.toFixed(1) + '</b>'
+      + ' · needs <b>' + x.break_even.toFixed(1) + '</b> <span class="' + (x.gap < 0 ? 'under' : 'over') + '">('
+      + (x.gap >= 0 ? '+' : '') + x.gap.toFixed(1) + ')</span>'
+      + ' · big game ' + x.big_game.toFixed(1)
+      + ' · chance ' + pct(x.chance_break_even) + ' / ' + pct(x.chance_big_game)
+      + ' <span class="muted">· his games: ' + esc(x.reached_break_even)
+      + (x.reached_big_game ? ' reached ' + x.break_even.toFixed(1) + ', ' + esc(x.reached_big_game)
+         + ' reached ' + x.big_game.toFixed(1) : '') + '</span></div>';
+    r += x.marks.map(m => '<div class="smark' + (warn.includes(m) ? '' : ' ok') + '">'
+      + (warn.includes(m) ? '⚠ ' : '✓ ') + '<b>' + esc(m.mark.charAt(0).toUpperCase() + m.mark.slice(1)) + '</b>'
+      + ' <span class="muted">— ' + esc(m.rule) + '. Record: ' + esc(m.record) + '.</span>'
+      + (m.suggested_tick ? ' <b>Suggested tick: ' + esc(m.suggested_tick) + '.</b>' : '') + '</div>').join('');
+    r += x.votes.map(v => '<div class="svote">Old rule, shown only: ' + esc(v.rule) + ' ('
+      + (v.side === 'for' ? 'for' : 'against') + ') — ' + esc(v.word) + '. ' + esc(v.box) + '.</div>').join('');
+    if(x.votes_conflict) r += '<div class="svote">The old rules point both ways on him.</div>';
+    r += '<div class="sbox">' + esc(x.role) + (x.steady ? ', ' + esc(x.steady) : '')
+      + (x.job_opened ? ', job opened tonight' : '') + '. ' + esc(x.box) + '</div>';
+    r += (x.notes || []).map(n => '<div class="snote">Note: ' + esc(n) + '</div>').join('');
+    if(x.ticks && x.ticks.length){
+      r += '<div class="sticks"><label><input type="radio" name="st' + i + '" data-n="' + esc(x.name)
+        + '" value=""' + (cur ? '' : ' checked') + '> no tick</label>'
+        + x.ticks.map(t => '<label' + (t.suggested ? ' class="sug"' : '') + '><input type="radio" name="st' + i
+          + '" data-n="' + esc(x.name) + '" value="' + esc(t.tick) + '"' + (cur === t.tick ? ' checked' : '') + '> '
+          + esc(t.tick) + (t.tick === 'out' ? '' : ' = ' + t.cap_percent + '% (' + t.lineups_of_150 + ' of 150)')
+          + (t.suggested ? ' — suggested' : '') + '</label>').join('') + '</div>';
+    }
+    return r + '</div>';
+  }).join('');
+  const tn = S.team_notes || {};
+  h += Object.keys(tn).map(t => tn[t].map(n => '<div class="snote">' + esc(t) + ' note: ' + esc(n) + '</div>').join('')).join('');
+  h += '<div class="shead">Off-pool list</div><div>' + esc(S.off_pool.text) + '</div>';
+  h += S.off_pool.rows.map(r => '<div class="soff"><b>[' + esc(r.list) + '] ' + esc(r.name) + '</b> <span class="muted">'
+    + esc(r.team) + ' · $' + r.price.toLocaleString() + ' · ' + esc(r.starting) + ' · own ' + Math.round(r.own)
+    + '% (LineStar ' + (r.linestar_own === null ? 'none' : Math.round(r.linestar_own) + '%') + ') · projected '
+    + r.projection.toFixed(1) + ' · ' + esc(r.why) + '</span><br>'
+    + '<label><input type="checkbox" class="offhold" data-n="' + esc(r.name) + '"'
+    + (sheetTicks[r.name] ? ' checked' : '') + '> hold at his projected own = ' + r.minimum_lineups_of_150
+    + ' of 150</label> &nbsp; <label><input type="checkbox" class="offleft" data-n="' + esc(r.name) + '"'
+    + (leftOff.has(r.name) ? ' checked' : '') + '> left off on purpose'
+    + (r.left_off_on_purpose_before ? ' (marked ' + r.left_off_on_purpose_before + ' time'
+       + (r.left_off_on_purpose_before > 1 ? 's' : '') + ' before)' : '') + '</label>'
+    + '<div class="sbox">' + esc(r.box) + '</div></div>').join('');
+  const body = $('#sheetbody');
+  body.innerHTML = h;
+  const total = () => { $('#sheettotal').textContent = sheetTotal(); };
+  body.querySelectorAll('.sticks input[type=radio]').forEach(el => el.addEventListener('change', () => {
+    if(el.value) sheetTicks[el.dataset.n] = el.value; else delete sheetTicks[el.dataset.n];
+    total();
+  }));
+  body.querySelectorAll('input.offhold').forEach(el => el.addEventListener('change', () => {
+    if(el.checked){
+      sheetTicks[el.dataset.n] = 'hold at his projected own';
+      leftOff.delete(el.dataset.n);
+      const o = body.querySelector('input.offleft[data-n="' + CSS.escape(el.dataset.n) + '"]'); if(o) o.checked = false;
+    } else delete sheetTicks[el.dataset.n];
+    total();
+  }));
+  body.querySelectorAll('input.offleft').forEach(el => el.addEventListener('change', () => {
+    if(el.checked){
+      leftOff.add(el.dataset.n); delete sheetTicks[el.dataset.n];
+      const o = body.querySelector('input.offhold[data-n="' + CSS.escape(el.dataset.n) + '"]'); if(o) o.checked = false;
+    } else leftOff.delete(el.dataset.n);
+    total();
+  }));
+}
+
+$('#remove').addEventListener('change', sheetSoon);
+
 function clearRoster(){
   roster = [];
   weak = null;
@@ -613,6 +787,7 @@ function picker(kind, inputId, menuId, chipsId){
       + esc(n)+'</span>').join('');
     chips.querySelectorAll('.chip').forEach(c =>
       c.addEventListener('click', () => { sel[kind].delete(c.dataset.n); draw(); }));
+    sheetSoon();
     if(kind === 'pool'){
       // Show the arithmetic, not just the total. Adding a player as a core
       // removes his chip from this box and still counts him in the pool, so a
@@ -774,7 +949,9 @@ $('#go').addEventListener('click', async () => {
           matchupSkip: matchupSkip(),
           leverPick: leverPick(),
           leverage: $('#leverbox').value,
-          dkCalls: $('#dkcalls').value
+          dkCalls: $('#dkcalls').value,
+          sheetTicks: sheetTicks,
+          leftOff: [...leftOff]
         }
       })
     });
