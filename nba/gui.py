@@ -200,8 +200,9 @@ INDEX_HTML = r"""<!doctype html>
         commas, or one per line. Anything that matches nobody is named back to
         you rather than dropped quietly.</div>
       <div class="picknote">Your pool is where our own lineups come from: all
-        150 on 2–4 games, 75 on 8+ games, and the 20-max every night. On 5–7 games
-        the 150 is Stokastic's lineups. If the pool cannot make legal lineups the
+        150 on 2–4 games, 75 on 8+ games, and the 20-max on 2–4 games. On 5–7 games
+        the 150 is Stokastic's lineups, and on 5+ games the 20-max is every 7th
+        lineup of the 150. If the pool cannot make legal lineups the
         whole slate is used, and the build says so.</div>
     </div>
     <div>
@@ -211,30 +212,12 @@ INDEX_HTML = r"""<!doctype html>
       <div class="picknote">Ruled out after you pulled the projections. He is
         taken out of every lineup, Stokastic's included; nothing is shifted to his
         teammates. A fresh Stokastic pull is better when there is time for one.</div>
-      <label style="margin-top:14px">Weak chalk tonight <span id="weakwho" class="muted">— drop the projections first</span></label>
-      <div id="weaklist"></div>
-      <div class="picknote">Chalk (20%+ owned) with a shaky role and no role change:
-        off the bench, a teammate at his position back tonight (one he played
-        without), or projected under
-        22 minutes, with no takeover, minutes lift or new starting job. Shown
-        only since Nov 20: nobody is left out by the tool. To hold one down, type
-        him in the caps box.</div>
       <label style="margin-top:14px">Bad chalk — your sharp's calls</label>
       <textarea id="badchalk" rows="2" spellcheck="false"
                 placeholder="Morez Johnson — minutes&#10;Kevin Huerter — closing"></textarea>
       <div class="picknote">One player per line, then a word of why (minutes,
         closing, the coach's other options). Saved with the build so the reviews
         can grade the calls. It changes nothing in the build.</div>
-      <label style="margin-top:14px">Easy matchups tonight <span id="muwho" class="muted">— drop the projections first</span></label>
-      <div id="mulist"></div>
-      <div class="picknote">Players at 5–20% owned against the most generous
-        defenses (what each team has allowed over players' usual rates, from the box
-        scores). Shown only since Nov 20: the build no longer raises them.</div>
-      <label style="margin-top:14px">Leverage stud tonight <span id="levwho" class="muted">— drop the projections first</span></label>
-      <div id="levlist"></div>
-      <div class="picknote">Studs ($8,500+) under 10% owned with a reason: regulars
-        out, or scoring over his projection. Shown only since Nov 20: no block of
-        lineups is built around him.</div>
       <label style="margin-top:14px">Leverage — your sharp's calls</label>
       <textarea id="leverbox" rows="2" spellcheck="false"
                 placeholder="Alperen Sengun — running the offense&#10;Franz Wagner — Banchero out"></textarea>
@@ -254,7 +237,7 @@ INDEX_HTML = r"""<!doctype html>
       <div class="picknote">One player per line and a NUMBER OF LINEUPS, the same
         as the minimum box ("Reed Sheppard 50" = at most 50 lineups). Add % for a
         percentage ("Reed Sheppard 33%"). A cap at 0 keeps him out entirely. Without
-        a cap nobody goes past 85% of a 150 or 90% of a 20. The build says which caps
+        a cap nobody goes past 85% of a 150 (60% on 5–7 games) or 90% of a 20. The build says which caps
         it applied and warns about any name it could not find.</div>
       <label style="margin-top:14px">Minimum lineups for a player</label>
       <textarea id="floorplayers" rows="2" spellcheck="false"
@@ -487,19 +470,10 @@ function pickedContests(){
 // ---- weak chalk (Weak Chalk Rebuild report, Nov 13) ----
 let weak = null;
 async function loadWeak(text){
+  // Nov 20: the weak chalk, easy matchup and leverage stud lists are off the
+  // page. None of them moves the build; they come back as votes on the chalk
+  // sheet.
   weak = null;
-  $('#weaklist').innerHTML = '';
-  $('#weakwho').textContent = '— checking the box scores…';
-  try{
-    const res = await fetch('/api/weak', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({proj:text})
-    });
-    const d = await res.json();
-    if(d.error){ $('#weakwho').textContent = '— ' + d.error; return; }
-    weak = d;
-    drawWeak();
-  }catch(e){ $('#weakwho').textContent = '— could not check'; }
 }
 function drawWeak(){
   const d = weak; if(!d) return;
@@ -582,11 +556,6 @@ function weakKeep(){
 function clearRoster(){
   roster = [];
   weak = null;
-  $('#weaklist').innerHTML = '';
-  $('#weakwho').textContent = '— drop the projections first';
-  $('#mulist').innerHTML = ''; $('#levlist').innerHTML = '';
-  $('#muwho').textContent = '— drop the projections first';
-  $('#levwho').textContent = '— drop the projections first';
   $('#slate').textContent = '';
   ['poolin'].forEach(id => {
     const el = $('#'+id);
