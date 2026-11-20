@@ -67,11 +67,30 @@ SMALL_SET = 20            # a contest this size or smaller gets the 20-max build
 CAP_BIG = 0.85            # no player in more than 85% of a 150
 CAP_SMALL = 0.90          # ... or 90% of a 20
 MIN_LINEUPS = 4           # a 150 drops anyone in fewer than 4 lineups
-TOP3_K, TOP3_CAP, TOP3_MIN_OWN = 2.0, 0.95, 15.0    # the 20-max's top-3 lean
+# T1 (20s, Spread And Pool report, Nov 20): the top-three raise is OFF (K = 0).
+# It was a cash part; the 20s finish level or higher without it. The grader
+# passes 2.0 to rebuild a night built with it.
+TOP3_K, TOP3_CAP, TOP3_MIN_OWN = 0.0, 0.95, 15.0    # the 20-max's top-3 lean
 # The 150's takeover lean (the prototype's final spec, takeover_k / takeover_cap;
 # left out of the Nov 7 port by mistake, added Nov 12 after the 11-12 review, T13):
 # a takeover player at 15%+ projected own is floored at 1.5x his own, cap 95%.
-TAKEOVER_K, TAKEOVER_CAP, TAKEOVER_MIN_OWN = 1.5, 0.95, 15.0
+# T1 (Nov 20): the lean is OFF (K = 0). On the nights after it was written the
+# 150 finished higher without it. The grader passes 1.5 to rebuild a night
+# built with it.
+TAKEOVER_K, TAKEOVER_CAP, TAKEOVER_MIN_OWN = 0.0, 0.95, 15.0
+# T1 (20s, Spread And Pool report, Nov 20): the 150 is spread, not near copies.
+# SHARE_LIMIT: no two lineups of the 150 share more than this many players
+# (every slate). On 5-7 game slates Stokastic's file is first cut to the top-10
+# SHAPE and no player is in more than CAP_SPREAD of the 150. The shape reads
+# projected ownership only: "a field lineup" is the ownership-weighted sum
+# (sum of own^2 / 100) and the expected count of 15%+ players (sum of own / 100
+# over the 15%+ players). It is used only when SHAPE_MIN or more of the file's
+# lineups pass.
+SHARE_LIMIT = 5
+SHAPE = dict(left=300, chalk=(-1, 3), under10=2, minOwn=5.0, own=(0.8, 1.5))
+SHAPE_MIN = 225
+SHAPE_GAMES = (5, 7)
+CAP_SPREAD = 0.60
 NEW_DRAW = dict(weight=2.5, left=300, n=2000, tries=40000, ranges=True)
 OLD_DRAW = dict(weight=3.0, left=2000, n=4000, tries=80000, ranges=False)
 STUD = 9000
@@ -114,7 +133,7 @@ def plan(n, games, have_file):
     """-> (own lineups, file lineups, which draw, the rule in words)."""
     if n <= SMALL_SET:
         return n, 0, (OLD_DRAW if games >= 8 else NEW_DRAW), \
-            f"{n} from your pool, top three owned to 2x"
+            f"{n} from your pool"
     if games <= 4:
         return n, 0, NEW_DRAW, f"{games} games: all {n} from your pool"
     if not have_file:
@@ -486,6 +505,32 @@ def _dust_drop(rosters, k, keep_ids=()):
     return set(sorted(range(n), key=lambda i: (-sc(rosters[i]), -i))[:k])
 
 
+def spread_spec(games, limit=None, shape=True, cap=True):
+    """T1: how tonight's 150 is spread. -> {"limit", "shape", "cap"}"""
+    f = SHAPE_GAMES[0] <= games <= SHAPE_GAMES[1]
+    return {"limit": SHARE_LIMIT if limit is None else limit,
+            "shape": dict(SHAPE) if (f and shape) else None,
+            "cap": CAP_SPREAD if (f and cap) else None}
+
+
+def field_lineup(players):
+    """What a field lineup carries, from projected ownership only: its summed
+    ownership and its count of 15%+ players. -> (own sum, chalk count)"""
+    live = [p for p in players if (p.proj or 0) > 0]
+    return (sum(p.ownership ** 2 for p in live) / 100.0,
+            sum(p.ownership / 100.0 for p in live if p.ownership >= 15))
+
+
+def shape_ok(c, S, own_sum, chalk):
+    """Is lineup c in the top-10 shape S?"""
+    o = sorted(p.ownership for p in c["ps"])
+    return (SALARY_CAP - sum(p.salary for p in c["ps"]) <= S["left"]
+            and S["chalk"][0] <= sum(1 for v in o if v >= 15) - chalk <= S["chalk"][1]
+            and sum(1 for v in o if v < 10) <= S["under10"]
+            and o[0] >= S["minOwn"]
+            and own_sum > 0 and S["own"][0] <= sum(o) / own_sum <= S["own"][1])
+
+
 def file_candidates(field_lineups, active_ids, slotting):
     """Stokastic's lineups that can be entered tonight, deduplicated across files."""
     out, seen = [], set()
@@ -630,31 +675,41 @@ def upper_sd(active):
 
 # --- selection and exposure ------------------------------------------------
 def select(cands, n, max_exp, total, cnt, taken, key="proj", caps=None, group=None,
-           gcap=None, gcnt=None):
+           gcap=None, gcnt=None, max_shared=None):
     """Greedy by `key` under a per-player cap (a share of `total`) and typed caps
     (counts). group / gcap: at most gcap lineups per group(c) (None = no group;
-    G19's shadow, one live piece in at most 5% of the set). -> chosen
-    candidates; `cnt` and `taken` are updated."""
+    G19's shadow, one live piece in at most 5% of the set). max_shared (T1): a
+    lineup sharing more than this many players with one already taken is
+    passed over; if that leaves the set short, a second pass fills it without
+    the limit. -> chosen candidates; `cnt` and `taken` are updated."""
     chosen = []
     gcnt = gcnt if gcnt is not None else collections.Counter()
-    for c in sorted(cands, key=lambda c: -c[key]):
-        if len(chosen) >= n:
-            break
-        if c["key"] in taken:
-            continue
-        if any(cnt[p.dk_id] + 1 > max_exp * total for p in c["ps"]):
-            continue
-        if caps and any(cnt[p.dk_id] + 1 > caps[p.dk_id] for p in c["ps"] if p.dk_id in caps):
-            continue
-        g = group(c) if group else None
-        if g is not None and gcnt[g] + 1 > gcap:
-            continue
-        if g is not None:
-            gcnt[g] += 1
-        chosen.append(c)
-        taken.add(c["key"])
-        for p in c["ps"]:
-            cnt[p.dk_id] += 1
+    srt = sorted(cands, key=lambda c: -c[key])
+    sets = [set(t) for t in taken] if max_shared is not None else None
+    for strict in ((True, False) if max_shared is not None else (False,)):
+        for c in srt:
+            if len(chosen) >= n:
+                break
+            if c["key"] in taken:
+                continue
+            if any(cnt[p.dk_id] + 1 > max_exp * total for p in c["ps"]):
+                continue
+            if caps and any(cnt[p.dk_id] + 1 > caps[p.dk_id] for p in c["ps"] if p.dk_id in caps):
+                continue
+            ks = set(c["key"]) if sets is not None else None
+            if strict and any(len(ks & s_) > max_shared for s_ in sets):
+                continue
+            g = group(c) if group else None
+            if g is not None and gcnt[g] + 1 > gcap:
+                continue
+            if g is not None:
+                gcnt[g] += 1
+            chosen.append(c)
+            taken.add(c["key"])
+            if sets is not None:
+                sets.append(ks)
+            for p in c["ps"]:
+                cnt[p.dk_id] += 1
     return chosen
 
 
@@ -772,7 +827,8 @@ def tail_fix(rosters, by_id, min_count, keep=(), caps=None):
 # --- the build ---------------------------------------------------------------
 def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, seed=0,
               history=None, slotting=None, copies=1, file_pick=None, raises=None,
-              anchor=None, win=None, upper=None):
+              anchor=None, win=None, upper=None, spread=None, takeover_k=None,
+              top3_k=None):
     """One set (a 150 or a 20). -> dict(rosters, sources, chunks, notes, meta)
 
     players: every player with DK ids attached, pool flags set and removals
@@ -790,7 +846,13 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
     since Nov 17). chunks = [(rosters,
     sources)] one per copy. upper: {dk_id: Std Dev} picks our own lineups by
     their upper end (summed projection + 1.28 x the lineup's Std Dev) instead of
-    the projection (the Sim Chalk report's narrowed-spread 20s, a shadow)."""
+    the projection (the Sim Chalk report's narrowed-spread 20s, a shadow).
+    spread: spread_spec(games), the 150 only (T1): the shared-player limit, and
+    on 5-7 games the top-10 shape on the file and the lower cap on any one
+    player. takeover_k / top3_k: the lean and the top-three raise (None = the
+    module's settings, both 0 since Nov 20)."""
+    tk_k = TAKEOVER_K if takeover_k is None else takeover_k
+    t3_k = TOP3_K if top3_k is None else top3_k
     notes = []
     caps = dict(caps or {})
     floors = dict(floors or {})
@@ -801,10 +863,29 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
     big = n > SMALL_SET
     copies = 1 if big else max(1, int(copies))
     fc = file_candidates(field_lineups or [], active_ids, slotting) if big else []
+    spread = spread if big else None
+    ms = spread["limit"] if spread else None
+    shape_info = None
+    fc_all = fc
+    if spread and spread.get("shape") and fc:
+        eso, ech = field_lineup(players)
+        kept = [c for c in fc if shape_ok(c, spread["shape"], eso, ech)]
+        shape_info = {"file": len(fc), "pass": len(kept), "used": len(kept) >= SHAPE_MIN,
+                      "ownSum": round(eso, 1), "chalk": round(ech, 2)}
+        if shape_info["used"]:
+            fc = kept
     n_own, n_file, draw, rule = plan(n, games, bool(fc))
     if not any(p.in_pool for p in players):
         rule = rule.replace("your pool", "the whole slate (no pool typed)")
     notes.append(rule)
+    if shape_info:
+        notes.append(f"Top-10 shape: {shape_info['pass']} of Stokastic's {shape_info['file']} "
+                     f"lineups pass" + ("" if shape_info["used"] else
+                                        f", under {SHAPE_MIN}, so the shape was SKIPPED tonight"))
+    if spread:
+        notes.append(f"Spread: no two lineups share more than {ms} players"
+                     + (f"; no player in more than {spread['cap']:.0%} of the set"
+                        if spread.get("cap") else ""))
     B = blueprint(history, games) if draw["ranges"] else None
     if draw["ranges"] and not B:
         notes.append("no earlier nights of this slate size saved, so no winners' ranges")
@@ -827,7 +908,7 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
                          f"whole slate was used")
             cands = gen_candidates(active, dict(draw, ranges=False), None, V, rng)
 
-    cap = CAP_BIG if big else CAP_SMALL
+    cap = ((spread or {}).get("cap") or CAP_BIG) if big else CAP_SMALL
     cnt, taken = collections.Counter(), set()
     own_key = "proj"
     if upper is not None:
@@ -835,7 +916,8 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
         for c in cands:
             c["upper"] = c["proj"] + UPPER_Z * sum(upper.get(p.dk_id, 0.0) ** 2
                                                    for p in c["ps"]) ** 0.5
-    own = select(cands, n_own * copies, cap, n * copies, cnt, taken, own_key, caps)
+    own = select(cands, n_own * copies, cap, n * copies, cnt, taken, own_key, caps,
+                 max_shared=ms)
     # Which of Stokastic's lineups: on 5-7 games by projected sum, on 8+ by the
     # file's own Top 10% figure (Shark Edge And Slate Triggers report, Nov 13:
     # projected sum ahead on 8 of 9 5-7 game nights, Top 10% still ahead on 8+).
@@ -855,11 +937,24 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
                 f"{by_id[k].name} to {v} of {n} ({by_id[k].ownership:.0f}% projected owned)"
                 for k, v in win_info["studFloors"].items()))
     else:
-        half = select(fc, n_file, cap, n, cnt, taken, file_key, caps) if n_file else []
+        half = select(fc, n_file, cap, n, cnt, taken, file_key, caps,
+                      max_shared=ms) if n_file else []
+    if n_file and len(half) < n_file and shape_info and shape_info["used"]:
+        # The shape, the limit and the cap together left the set short: the rest
+        # comes from the whole file in its order, under the same limit and cap.
+        rest = select(fc_all, n_file - len(half), cap, n, cnt, taken, file_key, caps,
+                      max_shared=ms)
+        if rest:
+            notes.append(f"Only {len(half)} of the shape's lineups fit under the limit and "
+                         f"the cap, so {len(rest)} more came from the rest of Stokastic's "
+                         f"file (same limit and cap)")
+            shape_info["short"] = len(half)
+            half += rest
     chosen = own + half
     sources = ["mine"] * len(own) + ["vendor"] * len(half)
     if n_file and len(half) < n_file:
-        more = select(cands, n - len(chosen), cap, n, cnt, taken, "proj", caps)
+        more = select(cands, n - len(chosen), cap, n, cnt, taken, "proj", caps,
+                      max_shared=ms)
         if more:
             notes.append(f"Stokastic's file gave {len(half)} usable lineups, so "
                          f"{len(more)} more came from your pool")
@@ -867,7 +962,7 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
         sources += ["mine"] * len(more)
     if len(chosen) < n * copies:
         more = select(cands, n * copies - len(chosen), 1.0, n * copies, cnt, taken,
-                      "proj", caps)
+                      "proj", caps, max_shared=ms)
         if more:
             notes.append(f"{len(more)} lineup(s) only fit by going past the "
                          f"{cap:.0%} cap")
@@ -893,13 +988,13 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
             for k in hits:
                 p = by_id[k]
                 if p.ownership >= TAKEOVER_MIN_OWN:
-                    want = int(round(min(TAKEOVER_K * p.ownership / 100.0, TAKEOVER_CAP)
+                    want = int(round(min(tk_k * p.ownership / 100.0, TAKEOVER_CAP)
                                      * len(rosters)))
                     if k in caps:
                         want = min(want, caps[k])
                     lo_, hi_ = targets.get(k, (None, None))
                     targets[k] = (max(lo_ or 0, want), hi_)
-                    if ci == 0:
+                    if ci == 0 and tk_k > 0:
                         tk_lean.append(f"{p.name} to {want} of {len(rosters)} "
                                        f"({p.ownership:.0f}% projected owned)")
         sfl = (win_info or {}).get("studFloors") or {}
@@ -917,13 +1012,13 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
             top3 = sorted(active, key=lambda p: -p.ownership)[:3]
             for p in top3:
                 if p.ownership >= TOP3_MIN_OWN:
-                    want = int(round(min(TOP3_K * p.ownership / 100.0, TOP3_CAP)
+                    want = int(round(min(t3_k * p.ownership / 100.0, TOP3_CAP)
                                      * len(rosters)))
                     if p.dk_id in caps:
                         want = min(want, caps[p.dk_id])
                     lo_, hi_ = targets.get(p.dk_id, (None, None))
                     targets[p.dk_id] = (max(lo_ or 0, want), hi_)
-                    if ci == 0:
+                    if ci == 0 and t3_k > 0:
                         lean.append(f"{p.name} to {want} of {len(rosters)} "
                                     f"({p.ownership:.0f}% projected owned)")
         if targets:
@@ -934,7 +1029,7 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
     if lean:
         notes.append("Top three owned raised: " + "; ".join(lean))
     if tk_lean:
-        notes.append("Takeover chalk raised to 1.5x own: " + "; ".join(tk_lean))
+        notes.append(f"Takeover chalk raised to {tk_k:g}x own: " + "; ".join(tk_lean))
     if copies > 1:
         notes.append(f"{len(chunks)} different sets of {n}: the second takes the next "
                      f"{n} in the pick order")
@@ -969,7 +1064,14 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
                      "blueprint": {k: v for k, v in (B or {}).items()},
                      "cap": cap, "retarget": {"cut": cut, "raised": raised},
                      "takeoverLean": [by_id[k].name for k in hits
-                                      if by_id[k].ownership >= TAKEOVER_MIN_OWN],
+                                      if by_id[k].ownership >= TAKEOVER_MIN_OWN] if tk_k > 0 else [],
+                     "takeoverK": tk_k, "top3K": t3_k,
+                     "spread": None if not spread else dict(
+                         spread, shapeInfo=shape_info,
+                         maxShared=max((len(set(a) & set(b)) for i, a in enumerate(
+                             [frozenset(p.dk_id for p in r) for r in rosters])
+                             for b in [frozenset(p.dk_id for p in r) for r in rosters[:i]]),
+                             default=0)),
                      "tail": tail, "seed": seed,
                      "raises": {by_id[k].name: round(v, 3) for k, v in (raises or {}).items()
                                 if k in by_id},

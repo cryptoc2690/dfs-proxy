@@ -216,10 +216,9 @@ INDEX_HTML = r"""<!doctype html>
       <div class="picknote">Chalk (20%+ owned) with a shaky role and no role change:
         off the bench, a teammate at his position back tonight (one he played
         without), or projected under
-        22 minutes, with no takeover, minutes lift or new starting job. On 2–4 games
-        a ticked player is left out of every lineup; untick one to keep him. On 5+
-        games it is a shadow only: the build is unchanged and the set without them
-        is saved for the review.</div>
+        22 minutes, with no takeover, minutes lift or new starting job. Shown
+        only since Nov 20: nobody is left out by the tool. To hold one down, type
+        him in the caps box.</div>
       <label style="margin-top:14px">Bad chalk — your sharp's calls</label>
       <textarea id="badchalk" rows="2" spellcheck="false"
                 placeholder="Morez Johnson — minutes&#10;Kevin Huerter — closing"></textarea>
@@ -230,14 +229,12 @@ INDEX_HTML = r"""<!doctype html>
       <div id="mulist"></div>
       <div class="picknote">Players at 5–20% owned against the most generous
         defenses (what each team has allowed over players' usual rates, from the box
-        scores). The build raises the five highest that are in your pool to 2x their
-        projected own, in the 150 and the 20s. Untick one to skip him.</div>
+        scores). Shown only since Nov 20: the build no longer raises them.</div>
       <label style="margin-top:14px">Leverage stud tonight <span id="levwho" class="muted">— drop the projections first</span></label>
       <div id="levlist"></div>
       <div class="picknote">Studs ($8,500+) under 10% owned with a reason: regulars
-        out, or scoring over his projection. On 5+ games, 30 of the 150 are built
-        around the one picked, replacing the lineups that hold your most scattered
-        players. Chalk is not touched. Pick another or None to change it.</div>
+        out, or scoring over his projection. Shown only since Nov 20: no block of
+        lineups is built around him.</div>
       <label style="margin-top:14px">Leverage — your sharp's calls</label>
       <textarea id="leverbox" rows="2" spellcheck="false"
                 placeholder="Alperen Sengun — running the offense&#10;Franz Wagner — Banchero out"></textarea>
@@ -302,8 +299,10 @@ INDEX_HTML = r"""<!doctype html>
     <p>3 is your DK entries export, with your entries reserved. Each contest in it
       is built by its size: a 150 or a 20-max.</p>
     <p><b>The 150:</b> 2–4 games, all from your pool · 5–7 games, all from Stokastic's
-      lineups · 8+ games, half and half. <b>The 20-max:</b> always from your pool, with
-      the night's top three owned raised to about twice their ownership.</p>
+      lineups, cut to the top-10 shape, no player in more than 60% · 8+ games, half
+      and half. On every slate no two lineups share more than 5 players.
+      <b>The 20-max:</b> on 5+ games, every 7th lineup of that 150; on 2–4 games,
+      from your pool.</p>
     <p>4, LineStar, is optional: it only warns if LineStar has someone at 0 whom
       Stokastic still projects. Every Stokastic file you drop is saved with its time.</p>
     <p><b>Late swap</b> (mid-slate): put a FRESH Stokastic pull in 1 and your CURRENT DK
@@ -506,7 +505,8 @@ function drawWeak(){
   const d = weak; if(!d) return;
   const n = d.calls.length;
   $('#weakwho').textContent = !n ? '— none tonight'
-    : '— ' + n + ' call' + (n > 1 ? 's' : '') + (d.applied ? ', left out of the build'
+    : '— ' + n + ' call' + (n > 1 ? 's' : '') + (d.rulesOff ? ', shown only (the rule is off)'
+      : d.applied ? ', left out of the build'
       : d.complete ? ', shadow only (' + d.group + ')'
       : ', NOT applied: box scores missing');
   let h = d.calls.map(c => '<label style="display:block;font-weight:400;margin:3px 0">'
@@ -516,10 +516,10 @@ function drawWeak(){
     + '% own — ' + esc(c.why) + '</span></label>').join('');
   const g = d.g21 || [];
   if(g.length) h += '<div class="picknote" style="margin-top:8px">Owned bench, role unchanged '
-    + '(left out on every slate; untick to keep):</div>'
+    + (d.rulesOff ? '(shown only; nobody is left out):</div>' : '(left out on every slate; untick to keep):</div>')
     + g.map(c => '<label style="display:block;font-weight:400;margin:3px 0">'
       + '<input type="checkbox" data-n="' + esc(c.name) + '" checked'
-      + (d.complete ? '' : ' disabled') + '> ' + esc(c.name)
+      + (d.complete && !d.rulesOff ? '' : ' disabled') + '> ' + esc(c.name)
       + ' <span class="muted">$' + c.salary.toLocaleString() + ', ' + Math.round(c.own)
       + '% own — bench, Stokastic ' + Math.round(c.mins) + ' min, last 3 avg '
       + Math.round(c.last3) + '</span></label>').join('');
@@ -538,17 +538,20 @@ function drawLev(){
   const ml = m.list || [];
   $('#muwho').textContent = !m.ready ? '— not tonight: ' + (m.why || 'no figure')
     : !ml.length ? '— none tonight'
-    : '— line ' + (m.line * 100 >= 0 ? '+' : '') + (m.line * 100).toFixed(1) + '%; up to ' + m.max + ' from your pool';
+    : '— line ' + (m.line * 100 >= 0 ? '+' : '') + (m.line * 100).toFixed(1) + '%'
+      + (d.rulesOff ? '; shown only (the floor is off)' : '; up to ' + m.max + ' from your pool');
   $('#mulist').innerHTML = ml.map(c => '<label style="display:block;font-weight:400;margin:3px 0">'
-    + '<input type="checkbox" class="mubox" data-n="' + esc(c.name) + '" checked> ' + esc(c.name)
+    + '<input type="checkbox" class="mubox" data-n="' + esc(c.name) + '" checked'
+    + (d.rulesOff ? ' disabled' : '') + '> ' + esc(c.name)
     + ' <span class="muted">v ' + esc(c.opp) + ' ' + (c.figure * 100 >= 0 ? '+' : '')
     + (c.figure * 100).toFixed(1) + '%, $' + c.salary.toLocaleString() + ', ' + Math.round(c.own)
     + '% own</span></label>').join('');
   const nm = L.named || [];
   $('#levwho').textContent = !nm.length ? '— no named stud tonight'
+    : d.rulesOff ? '— ' + nm.length + ' named; shown only (the block is off)'
     : L.applied || (L.games >= 5) ? '— ' + nm.length + ' named; the pick is ticked'
     : '— ' + nm.length + ' named; ' + (L.why || 'not used tonight');
-  const off = !(L.games >= 5);
+  const off = !(L.games >= 5) || !!d.rulesOff;
   let h = nm.map(r => '<label style="display:block;font-weight:400;margin:3px 0">'
     + '<input type="radio" name="levpick" value="' + esc(r.name) + '"'
     + (r.name === L.pick ? ' checked' : '') + (off ? ' disabled' : '') + '> ' + esc(r.name)

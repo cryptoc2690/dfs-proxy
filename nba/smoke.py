@@ -42,6 +42,25 @@ from dk import CLASSIC_SLOTS, normalize_name  # noqa: E402
 
 ok = fail = 0
 
+# T1 (Nov 20): the live build is the plain Nov 7 tool with G17 and the spread.
+# The sections below test the rules that came before it (G7, G10, G11, G14, G20,
+# G21, the file picked by projection, the lean, the top-three raise), which
+# still run when a caller passes their switches, the way the grader does to
+# rebuild a night built with them. So every run_build in this file gets the
+# Nov 19 switches unless it passes its own. The T1 section at the end calls the
+# real default build (_real_run_build).
+NOV19 = dict(weakChalkOff=False, matchupOff=False, leverOff=False, liveOff=False, g20Off=False,
+             g21Off=False, filePick="", spreadOff=True, takeoverK=1.5, top3K=2.0)
+_real_run_build = app.run_build
+
+
+def _nov19_run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=""):
+    return _real_run_build(proj_text, field_text, dk_text, dict(NOV19, **(options or {})),
+                           linestar_text)
+
+
+app.run_build = _nov19_run_build
+
 
 def check(label, cond, detail=""):
     global ok, fail
@@ -1403,8 +1422,10 @@ DK3w = dk_classic(R3w, GAMES3, contests=((150, "NBA $15K mini-MAX", "900001", "$
                                          (20, "NBA $8K And-One", "900002", "$1")))
 _pool3w = "\n".join(x["Player"] for i, x in enumerate(R3w) if i % 3 != 2)
 _pv = app.weak_preview(PROJ3w)
-check("weak chalk: the page's preview calls the bench chalk with no lift, not the lifted one",
-      not _pv.get("error") and [c["name"] for c in _pv["calls"]] == [_wk3] and _pv["applied"]
+check("weak chalk: the page's preview calls the bench chalk with no lift, not the lifted one "
+      "(shown only since Nov 20: the rule is off)",
+      not _pv.get("error") and [c["name"] for c in _pv["calls"]] == [_wk3]
+      and not _pv["applied"] and _pv.get("rulesOff")
       and "bench" in _pv["calls"][0]["why"], str(_pv.get("error") or _pv.get("calls")))
 _kw = _nlog()
 nbw = app.run_build(PROJ3w, FIELD3, DK3w, {"pool": _pool3w,
@@ -1947,6 +1968,90 @@ _rec = RT.game_record("9", _sum)
 _tot = sum(v["sec"] for v in _rec["team"]["AAA"]["players"].values())
 check("rotation: five on the floor every second, and the substitutions saved",
       abs(_tot - 5 * 2880) < 1 and len(_rec["subs"]) == 8, f"{_tot} {_rec['subs'][:2]}")
+
+# ---- T1 (Nov 20): the default build ------------------------------------------
+print("\n-- T1: the plain tool with G17, the 150 spread --")
+import newbuild as _NB                       # noqa: E402
+_k1 = _nlog()
+_t1 = _real_run_build(PROJ5, FIELD5, DK5b, {"pool": _pool5})
+_rows1 = _rows_of(_k1)
+_s1 = (_rows1 or [{}])[0].get("settings") or {}
+_t1s = _s1.get("t1") or {}
+check("T1: the default build runs and saves every switch it ran with",
+      not _t1.get("error") and all(_t1s.get("options", {}).get(k) for k in app.T1_OFF)
+      and _t1s.get("filePick") == "top10" and _t1s.get("takeoverK") == 0 and _t1s.get("top3K") == 0,
+      str(_t1.get("error") or _t1s)[:200])
+check("T1: no rule from before it acts (no matchup floor, leverage block, live piece, lean)",
+      not _s1.get("matchup") and not (_s1.get("leverage") or {}).get("applied")
+      and not (_s1.get("win") or {}).get("applied")
+      and not ((_s1.get("sets") or {}).get("big") or {}).get("takeoverLean"),
+      str({k: bool(_s1.get(k)) for k in ("matchup", "leverage", "win")}))
+_m1 = ((_s1.get("sets") or {}).get("big") or {})
+_sp1 = _m1.get("spread") or {}
+check("T1: 5 games, the 150 is spread: limit 5, the shape on the file, the 60% cap",
+      _sp1.get("limit") == 5 and _sp1.get("cap") == 0.6 and _sp1.get("shape") is not None
+      and _m1.get("cap") == 0.6 and _m1.get("filePick") == "top10", str(_sp1)[:200])
+
+
+def _fake(i, ids):
+    class _P:                                 # a stand-in player for select()
+        def __init__(self, k): self.dk_id = k
+    return {"ps": [_P(k) for k in ids], "key": frozenset(ids), "proj": 100 - i}
+
+
+_cs = [_fake(0, "abcdefgh"), _fake(1, "abcdefgx"), _fake(2, "abcdefxy"), _fake(3, "abcdexyz"),
+       _fake(4, "ijklmnop")]
+import collections as _co                    # noqa: E402
+_ch = _NB.select(_cs, 3, 1.0, 3, _co.Counter(), set(), max_shared=5)
+check("T1: a lineup sharing more than 5 players with one already taken is passed over",
+      [sorted(c["key"]) for c in _ch] == [sorted("abcdefgh"), sorted("abcdexyz"), sorted("ijklmnop")],
+      str([''.join(sorted(c["key"])) for c in _ch]))
+_ch = _NB.select(_cs[:3], 3, 1.0, 3, _co.Counter(), set(), max_shared=5)
+check("T1: if the limit leaves the set short, a second pass fills it without the limit",
+      len(_ch) == 3 and ''.join(sorted(_ch[0]["key"])) == "abcdefgh", str(len(_ch)))
+_ch = _NB.select(_cs, 3, 1.0, 3, _co.Counter(), set())
+check("T1: with no limit the pick is the plain top of the list",
+      [''.join(sorted(c["key"])) for c in _ch] == ["abcdefgh", "abcdefgx", "abcdefxy"])
+check("T1: the spread by slate size: the shape and the 60% cap on 5-7 games only",
+      _NB.spread_spec(4) == {"limit": 5, "shape": None, "cap": None}
+      and _NB.spread_spec(9) == {"limit": 5, "shape": None, "cap": None}
+      and _NB.spread_spec(6)["cap"] == 0.6 and _NB.spread_spec(6)["shape"]["minOwn"] == 5.0)
+
+
+class _Q:
+    def __init__(self, own, sal, proj=20.0):
+        self.ownership, self.salary, self.proj = own, sal, proj
+
+
+_slate_ = [_Q(40, 6000), _Q(30, 6000), _Q(20, 6000), _Q(10, 6000), _Q(5, 6000), _Q(50, 0, 0.0)]
+_eso, _ech = _NB.field_lineup(_slate_)
+check("T1: a field lineup is worked out from projected ownership (players with a projection only)",
+      abs(_eso - (1600 + 900 + 400 + 100 + 25) / 100.0) < 1e-9 and abs(_ech - 0.9) < 1e-9,
+      f"{_eso} {_ech}")
+_S = _NB.SHAPE
+_good = {"ps": [_Q(40, 6250), _Q(30, 6250), _Q(25, 6250), _Q(20, 6250), _Q(15, 6250),
+                _Q(12, 6250), _Q(9, 6250), _Q(6, 6200)]}
+check("T1: the shape passes a lineup inside all five lines",
+      _NB.shape_ok(_good, _S, 150.0, 4.0))
+check("T1: the shape fails on salary left, a player under 5%, three under 10%, chalk count, summed own",
+      not _NB.shape_ok({"ps": _good["ps"][:7] + [_Q(6, 5800)]}, _S, 150.0, 4.0)
+      and not _NB.shape_ok({"ps": _good["ps"][:7] + [_Q(4, 6200)]}, _S, 150.0, 4.0)
+      and not _NB.shape_ok({"ps": _good["ps"][:5] + [_Q(9, 6250), _Q(9, 6250), _Q(6, 6200)]},
+                           _S, 150.0, 4.0)
+      and not _NB.shape_ok(_good, _S, 150.0, 7.0)
+      and not _NB.shape_ok(_good, _S, 300.0, 4.0))
+_k9t = _nlog()
+_t9 = _real_run_build(PROJ5, FIELD5, DK5b, {"pool": _pool5, "spreadOff": True})
+_m9 = (((_rows_of(_k9t) or [{}])[0].get("settings") or {}).get("sets") or {}).get("big") or {}
+check("T1: spreadOff builds the 150 with no limit, shape or 60% cap (the grader, an older night)",
+      not _t9.get("error") and not _m9.get("spread") and _m9.get("cap") == 0.85, str(_m9.get("cap")))
+_b1 = [frozenset(p["name"] for p in r["players"]) for r in _rows1 if r["contest_id"] == "900001"]
+_w1 = [frozenset(p["name"] for p in r["players"]) for r in _rows1 if r["contest_id"] == "900002"]
+check("T1: on 5 games the 20s are every 7th lineup of that same 150",
+      len(_b1) == 150 and len(_w1) == 20 and _w1 == _b1[0::7][:20], f"{len(_b1)} {len(_w1)}")
+_sh = ((_s1.get("nov19Shadows") or {}))
+check("T1: the stop rule's two 150s are saved beside the live one (plain, and limit + cap with no shape)",
+      bool(_sh), str(_sh)[:120])
 
 # The summary and exit MUST stay last — appending a new section after them
 # silently skips it and the suite still reports a clean pass.

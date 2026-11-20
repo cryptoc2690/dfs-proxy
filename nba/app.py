@@ -1091,10 +1091,13 @@ def weak_preview(proj_text, options=None):
     inj = NB.injury_tags(proj_text)
     n_games = len({p.game for p in players if "@" in (p.game or "") and p.proj > 0})
     history = NB.load_history()
-    R = role_night(players, inj, history, n_games, options)
+    # T1 (Nov 20): the lists are still worked out and shown, and none of them
+    # moves the build (rulesOff).
+    R = role_night(players, inj, history, n_games, dict(options or {}, weakChalkOff=True))
     L = leverage_night(players, history, n_games, options, R, proj_text)
     mk = lambda p: R["marks"][normalize_name(p.name)]
     return {"games": n_games, "group": NB.slate_group(n_games), "applied": R["applied"],
+            "rulesOff": True,
             "complete": R["complete"], "days": R["days"], "missing": R["sync"]["missing"],
             "fetchError": R["sync"]["error"],
             "calls": [{"name": p.name, "team": p.team, "salary": p.salary,
@@ -1119,13 +1122,23 @@ def weak_preview(proj_text, options=None):
                          "games": n_games}}
 
 
+T1_OFF = ("weakChalkOff", "matchupOff", "leverOff", "liveOff", "g20Off", "g21Off")
+
+
 def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=""):
     """The build (Nov 7 spec, newbuild.py). Showdown still goes to the old build.
 
     `field_text` may be one Stokastic lineups file or a list of them: every file
     saved for the night is read as one set (Before The Build, section 2)."""
     import newbuild as NB
-    o = options or {}
+    o = dict(options or {})
+    # T1 (Top 10, Chalk Check And The Pick, 20s Spread And Pool reports, Nov 20):
+    # the live build is the plain Nov 7 tool with G17. G7, G10, G11, G14, G20,
+    # G21 and G1 (the file picked by projection) are off unless a caller passes
+    # the switch itself (the grader, rebuilding a night built with them).
+    for k_ in T1_OFF:
+        o.setdefault(k_, True)
+    o.setdefault("filePick", "top10")
     fields = [t for t in (field_text if isinstance(field_text, list) else [field_text])
               if (t or "").strip()]
     fields += [t for t in (o.get("fieldMore") or []) if (t or "").strip()]
@@ -1468,6 +1481,18 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
         raises[k] = max(raises.get(k, 0.0), v)
     g21_caps = {k: 0 for k in R["g21Out"]}
     from150 = n_games >= NB.FROM150_GAMES and not o.get("from150Off")
+    # T1: the 150 is spread (no two lineups sharing more than 5 players; on 5-7
+    # games the file is cut to the top-10 shape first and no player is in more
+    # than 60%). The 20s on 5+ games are every 7th lineup of that same 150.
+    spread = None if o.get("spreadOff") else NB.spread_spec(n_games)
+    tk_k = None if o.get("takeoverK") is None else float(o.get("takeoverK"))
+    t3_k = None if o.get("top3K") is None else float(o.get("top3K"))
+    if spread and (n_big or (n_small and from150)):
+        say("info", f"The 150 tonight: no two lineups share more than {spread['limit']} players"
+            + (f"; Stokastic's file is cut to the top-10 shape first, and no player is in "
+               f"more than {spread['cap']:.0%} of the 150" if spread.get("shape") else "")
+            + ". The lean, the easy-matchup floor, the leverage block, the live piece, the "
+              "part-time-starter floor and the leave-outs are OFF (Nov 20).")
     top_owned = max(act_now, key=lambda p: p.ownership) if act_now else None
     nb_shadow = {}            # the Nov 19 shadow sets: {name: {kind: [[names]]}}
 
@@ -1504,13 +1529,14 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
         anc = lev_anchor if kind == "big" else None
 
         def bset(n_=n, caps_=None, raises_=None, anchor_=anc, win_=win if kind == "big" else None,
-                 copies_=copies, upper_=None, floors_=floors):
+                 copies_=copies, upper_=None, floors_=floors, spread_=spread):
             return NB.build_set(players, n_, n_games, field, inj,
                                 bcaps if caps_ is None else caps_, floors_, seed, history,
                                 slotting=C.best_slotting, copies=copies_,
                                 file_pick=o.get("filePick") or None,
                                 raises=raises if raises_ is None else raises_,
-                                anchor=anchor_, win=win_, upper=upper_)
+                                anchor=anchor_, win=win_, upper=upper_, spread=spread_,
+                                takeover_k=tk_k, top3_k=t3_k)
 
         def shadow_of(name, **kw):
             sh = bset(**kw)
@@ -1580,6 +1606,17 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
             for nm, w_ in shw:
                 sh = bset(win_=w_)
                 win_shadow[nm] = [[p.name for p in r] for r in sh["rosters"]]
+        if spread and (kind == "big" or (kind == "small" and from150 and not n_big)):
+            # T1's stop rule reads these (the scoreboard): the same night's 150
+            # with no spread at all (plain + G17), and with the limit and the
+            # cap but no shape. On a file night there is no draw between them.
+            kw150 = {} if kind == "big" else dict(
+                n_=150, anchor_=lev_anchor, win_=win, copies_=1, caps_=c150, floors_=fl150)
+            for nm_, sp_ in (("t1_plain", None),
+                             ("t1_limitCap", NB.spread_spec(n_games, shape=False))):
+                if sp_ != spread:
+                    sh = bset(spread_=sp_, **kw150)
+                    nb_shadow.setdefault(nm_, {})["big"] = names_of(sh["chunks"])
         if kind == "big" or not from150:
             if lev_anchor and kind == "big":
                 # Step Back (shadow): G11's block at 45 lineups instead of 30.
@@ -1686,6 +1723,41 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                             + BR.line(p, BXr.get(p.dk_id)) for p in pool_warn)
                 + (". ★ = he's starting and his minutes in his starts are 3+ over "
                    "Stokastic's." if any(_mark(p) for p in pool_warn) else ""))
+    # T2's off-pool list (20s, Spread And Pool report, Nov 20): A = not in your
+    # pool at 5%+ projected own; B = under 5% by Stokastic and 10%+ by LineStar;
+    # C = an off-pool stud (over $7,500) under 5% own, the three highest by
+    # projection. Shown only. To hold one at his projected own in the 150, paste
+    # his line into the minimums box.
+    off_pool = []
+    if pool_names:
+        ls_own = lambda p: (ls_map.get(normalize_name(p.name)) or {}).get("own")
+        offp = [p for p in active if not p.in_pool and p.proj > 0]
+        A_ = [(p, "A") for p in pool_warn]
+        B_ = [(p, "B") for p in offp if p.ownership < BR.G23_OWN and (ls_own(p) or 0) >= 10]
+        C_ = [(p, "C") for p in sorted((p for p in offp if p.ownership < BR.G23_OWN
+                                        and p.salary > 7500), key=lambda p: -p.proj)[:3]]
+        seen_ = set()
+        for p, why in A_ + B_ + C_:
+            if p.dk_id in seen_:
+                continue
+            seen_.add(p.dk_id)
+            off_pool.append({"name": p.name, "list": why, "salary": p.salary,
+                             "own": round(p.ownership, 1), "lsOwn": ls_own(p),
+                             "proj": round(p.proj, 1),
+                             "lineups150": max(1, int(round(p.ownership / 100.0 * 150)))})
+        if off_pool:
+            tot = sum(r["lineups150"] for r in off_pool)
+            say("info", f"Off-pool list ({len(off_pool)} names; shown only, nothing is added). "
+                        "A = 5%+ projected own, B = under 5% by Stokastic and 10%+ by LineStar, "
+                        "C = stud under 5% own. To hold one at his projected own in the 150, "
+                        "paste his line into Minimums: " + " | ".join(
+                            f"[{r['list']}] {r['name']} {r['lineups150']} (${r['salary']:,}, "
+                            f"{r['own']:.0f}% own"
+                            + (f", LineStar {r['lsOwn']:.0f}%" if r["lsOwn"] is not None else "")
+                            + f", {r['proj']:.0f} proj)" for r in off_pool)
+                + f". All of them together: {tot} lineup spots of the 150's 1,200."
+                + (" On a 2-4 game slate a minimum is the same NUMBER in the 20s, so keep "
+                   "it small tonight." if n_games <= 4 else ""))
     studs_off = NB.off_pool_studs(players, active) if pool_names else []
     if studs_off:
         say("info", "Studs off your pool under 12% projected owned (shown, not used): "
@@ -1811,8 +1883,18 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                          "own": round(p.ownership, 1)} for p, m in R["box"]["firstStarts"]],
         "centerSplits": splits,
         "poolWarning": [p.name for p in pool_warn],
+        "offPool": off_pool,
         "lowMinuteChalk": [dict(r, ours150=share_big(by_id[r["id"]]),
                                 ours20=share_small(by_id[r["id"]])) for r in lmc_lines]}
+    settings["t1"] = {
+        "options": {k_: bool(o.get(k_)) for k_ in T1_OFF + ("from150Off", "spreadOff", "studFloor")},
+        "filePick": o.get("filePick"),
+        "takeoverK": NB.TAKEOVER_K if tk_k is None else tk_k,
+        "top3K": NB.TOP3_K if t3_k is None else t3_k,
+        "spread": spread,
+        "shape": ((sets.get("big") or {}).get("meta", {}).get("spread") or {}).get("shapeInfo")
+                 or (((base150 or {}).get("meta", {}).get("spread") or {}).get("shapeInfo")),
+        "starts20": ((sets.get("small") or {}).get("meta", {}).get("from150") or {}).get("starts")}
     settings["from150"] = {"applied": bool(from150 and n_small), "step": NB.FROM150_STEP,
                            "games": n_games, "off": bool(o.get("from150Off")),
                            "note": "the 20s of any 150 shadow are its every 7th lineup, "

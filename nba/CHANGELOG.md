@@ -2,6 +2,29 @@
 
 Newest first. One entry per change, in plain words: what changed and why.
 
+## Nov 20, 2026 — T1: built to win
+
+From `NBA Top 10 Report 11-20.md`, `NBA Chalk Check And The Pick Report 11-20.md` and `NBA The 20s, The Spread And The Pool Report 11-20.md`. Judged on where the set's best lineup finishes, not on dollars or cash rate.
+
+**The live build is the plain Nov 7 tool with G17.** These are off: the takeover lean, the top-three raise in the 20s, G1 (the file picked by projection; it is back to the file's Top 10% figure), G7 (weak chalk left out), G10 (easy-matchup floor), G11 (leverage block), G14 (live piece), G20 (part-time-starter floor), G21 (owned bench left out). Their lists still show on the page, marked "shown only". Each still runs if a caller passes its switch, which is how the grader rebuilds a night that was built with it.
+
+**The 150 is spread** (`newbuild.py`: `SHARE_LIMIT`, `SHAPE`, `SHAPE_MIN`, `CAP_SPREAD`).
+- Every slate: a lineup that shares more than 5 players with one already taken is passed over. If that leaves the set short, a second pass fills it without the limit.
+- 5 to 7 game slates: Stokastic's file is first cut to the top-10 shape, and no player is in more than 60% of the 150 (in place of 85%).
+- The shape, all five lines, from Stokastic's projected ownership only: $300 or less left; 15%+ players from 1 fewer to 3 more than a field lineup carries; 2 or fewer players under 10%; nobody under 5%; summed ownership 0.8 to 1.5 times a field lineup's. "A field lineup" is the sum of own squared / 100 and the sum of own / 100 over the 15%+ players, over every player with a projection.
+- The shape is used only when 225 or more of the file's lineups pass. If the shape, the limit and the cap leave the set short, the rest comes from the rest of the file under the same limit and cap. The build's notes say when either happens.
+- The last step (the fix for a player in fewer than 4 lineups) still runs and is not checked against the shape, the limit or the cap, as tested.
+
+**The 20s.** On 5+ game slates, every 7th lineup of that same 150 (G17, unchanged). On 2 to 4 game slates, built from the pool as before, without the top-three raise.
+
+**Checked.** Built on all 12 saved nights (Nov 7 to Nov 19) and compared with the data chat's reference build: the same lineup in the same place for every entry on every night. Against the data chat's own dump of Nov 14 and Nov 17: 150 of 150 in the same place on both.
+
+**Off-pool list** (a message, shown only): A = not in the pool at 5%+ projected own; B = under 5% by Stokastic and 10%+ by LineStar; C = an off-pool stud (over $7,500) under 5% own, the three highest by projection. Each with the number of lineups that holds him at his projected own in the 150, to paste into Minimums.
+
+**Saved for the scoreboard.** Every switch the build ran with (`settings.t1`), the shape's pass count, the starts the 20s were given, and two shadow 150s beside the live one: plain + G17 (`t1_plain`) and the limit and cap with no shape (`t1_limitCap`). The stop rule reads these.
+
+**Not built yet:** the chalk sheet (break-even, the Ware mark, ticks), the scoreboard on the winning measure, the other shadows.
+
 ## Nov 19, 2026 — the big build
 
 From `NBA Step Back Report 11-19.md`, `NBA Box Score Read Report 11-19.md`, `NBA Rotation Read Report 11-19.md` and `NBA Sim Chalk Report 11-19.md` (28 nights), collected in `NBA Build List (running).md`. The three that change the build are together +$1,943 smoothed over the tool across 28 nights in the review's harness, ahead on 21 and behind on 3.

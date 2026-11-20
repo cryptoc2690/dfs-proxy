@@ -493,6 +493,18 @@ def main(argv):
                    g20Off=("boxRead" not in st), g21Off=("boxRead" not in st))
     if "filePick" not in ((st.get("sets") or {}).get("big") or {}):
         options["filePick"] = "top10"          # built before the Nov 13 file pick
+    big_ = (st.get("sets") or {}).get("big") or {}
+    if "t1" in st:
+        # Built Nov 20 or later: the build saved every switch it ran with.
+        t1 = st["t1"]
+        options.update(t1.get("options") or {})
+        options.update(filePick=t1.get("filePick") or "top10", takeoverK=t1.get("takeoverK", 0.0),
+                       top3K=t1.get("top3K", 0.0))
+    else:
+        # Built before T1: no spread, the top-three raise on, and the lean on
+        # from the night it went into the code (Nov 12).
+        options.update(spreadOff=True, top3K=2.0,
+                       takeoverK=1.5 if ("takeoverLean" in big_ or "raises" in big_) else 0.0)
     spread = seed_spread(inp, options, date)
     print(f"== {date} (build {stamp}, pool {len([x for x in (options.get('pool') or '').splitlines() if x.strip()])} names) ==")
     if err:
