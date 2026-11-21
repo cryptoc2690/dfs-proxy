@@ -2,6 +2,16 @@
 
 Newest first. One entry per change, in plain words: what changed and why.
 
+## Nov 21, 2026 — the chalk sheet, cut to what gets acted on
+
+The user: he only touches players projected under what they need or carrying "Fails both checks", the old rules' lines are noise, and a small negative read as a flag is how Mara got capped on Nov 20.
+
+- **The players to act on come first, under plain headings:** Cap suggested; Warning mark, no cap suggested; Under what he needs, no mark; The rest of the chalk. Each of the first three carries a badge saying which it is.
+- **A player under what he needs with no mark says so:** "no warning mark fits him, so the record gives no reason to cap him", with the line where a cap is suggested (25%+ own and 1.5 or more under) and where he sits.
+- **The "Old rule, shown only" lines are off the page,** and so is any player who was on the sheet only because an old rule voted on him. They are still in the saved record.
+- **The "hold at his projected own" boxes are off the off-pool list** (no rule puts a player into a set number of lineups). "Left off on purpose" stays. The list now says that on 5 to 7 game slates the 150 comes from Stokastic's file, so these players can still be in your lineups.
+- The sheet's numbers, marks and caps are unchanged (`chalk_sheet.py` is untouched).
+
 ## Nov 21, 2026 — late news in the late swap, by itself
 
 From `NBA Late Swap And The Top 10 Report 11-21.md`, `NBA Which News, The Set At Lock And The 20s Report 11-21.md` and `NBA Is T1 Too Narrow Report 11-21.md`. The data chat's code is copied as handed over (`see_news.py`, `news_swap.py`); the late swap calls it.

@@ -1263,7 +1263,9 @@ def sheet_preview(proj_text, linestar_text="", options=None):
         S["top"]["alerts"].append("ESPN box scores are missing for "
                                   + ", ".join(sync["missing"][:4])
                                   + (f" ({sync['error']})" if sync["error"] else "") + ".")
-    return {"sheet": S, "plan": CS.tick_plan(S, sheet_ticks(o), n_games)}
+    return {"sheet": S, "plan": CS.tick_plan(S, sheet_ticks(o), n_games),
+            # for the page's flags: where the sheet's one suggested cap starts
+            "flag": {"heavyOwn": CS.HEAVY_OWN, "heavyGap": CS.HEAVY_GAP, "games": n_games}}
 
 
 def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=""):

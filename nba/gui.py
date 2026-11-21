@@ -73,6 +73,10 @@ INDEX_HTML = r"""<!doctype html>
   .sline .under{color:#ff9f9f;font-weight:650} .sline .over{color:#6ee7a0;font-weight:650}
   .smark{margin-top:3px;color:#e8cf9a} .smark.ok{color:#a8e0c4}
   .svote,.sbox,.snote{color:var(--muted);font-size:12.5px;margin-top:2px}
+  .sbadge{float:right;font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+          padding:2px 8px;border-radius:999px;border:1px solid #7a5a1e;color:#e8cf9a}
+  .sbadge.cap{background:#b9892e;border-color:#b9892e;color:#1a1408}
+  .sbadge.none{border-color:var(--line);color:var(--muted)}
   .sticks{margin-top:6px;display:flex;flex-wrap:wrap;gap:4px 16px}
   .sticks label,.soff label{display:inline;margin:0;font-size:12.5px;color:var(--text)}
   .sticks .sug{color:#e8cf9a;font-weight:650}
@@ -588,10 +592,9 @@ function weakKeep(){
 
 // ---- the chalk sheet (Chalk Sheet handover, Nov 20) ----
 // One line per chalk player: what he needs at his price and ownership, the
-// marks, the old rules as votes, and ticks. Nothing starts ticked and nothing
-// moves the build without a tick. A tick is sent with the build and becomes a
-// cap or a minimum.
-let sheet = null, sheetTicks = {}, leftOff = new Set(), sheetTimer = null, sheetSeq = 0;
+// marks and ticks. Nothing starts ticked and nothing moves the build without a
+// tick. A tick is sent with the build and becomes a cap.
+let sheet = null, sheetFlag = null, sheetTicks = {}, leftOff = new Set(), sheetTimer = null, sheetSeq = 0;
 function clearSheet(){
   sheet = null; sheetTicks = {}; leftOff = new Set();
   $('#sheetbody').innerHTML = '';
@@ -616,7 +619,7 @@ async function loadSheet(){
     const d = await res.json();
     if(seq !== sheetSeq) return;            // a newer request is on its way
     if(d.error){ $('#sheetwho').textContent = '— ' + d.error; return; }
-    sheet = d.sheet;
+    sheet = d.sheet; sheetFlag = d.flag || null;
     // keep only the ticks that are still on the sheet
     const names = new Set(sheet.lines.map(x => x.name).concat(sheet.off_pool.rows.map(r => r.name)));
     Object.keys(sheetTicks).forEach(n => { if(!names.has(n)) delete sheetTicks[n]; });
@@ -626,18 +629,14 @@ async function loadSheet(){
 }
 function sheetTotal(){
   if(!sheet) return '';
-  let freed = 0, held = 0, n = 0;
+  let freed = 0, n = 0;
   sheet.lines.forEach(x => {
     const t = (x.ticks || []).find(t => t.tick === sheetTicks[x.name]);
     if(t){ freed += Math.max(0, x.own - t.cap_percent) / 100 * 150; n++; }
   });
-  sheet.off_pool.rows.forEach(r => {
-    if(sheetTicks[r.name] === 'hold at his projected own'){ held += r.minimum_lineups_of_150; n++; }
-  });
   return !n ? 'No ticks: the build is untouched.'
-    : n + ' tick' + (n > 1 ? 's' : '') + '. They move about ' + (Math.round(freed) + held)
-      + " of the 150's 1,200 lineup spots (" + Math.round(freed) + ' freed by caps, ' + held
-      + ' held by minimums). From projected own; the build shows the real before and after.';
+    : n + ' tick' + (n > 1 ? 's' : '') + '. They free about ' + Math.round(freed)
+      + " of the 150's 1,200 lineup spots. From projected own; the build shows the real before and after.";
 }
 function drawSheet(){
   const S = sheet; if(!S) return;
@@ -649,11 +648,28 @@ function drawSheet(){
     + esc(T.needs_table.last_night || '?') + ').</div>'
     + (T.alerts || []).map(a => '<div class="note warn" style="margin:6px 0">' + esc(a) + '</div>').join('')
     + '<div class="stotal" id="sheettotal">' + esc(sheetTotal()) + '</div>';
-  h += S.lines.map((x, i) => {
-    const warn = x.marks.filter(m => m.mark !== 'cheap and clears' && m.mark !== 'clears by the most');
-    const heavy = x.marks.some(m => m.suggested_tick);
+  // The players to act on come first: a suggested cap, then a warning mark,
+  // then anyone projected under what he needs with no mark (said plainly, so a
+  // small negative is not read as a flag). A player who was on the sheet only
+  // for an old rule's vote is not shown; the old rules' lines are off the page.
+  const F = sheetFlag || {heavyOwn: 25, heavyGap: -1.5};
+  const warnOf = x => x.marks.filter(m => m.mark !== 'cheap and clears' && m.mark !== 'clears by the most');
+  const rankOf = x => (x.ticks || []).some(t => t.suggested) ? 0 : warnOf(x).length ? 1 : x.gap < 0 ? 2 : 3;
+  const heads = ['Cap suggested', 'Warning mark, no cap suggested', 'Under what he needs, no mark',
+                 'The rest of the chalk'];
+  const shown = S.lines.filter(x => x.why_on_sheet !== 'an old rule votes on him')
+    .map((x, i) => [rankOf(x), i, x]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  let lastRank = -1;
+  h += shown.map(([rk, _i, x], i) => {
+    const warn = warnOf(x);
+    const heavy = rk === 0;
     const cur = sheetTicks[x.name] || '';
-    let r = '<div class="sline' + (heavy ? ' heavy' : warn.length ? ' warned' : '') + '">'
+    let r = '';
+    if(rk !== lastRank){ r += '<div class="shead">' + heads[rk] + '</div>'; lastRank = rk; }
+    r += '<div class="sline' + (heavy ? ' heavy' : warn.length ? ' warned' : '') + '">'
+      + (rk === 0 ? '<span class="sbadge cap">Cap at half suggested</span>'
+         : rk === 1 ? '<span class="sbadge">Warning, no cap suggested</span>'
+         : rk === 2 ? '<span class="sbadge none">Under, no mark</span>' : '')
       + '<div><span class="sname">' + esc(x.name) + '</span> <span class="muted">' + esc(x.team)
       + ' · $' + x.price.toLocaleString() + ' · ' + esc(x.starting) + ', ' + Math.round(x.minutes)
       + ' min' + (x.in_pool === false ? ' · <span class="offsheet">not in your pool</span>' : '')
@@ -673,9 +689,10 @@ function drawSheet(){
       + (warn.includes(m) ? '⚠ ' : '✓ ') + '<b>' + esc(m.mark.charAt(0).toUpperCase() + m.mark.slice(1)) + '</b>'
       + ' <span class="muted">— ' + esc(m.rule) + '. Record: ' + esc(m.record) + '.</span>'
       + (m.suggested_tick ? ' <b>Suggested tick: ' + esc(m.suggested_tick) + '.</b>' : '') + '</div>').join('');
-    r += x.votes.map(v => '<div class="svote">Old rule, shown only: ' + esc(v.rule) + ' ('
-      + (v.side === 'for' ? 'for' : 'against') + ') — ' + esc(v.word) + '. ' + esc(v.box) + '.</div>').join('');
-    if(x.votes_conflict) r += '<div class="svote">The old rules point both ways on him.</div>';
+    if(rk === 2) r += '<div class="smark" style="color:var(--muted)">Projected ' + Math.abs(x.gap).toFixed(1)
+      + ' under what he needs, but no warning mark fits him, so the record gives no reason to cap him. '
+      + 'A cap is suggested only at ' + F.heavyOwn + '%+ own and ' + Math.abs(F.heavyGap) + ' or more under (he is '
+      + Math.round(x.own) + '% and ' + Math.abs(x.gap).toFixed(1) + ' under).</div>';
     r += '<div class="sbox">' + esc(x.role) + (x.steady ? ', ' + esc(x.steady) : '')
       + (x.job_opened ? ', job opened tonight' : '') + '. ' + esc(x.box) + '</div>';
     r += (x.notes || []).map(n => '<div class="snote">Note: ' + esc(n) + '</div>').join('');
@@ -691,14 +708,17 @@ function drawSheet(){
   }).join('');
   const tn = S.team_notes || {};
   h += Object.keys(tn).map(t => tn[t].map(n => '<div class="snote">' + esc(t) + ' note: ' + esc(n) + '</div>').join('')).join('');
-  h += '<div class="shead">Off-pool list</div><div>' + esc(S.off_pool.text) + '</div>';
+  const g = F.games || 0;
+  h += '<div class="shead">Off-pool list</div><div>' + S.off_pool.rows.length
+    + ' players who are not in your pool. Shown only; nothing here sets how many lineups a player gets.'
+    + (g >= 5 && g <= 7 ? " On a 5 to 7 game slate the 150 comes from Stokastic's file, so these players can still be in your lineups."
+       : g >= 8 ? " On an 8+ game slate half the 150 comes from Stokastic's file, so these players can still be in your lineups." : '')
+    + '</div>';
   h += S.off_pool.rows.map(r => '<div class="soff"><b>[' + esc(r.list) + '] ' + esc(r.name) + '</b> <span class="muted">'
     + esc(r.team) + ' · $' + r.price.toLocaleString() + ' · ' + esc(r.starting) + ' · own ' + Math.round(r.own)
     + '% (LineStar ' + (r.linestar_own === null ? 'none' : Math.round(r.linestar_own) + '%') + ') · projected '
     + r.projection.toFixed(1) + ' · ' + esc(r.why) + '</span><br>'
-    + '<label><input type="checkbox" class="offhold" data-n="' + esc(r.name) + '"'
-    + (sheetTicks[r.name] ? ' checked' : '') + '> hold at his projected own = ' + r.minimum_lineups_of_150
-    + ' of 150</label> &nbsp; <label><input type="checkbox" class="offleft" data-n="' + esc(r.name) + '"'
+    + '<label><input type="checkbox" class="offleft" data-n="' + esc(r.name) + '"'
     + (leftOff.has(r.name) ? ' checked' : '') + '> left off on purpose'
     + (r.left_off_on_purpose_before ? ' (marked ' + r.left_off_on_purpose_before + ' time'
        + (r.left_off_on_purpose_before > 1 ? 's' : '') + ' before)' : '') + '</label>'
@@ -710,19 +730,8 @@ function drawSheet(){
     if(el.value) sheetTicks[el.dataset.n] = el.value; else delete sheetTicks[el.dataset.n];
     total();
   }));
-  body.querySelectorAll('input.offhold').forEach(el => el.addEventListener('change', () => {
-    if(el.checked){
-      sheetTicks[el.dataset.n] = 'hold at his projected own';
-      leftOff.delete(el.dataset.n);
-      const o = body.querySelector('input.offleft[data-n="' + CSS.escape(el.dataset.n) + '"]'); if(o) o.checked = false;
-    } else delete sheetTicks[el.dataset.n];
-    total();
-  }));
   body.querySelectorAll('input.offleft').forEach(el => el.addEventListener('change', () => {
-    if(el.checked){
-      leftOff.add(el.dataset.n); delete sheetTicks[el.dataset.n];
-      const o = body.querySelector('input.offhold[data-n="' + CSS.escape(el.dataset.n) + '"]'); if(o) o.checked = false;
-    } else leftOff.delete(el.dataset.n);
+    if(el.checked) leftOff.add(el.dataset.n); else leftOff.delete(el.dataset.n);
     total();
   }));
 }
