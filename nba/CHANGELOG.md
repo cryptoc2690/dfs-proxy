@@ -2,6 +2,26 @@
 
 Newest first. One entry per change, in plain words: what changed and why.
 
+## Nov 21, 2026 — the pool respected on 5+ game slates
+
+From `NBA Pool On 5 To 7 Games Report 11-21.md`. The data chat's change to `newbuild.py` is applied as handed over (`Prototype/pool57/`).
+
+**What was wrong.** On 5 to 7 game slates the 150 came from Stokastic's file and the build never read the pool. 46 of the 150 held a player who was not in the pool on an average night (BACKTEST, 15 nights); 45 on Nov 20 (LIVE). The off-pool list on the page read as if those players were out. They were not.
+
+**Now:**
+- **Wherever the 150 takes lineups from Stokastic's file** (5 to 7 games: all 150; 8+ games: the file half), the file is first cut to lineups whose eight players are all in your pool. In your pool means typed in the pool or cores box, carrying a typed minimum, or let in tonight.
+- **Everything after the cut is T1 unchanged:** the shape, the limit of 5, the 60% cap, the same pick order. The shape stays on when fewer than 225 pool-only lineups pass it; the rest comes from the rest of the pool-only file. If that file cannot fill the set, the rest is drawn from the pool.
+- **"Let him in"** on the off-pool list (5+ games): Stokastic's lineups that hold him count like the rest. No number of lineups is set; the build says how many he got. A player under 5% own usually gets none, because the shape allows nobody under 5%.
+- **2 to 4 game slates:** nothing changes, and the off-pool list is not shown there (every way of letting one in piled).
+- **The "hold at his projected own" tick is gone** from the tool.
+- With no pool typed, nothing changes. The 20s follow by themselves (every 7th of the 150).
+
+**Record (BACKTEST, 15 nights of 5 to 7 games):** the 150 0.87x of T1, higher on 3 nights, lower on 4, the same on 8: level. T1's 13th, 3rd and 28th are kept. The 20s 1.13x (7 / 6). Players used 38 against 41. A player let in by himself got a middle of 11 of 150.
+
+**Rebuilding an older night:** option `poolOff`. `grade_night.py` sets it for any build saved before this.
+
+**Checked against the data chat's seven cases** (`Prototype/pool57/checks/`): the 150 matches lineup for lineup in pick order, and with `poolOff` the tool makes the five sets it made before. Their 24 tests pass on the tool.
+
 ## Nov 21, 2026 — the chalk sheet, cut to what gets acted on
 
 The user: he only touches players projected under what they need or carrying "Fails both checks", the old rules' lines are noise, and a small negative read as a flag is how Mara got capped on Nov 20.

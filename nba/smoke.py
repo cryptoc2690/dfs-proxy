@@ -2013,8 +2013,8 @@ _ch = _NB.select(_cs, 3, 1.0, 3, _co.Counter(), set())
 check("T1: with no limit the pick is the plain top of the list",
       [''.join(sorted(c["key"])) for c in _ch] == ["abcdefgh", "abcdefgx", "abcdefxy"])
 check("T1: the spread by slate size: the shape and the 60% cap on 5-7 games only",
-      _NB.spread_spec(4) == {"limit": 5, "shape": None, "cap": None}
-      and _NB.spread_spec(9) == {"limit": 5, "shape": None, "cap": None}
+      _NB.spread_spec(4) == {"limit": 5, "shape": None, "cap": None, "pool": False}
+      and _NB.spread_spec(9) == {"limit": 5, "shape": None, "cap": None, "pool": True}
       and _NB.spread_spec(6)["cap"] == 0.6 and _NB.spread_spec(6)["shape"]["minOwn"] == 5.0)
 
 
@@ -2194,6 +2194,50 @@ check("late news in the swap: the same file as the build moves nothing",
 _slq = [json.loads(l) for l in open(LS.SWAP_LOG_PATH, encoding="utf-8")]
 check("late news in the swap: the news list and every move are saved in the swap log",
       any((r.get("lateNews") or {}).get("auto") and (r["lateNews"].get("news") or {}).get("newStarters") for r in _slq))
+
+# ---- Nov 21: the pool respected on 5+ games, and the let-in tick ---------------
+print("\n-- the pool respected --")
+_pn = {x["Player"] for i, x in enumerate(R5) if i % 3 != 2}
+
+
+def _pool_run(extra):
+    k = _nlog()
+    res = _real_run_build(PROJ5, FIELD5, DK5b, dict({"pool": _pool5}, **extra))
+    rows = [r for r in _rows_of(k) if r["contest_id"] == "900001"]
+    st = (rows or [{}])[0].get("settings") or {}
+    off = collections.Counter(p["name"] for r in rows for p in r["players"] if p["name"] not in _pn)
+    held = sum(1 for r in rows if any(p["name"] not in _pn for p in r["players"]))
+    return res, rows, st, off, held
+
+
+_pr, _prow, _pst, _poff, _pheld = _pool_run({})
+_pf = ((_pst.get("sets") or {}).get("big") or {}).get("poolFile") or {}
+check("pool: on 5 games the 150 holds nobody from outside the typed pool, and the build says how much of "
+      "Stokastic's file that left",
+      not _pr.get("error") and len(_prow) == 150 and _pheld == 0 and _pf.get("file", 0) > _pf.get("poolOnly", -1) >= 0
+      and ((_pst.get("t1") or {}).get("spread") or {}).get("pool") is True
+      and any("Pool respected" in n["text"] for n in _pr["notes"]),
+      f"{_pheld} lineups hold an off-pool player; {_pf}")
+_or, _orow, _ost, _ooff, _oheld = _pool_run({"poolOff": True})
+check("pool: poolOff rebuilds a night the old way (the file is not cut)",
+      not _or.get("error") and len(_orow) == 150 and _oheld > 0
+      and not ((_ost.get("sets") or {}).get("big") or {}).get("poolFile")
+      and ((_ost.get("t1") or {}).get("options") or {}).get("poolOff") is True, f"{_oheld} hold an off-pool player")
+_letnm = _ooff.most_common(1)[0][0] if _ooff else next(x["Player"] for x in R5 if x["Player"] not in _pn)
+_lr, _lrow, _lst, _loff, _lheld = _pool_run({"letIn": [_letnm]})
+check("pool: a player let in is the only one from outside the pool, with no count set for him",
+      not _lr.get("error") and len(_lrow) == 150 and set(_loff) <= {_letnm}
+      and (((_lst.get("sets") or {}).get("big") or {}).get("poolFile") or {}).get("letIn") == [_letnm]
+      and (_lst.get("t1") or {}).get("letIn") == [_letnm]
+      and any("Let in tonight" in n["text"] and _letnm in n["text"] for n in _lr["notes"]),
+      f"{_letnm}: {_loff.get(_letnm, 0)} of 150; others {sorted(set(_loff) - {_letnm})}")
+check("pool: the cut is on wherever the 150 takes lineups from the file (5+ games), never on 2-4",
+      (_NB.spread_spec(4)["pool"], _NB.spread_spec(5)["pool"], _NB.spread_spec(9)["pool"],
+       _NB.spread_spec(6, pool=False)["pool"]) == (False, True, True, False))
+check("pool: with no pool typed the file is left as it is",
+      _NB.pool_only([{"ps": [_np("A", "PG", "AAA", "BBB", 5000, 20)]}], [_np("A", "PG", "AAA", "BBB", 5000, 20)]) != [])
+check("sheet: the 'hold at his projected own' tick is gone",
+      app.sheet_ticks({"sheetTicks": {"A": "hold at his projected own", "B": "out"}}) == {"B": "out"})
 
 # The summary and exit MUST stay last — appending a new section after them
 # silently skips it and the suite still reports a clean pass.

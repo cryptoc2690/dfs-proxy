@@ -509,12 +509,16 @@ def _dust_drop(rosters, k, keep_ids=()):
     return set(sorted(range(n), key=lambda i: (-sc(rosters[i]), -i))[:k])
 
 
-def spread_spec(games, limit=None, shape=True, cap=True):
-    """T1: how tonight's 150 is spread. -> {"limit", "shape", "cap"}"""
+def spread_spec(games, limit=None, shape=True, cap=True, pool=True):
+    """T1: how tonight's 150 is spread. -> {"limit", "shape", "cap", "pool"}
+    pool (Pool On 5 To 7 Games review, Nov 21): Stokastic's file is first cut to
+    lineups made only of players in your pool. On wherever the 150 takes
+    lineups from the file (5+ games, see plan())."""
     f = SHAPE_GAMES[0] <= games <= SHAPE_GAMES[1]
     return {"limit": SHARE_LIMIT if limit is None else limit,
             "shape": dict(SHAPE) if (f and shape) else None,
-            "cap": CAP_SPREAD if (f and cap) else None}
+            "cap": CAP_SPREAD if (f and cap) else None,
+            "pool": bool(pool) and games >= 5}
 
 
 def field_lineup(players):
@@ -551,6 +555,22 @@ def file_candidates(field_lineups, active_ids, slotting):
         seen.add(key)
         out.append(_cand(slots, float(lu.metrics.get("top10") or 0.0)))
     return out
+
+
+def pool_only(fc, players, floors=None, let_in=None):
+    """The pool respected: Stokastic's lineups made only of players in your pool.
+
+    fc: file_candidates(...). A player counts as in the pool when his name was
+    typed in the pool or cores box (p.in_pool), when he has a typed minimum
+    (floors, as the pool draw already reads it), or when he is let in tonight
+    (let_in: dk_ids, the tick). No count is set for anyone: a lineup is kept or
+    not, and the pick decides the rest. With no pool typed the file is left as
+    it is. -> the lineups kept, in the file's order."""
+    ok = {p.dk_id for p in players if p.in_pool}
+    if not ok:
+        return fc
+    ok |= set(floors or ()) | set(let_in or ())
+    return [c for c in fc if all(p.dk_id in ok for p in c["ps"])]
 
 
 # --- one live piece (G14), the stud floor (G12) ------------------------------
@@ -832,7 +852,7 @@ def tail_fix(rosters, by_id, min_count, keep=(), caps=None):
 def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, seed=0,
               history=None, slotting=None, copies=1, file_pick=None, raises=None,
               anchor=None, win=None, upper=None, spread=None, takeover_k=None,
-              top3_k=None):
+              top3_k=None, let_in=None):
     """One set (a 150 or a 20). -> dict(rosters, sources, chunks, notes, meta)
 
     players: every player with DK ids attached, pool flags set and removals
@@ -854,7 +874,9 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
     spread: spread_spec(games), the 150 only (T1): the shared-player limit, and
     on 5-7 games the top-10 shape on the file and the lower cap on any one
     player. takeover_k / top3_k: the lean and the top-three raise (None = the
-    module's settings, both 0 since Nov 20)."""
+    module's settings, both 0 since Nov 20). let_in: dk_ids of off-pool players
+    let in tonight (the tick): the file's lineups that hold one count as pool
+    lineups when spread["pool"] is on."""
     tk_k = TAKEOVER_K if takeover_k is None else takeover_k
     t3_k = TOP3_K if top3_k is None else top3_k
     notes = []
@@ -869,12 +891,19 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
     fc = file_candidates(field_lineups or [], active_ids, slotting) if big else []
     spread = spread if big else None
     ms = spread["limit"] if spread else None
+    pool_info = None
+    if spread and spread.get("pool") and fc and any(p.in_pool for p in players):
+        n_all = len(fc)
+        fc = pool_only(fc, players, floors, let_in)
+        pool_info = {"file": n_all, "poolOnly": len(fc),
+                     "letIn": sorted(by_id[k].name for k in (let_in or ()) if k in by_id)}
     shape_info = None
     fc_all = fc
     if spread and spread.get("shape") and fc:
         eso, ech = field_lineup(players)
         kept = [c for c in fc if shape_ok(c, spread["shape"], eso, ech)]
-        shape_info = {"file": len(fc), "pass": len(kept), "used": len(kept) >= SHAPE_MIN,
+        shape_min = 1 if pool_info else SHAPE_MIN
+        shape_info = {"file": len(fc), "pass": len(kept), "used": len(kept) >= shape_min,
                       "ownSum": round(eso, 1), "chalk": round(ech, 2)}
         if shape_info["used"]:
             fc = kept
@@ -882,10 +911,14 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
     if not any(p.in_pool for p in players):
         rule = rule.replace("your pool", "the whole slate (no pool typed)")
     notes.append(rule)
+    if pool_info:
+        notes.append(f"Pool respected: {pool_info['poolOnly']} of Stokastic's {pool_info['file']} "
+                     f"lineups are made only of players in your pool"
+                     + (f" (let in: {', '.join(pool_info['letIn'])})" if pool_info["letIn"] else ""))
     if shape_info:
         notes.append(f"Top-10 shape: {shape_info['pass']} of Stokastic's {shape_info['file']} "
                      f"lineups pass" + ("" if shape_info["used"] else
-                                        f", under {SHAPE_MIN}, so the shape was SKIPPED tonight"))
+                                        f", under {shape_min}, so the shape was SKIPPED tonight"))
     if spread:
         notes.append(f"Spread: no two lineups share more than {ms} players"
                      + (f"; no player in more than {spread['cap']:.0%} of the set"
@@ -957,6 +990,8 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
     chosen = own + half
     sources = ["mine"] * len(own) + ["vendor"] * len(half)
     if n_file and len(half) < n_file:
+        if not cands and not need_own:
+            cands = gen_candidates(allowed, dict(draw, ranges=False), None, V, rng)
         more = select(cands, n - len(chosen), cap, n, cnt, taken, "proj", caps,
                       max_shared=ms)
         if more:
@@ -1063,6 +1098,7 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
     return {"rosters": rosters, "sources": sources, "chunks": chunks, "notes": notes,
             "meta": {"rule": rule, "own": len(own), "file": len(half),
                      "filePick": file_key if n_file else None,
+                     "poolFile": pool_info,
                      "fileUsable": len(fc), "candidates": len(cands),
                      "draw": "old" if draw is OLD_DRAW else "new",
                      "blueprint": {k: v for k, v in (B or {}).items()},

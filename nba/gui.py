@@ -316,8 +316,9 @@ INDEX_HTML = r"""<!doctype html>
     <p>3 is your DK entries export, with your entries reserved. Each contest in it
       is built by its size: a 150 or a 20-max.</p>
     <p><b>The 150:</b> 2–4 games, all from your pool · 5–7 games, all from Stokastic's
-      lineups, cut to the top-10 shape, no player in more than 60% · 8+ games, half
-      and half. On every slate no two lineups share more than 5 players.
+      lineups that use only your pool's players, cut to the top-10 shape, no player in
+      more than 60% · 8+ games, half and half. On every slate no two lineups share
+      more than 5 players.
       <b>The 20-max:</b> on 5+ games, every 7th lineup of that 150; on 2–4 games,
       from your pool.</p>
     <p>4, LineStar, is optional: it only warns if LineStar has someone at 0 whom
@@ -420,7 +421,7 @@ function slot(key, el){
           if(d.format) setFmt(d.format, key === 'dk');
           if(key === 'standings') $('#graderow').style.display = '';
           if(key === 'dk') showContests(d.contests || []);
-          if(key === 'proj') { loadRoster(text); loadWeak(text); sheetTicks = {}; leftOff = new Set(); }
+          if(key === 'proj') { loadRoster(text); loadWeak(text); sheetTicks = {}; leftOff = new Set(); letIn = new Set(); }
           if(key === 'proj' || key === 'linestar') loadSheet();
           crossCheck();
         } else {
@@ -594,9 +595,9 @@ function weakKeep(){
 // One line per chalk player: what he needs at his price and ownership, the
 // marks and ticks. Nothing starts ticked and nothing moves the build without a
 // tick. A tick is sent with the build and becomes a cap.
-let sheet = null, sheetFlag = null, sheetTicks = {}, leftOff = new Set(), sheetTimer = null, sheetSeq = 0;
+let sheet = null, sheetFlag = null, sheetTicks = {}, leftOff = new Set(), letIn = new Set(), sheetTimer = null, sheetSeq = 0;
 function clearSheet(){
-  sheet = null; sheetTicks = {}; leftOff = new Set();
+  sheet = null; sheetTicks = {}; leftOff = new Set(); letIn = new Set();
   $('#sheetbody').innerHTML = '';
   $('#sheetwho').textContent = '— drop the projections first';
 }
@@ -624,6 +625,7 @@ async function loadSheet(){
     const names = new Set(sheet.lines.map(x => x.name).concat(sheet.off_pool.rows.map(r => r.name)));
     Object.keys(sheetTicks).forEach(n => { if(!names.has(n)) delete sheetTicks[n]; });
     leftOff = new Set([...leftOff].filter(n => names.has(n)));
+    letIn = new Set([...letIn].filter(n => names.has(n)));
     drawSheet();
   }catch(e){ if(seq === sheetSeq) $('#sheetwho').textContent = '— could not make the sheet'; }
 }
@@ -708,21 +710,27 @@ function drawSheet(){
   }).join('');
   const tn = S.team_notes || {};
   h += Object.keys(tn).map(t => tn[t].map(n => '<div class="snote">' + esc(t) + ' note: ' + esc(n) + '</div>').join('')).join('');
+  // Off-pool list. On 5+ games the pool is respected: these players are out of
+  // the 150 unless let in (no count is set; the build decides). On 2-4 games no
+  // way of letting one in held up, so the list is not shown.
   const g = F.games || 0;
-  h += '<div class="shead">Off-pool list</div><div>' + S.off_pool.rows.length
-    + ' players who are not in your pool. Shown only; nothing here sets how many lineups a player gets.'
-    + (g >= 5 && g <= 7 ? " On a 5 to 7 game slate the 150 comes from Stokastic's file, so these players can still be in your lineups."
-       : g >= 8 ? " On an 8+ game slate half the 150 comes from Stokastic's file, so these players can still be in your lineups." : '')
-    + '</div>';
-  h += S.off_pool.rows.map(r => '<div class="soff"><b>[' + esc(r.list) + '] ' + esc(r.name) + '</b> <span class="muted">'
-    + esc(r.team) + ' · $' + r.price.toLocaleString() + ' · ' + esc(r.starting) + ' · own ' + Math.round(r.own)
-    + '% (LineStar ' + (r.linestar_own === null ? 'none' : Math.round(r.linestar_own) + '%') + ') · projected '
-    + r.projection.toFixed(1) + ' · ' + esc(r.why) + '</span><br>'
-    + '<label><input type="checkbox" class="offleft" data-n="' + esc(r.name) + '"'
-    + (leftOff.has(r.name) ? ' checked' : '') + '> left off on purpose'
-    + (r.left_off_on_purpose_before ? ' (marked ' + r.left_off_on_purpose_before + ' time'
-       + (r.left_off_on_purpose_before > 1 ? 's' : '') + ' before)' : '') + '</label>'
-    + '<div class="sbox">' + esc(r.box) + '</div></div>').join('');
+  if(g >= 5 && S.off_pool.rows.length){
+    h += '<div class="shead">Off-pool list</div><div>' + S.off_pool.rows.length
+      + ' players who are not in your pool, so they are not in your lineups. Tick "let him in" and '
+      + "Stokastic's lineups that hold him count like the rest; the build decides how many he gets. "
+      + 'A player under 5% own usually gets none.</div>';
+    h += S.off_pool.rows.map(r => '<div class="soff"><b>[' + esc(r.list) + '] ' + esc(r.name) + '</b> <span class="muted">'
+      + esc(r.team) + ' · $' + r.price.toLocaleString() + ' · ' + esc(r.starting) + ' · own ' + Math.round(r.own)
+      + '% (LineStar ' + (r.linestar_own === null ? 'none' : Math.round(r.linestar_own) + '%') + ') · projected '
+      + r.projection.toFixed(1) + ' · ' + esc(r.why) + '</span><br>'
+      + '<label><input type="checkbox" class="offlet" data-n="' + esc(r.name) + '"'
+      + (letIn.has(r.name) ? ' checked' : '') + '> let him in</label> &nbsp; '
+      + '<label><input type="checkbox" class="offleft" data-n="' + esc(r.name) + '"'
+      + (leftOff.has(r.name) ? ' checked' : '') + '> left off on purpose'
+      + (r.left_off_on_purpose_before ? ' (marked ' + r.left_off_on_purpose_before + ' time'
+         + (r.left_off_on_purpose_before > 1 ? 's' : '') + ' before)' : '') + '</label>'
+      + '<div class="sbox">' + esc(r.box) + '</div></div>').join('');
+  }
   const body = $('#sheetbody');
   body.innerHTML = h;
   const total = () => { $('#sheettotal').textContent = sheetTotal(); };
@@ -730,8 +738,17 @@ function drawSheet(){
     if(el.value) sheetTicks[el.dataset.n] = el.value; else delete sheetTicks[el.dataset.n];
     total();
   }));
+  body.querySelectorAll('input.offlet').forEach(el => el.addEventListener('change', () => {
+    if(el.checked){
+      letIn.add(el.dataset.n); leftOff.delete(el.dataset.n);
+      const o = body.querySelector('input.offleft[data-n="' + CSS.escape(el.dataset.n) + '"]'); if(o) o.checked = false;
+    } else letIn.delete(el.dataset.n);
+  }));
   body.querySelectorAll('input.offleft').forEach(el => el.addEventListener('change', () => {
-    if(el.checked) leftOff.add(el.dataset.n); else leftOff.delete(el.dataset.n);
+    if(el.checked){
+      leftOff.add(el.dataset.n); letIn.delete(el.dataset.n);
+      const o = body.querySelector('input.offlet[data-n="' + CSS.escape(el.dataset.n) + '"]'); if(o) o.checked = false;
+    } else leftOff.delete(el.dataset.n);
     total();
   }));
 }
@@ -962,7 +979,8 @@ $('#go').addEventListener('click', async () => {
           leverage: $('#leverbox').value,
           dkCalls: $('#dkcalls').value,
           sheetTicks: sheetTicks,
-          leftOff: [...leftOff]
+          leftOff: [...leftOff],
+          letIn: [...letIn]
         }
       })
     });

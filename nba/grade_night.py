@@ -500,6 +500,8 @@ def main(argv):
         options.update(t1.get("options") or {})
         options.update(filePick=t1.get("filePick") or "top10", takeoverK=t1.get("takeoverK", 0.0),
                        top3K=t1.get("top3K", 0.0))
+        if not (t1.get("spread") or {}).get("pool"):
+            options["poolOff"] = True          # built before the pool was respected (Nov 21)
     else:
         # Built before T1: no spread, the top-three raise on, and the lean on
         # from the night it went into the code (Nov 12).

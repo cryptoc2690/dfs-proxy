@@ -1130,7 +1130,9 @@ T1_OFF = ("weakChalkOff", "matchupOff", "leverOff", "liveOff", "g20Off", "g21Off
 # a line is ticked; a tick becomes a cap or a minimum, the same as typing one.
 NOTES_PATH = os.environ.get("NBA_NOTES") or os.path.expanduser(
     "~/Downloads/NBA Results 1/NBA Team Notes (master).md")
-SHEET_TICKS = ("cap at half", "cap at three-quarters", "out", "hold at his projected own")
+# Nov 21: "hold at his projected own" is gone (no rule puts a player into a set
+# number of lineups). An off-pool player is let in with the option "letIn".
+SHEET_TICKS = ("cap at half", "cap at three-quarters", "out")
 
 
 def _needs_path():
@@ -1627,7 +1629,11 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
     # T1: the 150 is spread (no two lineups sharing more than 5 players; on 5-7
     # games the file is cut to the top-10 shape first and no player is in more
     # than 60%). The 20s on 5+ games are every 7th lineup of that same 150.
-    spread = None if o.get("spreadOff") else NB.spread_spec(n_games)
+    # Nov 21: the pool respected. On 5+ games Stokastic's file is first cut to
+    # lineups made only of pool players (option poolOff rebuilds a night built
+    # before this). "letIn": off-pool names let in tonight, no count set.
+    spread = None if o.get("spreadOff") else NB.spread_spec(n_games, pool=not o.get("poolOff"))
+    let_names = {normalize_name(str(x)) for x in (o.get("letIn") or [])} if n_games >= 5 else set()
     tk_k = None if o.get("takeoverK") is None else float(o.get("takeoverK"))
     t3_k = None if o.get("top3K") is None else float(o.get("top3K"))
     if spread and (n_big or (n_small and from150)):
@@ -1669,21 +1675,6 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                 skipped.append(nm_)
             else:
                 add_c.append(f"{q.name} {pct_:g}%")
-        for nm_, k_ in plan["minimums_lineups_150"].items():
-            q = by_nm_.get(normalize_name(nm_))
-            if q is None or q.dk_id in has_floor:
-                skipped.append(nm_)
-            else:
-                add_f.append(f"{q.name} {int(k_)}")
-                if n_games <= 4:              # a 20 takes his own share of 20, not the 150's number
-                    tick_small[q.dk_id] = int(plan["minimums_lineups_20"].get(nm_, 1))
-                # A minimum also puts him in the pool. Where the pool is a source
-                # (2-4 and 8+ games) the pick would then take him well past his
-                # own (Nov 19: a minimum of 8 became 17), so there he is held at
-                # that number: the same count is his cap. On 5-7 games the file
-                # is the source and only the minimum is set.
-                if not (5 <= n_games <= 7) and q.dk_id not in has_cap:
-                    add_c.append(f"{q.name} {100.0 * int(k_) / CS.SET_BIG:.4g}%")
         if add_c:
             caps_text = "\n".join([typed_caps] + add_c).strip()
         if add_f:
@@ -1733,6 +1724,9 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
         bcaps.update(g21_caps)
         anc = lev_anchor if kind == "big" else None
 
+        # The tick that lets an off-pool player in (no count): the names the page sends in "letIn".
+        let_in = {p.dk_id for p in players if normalize_name(p.name) in let_names}
+
         def bset(n_=n, caps_=None, raises_=None, anchor_=anc, win_=win if kind == "big" else None,
                  copies_=copies, upper_=None, floors_=floors, spread_=spread):
             return NB.build_set(players, n_, n_games, field, inj,
@@ -1741,7 +1735,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                                 file_pick=o.get("filePick") or None,
                                 raises=raises if raises_ is None else raises_,
                                 anchor=anchor_, win=win_, upper=upper_, spread=spread_,
-                                takeover_k=tk_k, top3_k=t3_k)
+                                takeover_k=tk_k, top3_k=t3_k, let_in=let_in)
 
         def shadow_of(name, **kw):
             sh = bset(**kw)
@@ -1837,7 +1831,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
             kw150 = {} if kind == "big" else dict(
                 n_=150, anchor_=lev_anchor, win_=win, copies_=1, caps_=c150, floors_=fl150)
             for nm_, sp_ in (("t1_plain", None),
-                             ("t1_limitCap", NB.spread_spec(n_games, shape=False))):
+                             ("t1_limitCap", NB.spread_spec(n_games, shape=False,
+                                                            pool=not o.get("poolOff")))):
                 if sp_ != spread:
                     sh = bset(spread_=sp_, **kw150)
                     nb_shadow.setdefault(nm_, {})["big"] = names_of(sh["chunks"])
@@ -1949,15 +1944,23 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                    "Stokastic's." if any(_mark(p) for p in pool_warn) else ""))
     # The off-pool list, from the chalk sheet (the rules as tested: A and B take
     # players projected 10+; C is one of the three highest-projected off-pool
-    # studs under 10% own, shown when he is under 5%). Shown only; a tick on the
-    # sheet holds a player at his projected own.
-    off_pool = (sheet or {}).get("off_pool", {}).get("rows", []) if pool_names else []
-    if off_pool:
-        say("info", (sheet["off_pool"]["text"] + " " + " | ".join(
-            f"[{r['list']}] {r['name']} (${r['price']:,}, {r['own']:.0f}% own"
-            + (f", LineStar {r['linestar_own']:.0f}%" if r["linestar_own"] is not None else "")
-            + f", {r['projection']:.0f} proj, {r['minimum_lineups_of_150']} of 150 at his own)"
-            + (" ticked" if ticked.get(r["name"]) else "") for r in off_pool)))
+    # studs under 10% own, shown when he is under 5%). On 5+ games the pool is
+    # respected, so these players are out of the 150 unless let in; on 2-4 games
+    # no way of letting one in held up, so the list is not shown there.
+    off_pool = (sheet or {}).get("off_pool", {}).get("rows", []) if (pool_names and n_games >= 5) else []
+    if off_pool and spread and spread.get("pool"):
+        say("info", "Not in your pool, so not in your lineups unless you let one in: " + ", ".join(
+            f"{r['name']} ({r['own']:.0f}% own)" for r in off_pool))
+    if let_names and spread and spread.get("pool"):
+        src_ = sets.get("big") or base150
+        let_ps = [p for p in players if normalize_name(p.name) in let_names]
+        if src_ and let_ps:
+            say("info", "Let in tonight (the build decides how many): " + "; ".join(
+                f"{p.name} — {sum(1 for r in src_['rosters'] if any(q.dk_id == p.dk_id for q in r))}"
+                f" of {len(src_['rosters'])}" for p in let_ps))
+        gone = sorted(let_names - {normalize_name(p.name) for p in players})
+        if gone:
+            say("warn", "Let in, but not on this slate: " + ", ".join(gone))
     studs_off = NB.off_pool_studs(players, active) if pool_names else []
     if studs_off:
         say("info", "Studs off your pool under 12% projected owned (shown, not used): "
@@ -2101,7 +2104,9 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
             "night": sheet["top"]["night"], "slate": sheet["top"]["slate"],
             "needsTable": sheet["top"]["needs_table"]}
     settings["t1"] = {
-        "options": {k_: bool(o.get(k_)) for k_ in T1_OFF + ("from150Off", "spreadOff", "studFloor")},
+        "options": {k_: bool(o.get(k_)) for k_ in T1_OFF + ("from150Off", "spreadOff", "studFloor",
+                                                            "poolOff")},
+        "letIn": sorted(p.name for p in players if normalize_name(p.name) in let_names),
         "filePick": o.get("filePick"),
         "takeoverK": NB.TAKEOVER_K if tk_k is None else tk_k,
         "top3K": NB.TOP3_K if t3_k is None else t3_k,
