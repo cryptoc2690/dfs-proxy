@@ -269,6 +269,104 @@ def _aggression_from_rank(pct):
 
 
 # ---------------- the run ----------------
+# --- late news (Nov 21): what the swap does by itself after outs only ----------
+# Late Swap And The Top 10 / Is T1 Too Narrow reports, and the user's call the same
+# day: nobody is placed into a set number of lineups, and nothing is shown to tick.
+# A player the fresh file now shows starting (bench in the build's file), and the
+# best remaining listed starter of a team whose listed starter is out, goes into
+# every lineup where he projects at least as high, by the fresh file, as the
+# lowest projection within $800 above his price. He never takes out a player at
+# $7,500+ or 15%+ projected own. The build's limits are kept (no two lineups share
+# more than 5; no player over 60% of the set on 5-7 games, 85% elsewhere).
+# BACKTEST, 29 nights, from the saved file alone: the 150 0.96x (higher on 1 night,
+# lower on none), the 20s 0.98x (5 / 3), no top finish lost; the biggest night put
+# one player into 25 of 150 and 9 of 20. The code is the data chat's, unchanged
+# (see_news.py, news_swap.py).
+NEWS_STEP = True
+# The report's pile-stopper: on 5-7 games the changed lineup must still pass the
+# build's shape by the fresh file's ownership. Same record either way, and it all
+# but switches the step off there (Nov 13: 25 lineups to 1). Off: the user wants
+# new value on the board and takes whatever count comes out.
+NEWS_SHAPE_CHECK = False
+
+
+def _lock_file(base_row):
+    """The projections file the build read (logs/inputs/<day>/<time>/proj.csv), for
+    the build this swap is judged against. -> (text, path) or (None, why)."""
+    ts = (base_row or {}).get("ts") or ""
+    if len(ts) < 19:
+        return None, "no logged build of this slate"
+    day, hms = ts[:10], ts[11:19].replace(":", "")
+    folder = os.path.join(os.path.dirname(SWAP_LOG_PATH), "inputs", day)
+    try:
+        stamps = sorted(d for d in os.listdir(folder)
+                        if os.path.isfile(os.path.join(folder, d, "proj.csv")))
+    except OSError:
+        return None, "the build's files were not saved"
+    if not stamps:
+        return None, "the build's files were not saved"
+    # The folder is stamped a moment after the log row: the nearest one in time.
+    def secs(x):
+        try:
+            return int(x[:2]) * 3600 + int(x[2:4]) * 60 + int(x[4:6])
+        except ValueError:
+            return 10 ** 9
+    pick = min(stamps, key=lambda d: abs(secs(d) - secs(hms)))
+    path = os.path.join(folder, pick, "proj.csv")
+    try:
+        with open(path, encoding="utf-8-sig", newline="") as fh:
+            return fh.read(), path
+    except OSError:
+        return None, "the build's projections file could not be read"
+
+
+def late_news(players, lock_text, dk, locked, rows, n_games, skip_ids=None, day=None,
+              typed=None):
+    """The news this file shows against the build's whole file, and the automatic
+    step on `rows` (one row an entry, changed in place), a contest at a time.
+    skip_ids: {contest id: dk ids never brought in} (players with a typed cap).
+    -> {"news", "auto": {contest id: {"moves", "log"}}, "games"}"""
+    import see_news as SN
+    lock_players, rep = read_projections(lock_text or "")
+    if rep.get("error"):
+        return {"error": f"the build's projections file: {rep['error']}"}
+    for q in lock_players:
+        rec = dk["pool"].get(normalize_name(q.name))
+        if rec and rec.get("dk_id"):
+            q.dk_id = rec["dk_id"]
+            q.eligible = set(rec.get("eligible") or q.eligible)
+            q.start = rec.get("start") or ""
+    logs = jk = needs = None
+    try:                                       # only for the log: his read as a starter
+        import chalk_sheet
+        import role
+        import app
+        logs = role.load_logs(day)
+        jk = role._joiner(logs["games"])
+        needs = chalk_sheet.load_needs(app._needs_path())
+    except Exception:
+        logs = jk = needs = None
+    news = SN.see_news(players, lock_players, locked, rows, typed, logs, jk, needs)
+    by_contest = {}
+    for r in rows:
+        by_contest.setdefault(r["contest_id"], []).append(r)
+    auto = {}
+    for cid, rs in by_contest.items():
+        skip = set((skip_ids or {}).get(cid) or ())
+        by_name = {normalize_name(q.name): q for q in players}
+        news_c = dict(news)
+        for k in ("newStarters", "gainsFromOut"):
+            news_c[k] = [r for r in news.get(k, [])
+                         if getattr(by_name.get(normalize_name(r["name"])), "dk_id", None)
+                         not in skip]
+        mv, lg = SN.auto_step(rs, news_c, players, n_games,
+                              lock_players=lock_players if NEWS_SHAPE_CHECK else None)
+        auto[cid] = {"contest": rs[0].get("contest"), "entries": len(rs),
+                     "moves": mv, "log": lg}
+    return {"news": news, "auto": auto, "games": n_games,
+            "shapeCheck": bool(NEWS_SHAPE_CHECK and 5 <= n_games <= 7)}
+
+
 def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=None):
     o = options or {}
     notes = []
@@ -402,9 +500,6 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
         say("info", "Lost his start since the build (logged; outs only, so not swapped): "
             + "; ".join(f"{r['name']} (in {r['held']} of your entries)"
                         for r in role_moves["lostStarts"]))
-    if role_moves["newStarters"]:
-        say("info", "New starters since the build (logged): " + "; ".join(
-            f"{r['name']} (in {r['held']} of your entries)" for r in role_moves["newStarters"]))
     quiet = [m for m in bench_moves if not m["counted"]]
     if quiet:
         say("info", "Role change only, not news (projection and minutes moved under "
@@ -661,6 +756,7 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
     rng = random.Random(int(o.get("seed") or 0))
     results, lines = [], ["Entry ID,Contest Name,Contest ID,Entry Fee," + ",".join(slots)]
     stale, changed = [], 0
+    state = {}          # entry id -> (entry, as entered, after outs only, locks, row, line)
     for e in entries:
         lineup = [by_norm.get(normalize_name(c["name"])) for c in e["cells"]]
         rec = {"entryId": e["entry_id"], "contest": e["contest"]}
@@ -977,6 +1073,81 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
         })
         results.append(rec)
         lines.append(rec["rowAfter"])
+        state[e["entry_id"]] = (e, lineup, slotted, is_locked, rec, len(lines) - 1)
+
+    # Late news: after outs only, on the rosters that pass leaves.
+    late = None
+    if NEWS_STEP and not o.get("noLateNews") and state:
+        lock_text, lock_from = _lock_file(base_row)
+        if not lock_text:
+            say("info", f"Late news not checked: {lock_from}.")
+        else:
+            rows = [{"entry_id": eid, "contest_id": e["contest_id"] or e["contest"],
+                     "contest": e["contest"], "lineup": list(sl),
+                     "is_locked": [bool(lk) or bool(q.core and q.proj > 0)
+                                   for lk, q in zip(il, sl)]}
+                    for eid, (e, _lu, sl, il, _rec, _ix) in state.items()]
+            try:
+                slate_day = datetime.fromisoformat((base_row or {}).get("ts")).date()
+            except (TypeError, ValueError):
+                slate_day = None
+            try:
+                late = late_news(players, lock_text, dk, locked, rows, len(games),
+                                 {cid: set(c) for cid, c in pcap.items()}, slate_day)
+            except Exception as exc:               # never break a swap over this step
+                late = {"error": str(exc)}
+            if late.get("error"):
+                say("warn", f"Late news step skipped ({late['error']}); outs only ran.")
+            else:
+                late["lockFile"] = lock_from
+                by_row = {r["entry_id"]: r for r in rows}
+                took = {}
+                for cid, a in late["auto"].items():
+                    kept = []
+                    for m in a["moves"]:
+                        e, lu0, sl, il, rec, ix = state[m["entry_id"]]
+                        new = by_row[m["entry_id"]]["lineup"]
+                        bad = _check(new, lu0, il, slots)
+                        if bad:
+                            say("warn", f"Entry {m['entry_id']}: the late-news swap would "
+                                        f"break a DK rule ({bad}), so it is left alone.")
+                            continue
+                        kept.append(m)
+                        if rec.get("keep"):
+                            changed += 1
+                        cap_commit(new, sl, cid)
+                        cells = [{"name": q.name, "dk_id": q.dk_id} for q in new]
+                        rec.update({"keep": False, "hold": None,
+                                    "out": [q.name for q in lu0 if q not in new],
+                                    "in": [q.name for q in new if q not in lu0],
+                                    "newsOut": m["out"], "newsIn": m["in"],
+                                    "newsGain": m["gain"],
+                                    "rowAfter": _dk_line(e, cells),
+                                    "after": view(new, il)})
+                        lines[ix] = rec["rowAfter"]
+                        state[m["entry_id"]] = (e, lu0, list(new), il, rec, ix)
+                        for nm in m["in"]:
+                            took.setdefault(nm, {}).setdefault(a["contest"], 0)
+                            took[nm][a["contest"]] += 1
+                    a["moves"] = [{k: m[k] for k in ("entry_id", "out", "in", "gain")}
+                                  for m in kept]
+                n_entries = {a["contest"]: a["entries"] for a in late["auto"].values()}
+                fresh = [r["name"] for r in late["news"]["newStarters"]
+                         if not r["locked"] and "file" in r["source"]]
+                mates = [r["name"] for r in late["news"].get("gainsFromOut", [])
+                         if not r["locked"]]
+                if took:
+                    say("good", "Late news — " + "; ".join(
+                        f"{nm} into " + ", ".join(f"{k} of {n_entries[c]} ({c})"
+                                                  for c, k in by_c.items())
+                        for nm, by_c in took.items()))
+                idle = [nm for nm in fresh + mates if nm not in took]
+                if idle:
+                    say("info", "Late news, no lineup changed (not the better play near "
+                                "his price, or the set's limits): " + ", ".join(idle))
+                if not fresh and not mates:
+                    say("info", "Late news: this file shows no new starter whose game "
+                                "has not tipped.")
 
     for cid, caps_c in pcap.items():
         name_of = {p.dk_id: p.name for p in players}
@@ -1007,6 +1178,7 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
                     "offPool": SWAP_OFF_POOL_GAIN},
            "news": {k: v for k, v in news.items()}, "benchMoves": bench_moves,
            "roleMoves": role_moves,
+           "lateNews": late,
            "swaps": results, "csvHeader": lines[0],
            "dkCsv": "\n".join(lines) + "\n"}
     _log_swap(out, players, baseline, games, o,
@@ -1086,7 +1258,7 @@ def _log_swap(out, players, baseline, games, options, inputs=None):
                "games": games, "mode": out["mode"], "bars": out["bars"],
                "hadBaseline": bool(baseline), "news": out["news"],
                "benchMoves": out.get("benchMoves"), "noNewsSwaps": out.get("noNewsSwaps"),
-               "roleMoves": out.get("roleMoves"),
+               "roleMoves": out.get("roleMoves"), "lateNews": out.get("lateNews"),
                "neutral": out.get("neutral"), "inputs": saved,
                "projectionsMoved": moved, "risersNotActed": out.get("risersNotActed"),
                "swaps": [{k: v for k, v in s.items() if k not in ("rowBefore", "rowAfter", "before", "after")}

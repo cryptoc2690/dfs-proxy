@@ -297,7 +297,7 @@ INDEX_HTML = r"""<!doctype html>
     <button id="ls" class="alt" disabled title="needs a fresh Stokastic pull (1), your current DK entries export (3), and ideally the live standings (6)">&#8635; Late swap</button>
     <button id="lsdl" class="alt" style="display:none">&#11015; Download late-swap file</button>
     <span style="margin:0 4px;font-size:12.5px;color:var(--muted)"
-          title="Late swap replaces a player who is out (ruled out, removed, or over a typed cap) plus at most one more, by the fresh pull's projection. Nothing else moves.">Late swap: outs only</span>
+          title="Late swap replaces a player who is out (ruled out, removed, or over a typed cap) plus at most one more. Then a player the fresh file shows starting who was on the bench at the build, and the best remaining starter of a team whose starter is out, goes into every lineup where he is the better play near his price. He never takes out a $7,500+ player or one at 15%+ own.">Late swap: outs and late news</span>
     <span id="status" style="color:var(--muted);font-size:13px"></span>
   </div>
   <div class="row" id="graderow" style="display:none">
@@ -319,8 +319,10 @@ INDEX_HTML = r"""<!doctype html>
     <p>4, LineStar, is optional: it only warns if LineStar has someone at 0 whom
       Stokastic still projects. Every Stokastic file you drop is saved with its time.</p>
     <p><b>Late swap</b> (mid-slate): put a FRESH Stokastic pull in 1 and your CURRENT DK
-      entries export in 3, then press Late swap. It replaces only players who are
-      out (ruled out, removed, or over a cap you typed). Nothing else moves.</p>
+      entries export in 3, then press Late swap. It replaces players who are
+      out (ruled out, removed, or over a cap you typed). Then a new starter the
+      fresh file shows goes into any lineup where he is the better play near his
+      price. Nothing else moves.</p>
     <p>5 is for the morning after: drop DK's contest standings and grade the
       build you logged against the real field.</p>
   </div>
@@ -1269,7 +1271,7 @@ function renderSwap(r){
   let h = '';
   (r.notes||[]).forEach(n => { h += '<div class="note '+n.type+'">'+esc(n.text)+'</div>'; });
   h += '<div class="cards">' + card(r.changed+' of '+r.entries, 'lineups to change')
-     + (r.outsOnly ? card('outs only', 'policy: only players who are out get replaced')
+     + (r.outsOnly ? card('outs and late news', 'policy: players who are out get replaced; a new starter goes in where he is the better play')
         : card(r.mode === 'news' ? 'news only' : (r.noNewsSwaps ? 'free + bars' : 'bad news only'), 'policy')
           + card('+'+r.bars.news+' / '+(r.bars.noNews ? '+'+r.bars.noNews : 'off'), 'bar: news / no news'))
      + (r.winLine ? card(r.winLine, 'projected FINAL top-1% line') : '') + '</div>';

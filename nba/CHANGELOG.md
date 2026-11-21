@@ -2,6 +2,31 @@
 
 Newest first. One entry per change, in plain words: what changed and why.
 
+## Nov 21, 2026 — late news in the late swap, by itself
+
+From `NBA Late Swap And The Top 10 Report 11-21.md`, `NBA Which News, The Set At Lock And The 20s Report 11-21.md` and `NBA Is T1 Too Narrow Report 11-21.md`. The data chat's code is copied as handed over (`see_news.py`, `news_swap.py`); the late swap calls it.
+
+**What was missing.** The late swap only replaced players who were out, and it compared the fresh file with the lineups you held. A player who got a start after lock and was not in your lineups never appeared and nothing moved (Wolf and Graves on Nov 20).
+
+**What it does now, after the outs-only step, with nothing to tick or type:**
+- The fresh file is compared with the whole projections file the build read (`logs/inputs/<day>/<time>/proj.csv`).
+- A player on the bench in the build's file who is starting in the fresh one, and whose game has not tipped, counts as in the pool.
+- So does the best remaining listed starter of a team whose listed starter is out.
+- He goes into every lineup where, by the fresh file, he projects at least as high as the lowest projection within $800 above his price. No number of lineups is set.
+- He never takes out a player at $7,500 or more, or one at 15%+ projected own. A player you capped is never brought in.
+- The build's limits are kept: no two lineups share more than 5, and nobody goes over 60% of the set on 5 to 7 games (85% on other slates).
+- The 150 and the 20s the same way.
+
+**Record (BACKTEST, 29 nights, from the saved file alone):** the 150 0.96x (higher on 1 night, lower on none), the 20s 0.98x (5 / 3), no top finish lost. It acted on 12 nights; the middle night moved 5 of 150 onto one player, the biggest 25 of 150 and 9 of 20.
+
+**Not built, on purpose:** the report's pile-stopper (on 5 to 7 games the changed lineup must still pass the build's shape). The record is the same with it and it all but switches the step off there. `NEWS_SHAPE_CHECK` in `lateswap.py` turns it on.
+
+**It needs a fresh file.** A file pulled 10 to 20 minutes before a wave's tip has that wave's starters (51 of 51 saved files); earlier than 25 minutes it does not.
+
+**The page:** one line after the swap says who went into how many lineups. The news list and every move are saved in `logs/nba_swaps.jsonl` (`lateNews`). Option `noLateNews` turns the step off.
+
+**Checked against the data chat's three cases** (`Prototype/swap/checks/`): the news list and every move match entry for entry.
+
 ## Nov 20, 2026 — the chalk sheet
 
 From `NBA Chalk Sheet Handover 11-20.md`. The data chat's code is copied as handed over (`chalk_sheet.py`, `fit_needs.py`, `needs.json`); the tool calls it.

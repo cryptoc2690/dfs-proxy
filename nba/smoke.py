@@ -2101,6 +2101,100 @@ check("sheet: the break-even is read by price band and ownership band from the f
       _CS.need({"break_even_multiple": {"40|4500": 5.94}, "big_game_multiple": {"4500": 7.5}}, 5000, 47)
       == (5.94 * 5.0, 7.5 * 5.0))
 
+# ---- Nov 21: late news, by itself after outs only ------------------------------
+print("\n-- late news in the swap --")
+import see_news as _SN                        # noqa: E402
+import news_swap as _NSW                      # noqa: E402
+from dk import Player as _Pl                  # noqa: E402
+
+
+def _np(name, pos, team, opp, sal, proj, start="1930", own=10.0, starting=True, mins=30.0):
+    q = _Pl(name=name, dk_id=name, pos=pos, team=team, opponent=opp, salary=sal, proj=proj,
+            ownership=own, minutes=mins, starting=starting)
+    q.start = start
+    return q
+
+
+def _nl(tag, cheap, locked_first=3):
+    L = [_np(f"{tag}PG", "PG", "AAA", "BBB", 8000, 40, "1900"), _np(f"{tag}SG", "SG", "AAA", "BBB", 7000, 35, "1900"),
+         _np(f"{tag}SF", "SF", "BBB", "AAA", 6500, 32, "1900"), _np(f"{tag}PF", "PF", "CCC", "DDD", 6000, 30),
+         _np(f"{tag}C", "C", "CCC", "DDD", 6000, 30), _np(f"{tag}G", "PG", "DDD", "CCC", 5500, 27), cheap,
+         _np(f"{tag}U", "C", "DDD", "CCC", 5200, 25)]
+    return {"entry_id": tag, "contest_id": "c", "lineup": L, "is_locked": [i < locked_first for i in range(8)]}
+
+
+def _n20(cheap_proj=20.0, cheap_sal=4400, own=10.0):
+    return [_nl(f"L{i}", _np(f"Cheap{i}", "SF", "DDD", "CCC", cheap_sal, cheap_proj, own=own)) for i in range(20)]
+
+
+_nx = _np("New Starter", "SF", "CCC", "DDD", 4200, 24.0, starting=False, mins=18)
+_nws = {"newStarters": [{"name": "New Starter", "locked": False, "source": "file", "projNow": 24.0}], "gainsFromOut": []}
+_m6, _ = _SN.auto_step(_n20(), _nws, [_nx], 6)
+_m4, _ = _SN.auto_step(_n20(), _nws, [_nx], 4)
+check("late news: no count is set; he goes into every lineup where he is the better play, up to the build's "
+      "own top share (60% on 5-7 games, 85% elsewhere)", (len(_m6), len(_m4)) == (12, 17), f"{len(_m6)}, {len(_m4)}")
+check("late news: he must project at least as high as the player he replaces",
+      len(_SN.auto_step(_n20(cheap_proj=26.0), _nws, [_nx], 6)[0]) == 0)
+check("late news: a player at 15%+ projected own never comes out for him",
+      len(_SN.auto_step(_n20(own=15.0), _nws, [_nx], 6)[0]) == 0)
+check("late news: the player who comes out costs no more than $800 over his price",
+      len(_SN.auto_step(_n20(cheap_sal=5100), _nws, [_nx], 6)[0]) == 0)
+_r7 = [_nl(f"L{i}", _np(f"Dear{i}", "SF", "DDD", "CCC", 7500, 20.0)) for i in range(20)]
+check("late news: a $7,500+ player never comes out",
+      len(_SN.auto_step(_r7, {"newStarters": [{"name": "Big New", "locked": False, "source": "file", "projNow": 50.0}],
+                              "gainsFromOut": []}, [_np("Big New", "SF", "CCC", "DDD", 7600, 50.0)], 6)[0]) == 0)
+check("late news: a new starter whose game has tipped, or one only typed, is not used",
+      len(_SN.auto_step(_n20(), {"newStarters": [dict(_nws["newStarters"][0], locked=True)], "gainsFromOut": []}, [_nx], 6)[0]) == 0
+      and len(_SN.auto_step(_n20(), {"newStarters": [dict(_nws["newStarters"][0], source="typed")], "gainsFromOut": []}, [_nx], 6)[0]) == 0)
+_ra, _rb = _nl("A", _np("CheapA", "SF", "DDD", "CCC", 4400, 20.0)), _nl("A", _nx)
+_rb["lineup"][5] = _np("OtherG", "PG", "DDD", "CCC", 5500, 27)
+_rb["lineup"][7] = _np("OtherU", "C", "DDD", "CCC", 5000, 25)
+_rb["entry_id"] = "B"
+check("late news: a swap that would leave two lineups sharing more than 5 is refused",
+      len(_SN.auto_step([_ra, _rb], _nws, [_nx], 6)[0]) == 0)
+
+# through the swap itself: a bench player in a game that has not tipped is flagged
+# starting in the fresh file, with a projection over every cheap player near him
+LS.SWAP_OUTS_ONLY = True
+_kq = app.run_build(PROJ5, FIELD5, DK5b, {"pool": _pool5})
+_upq = list(csv.reader(io.StringIO(_kq.get("dkCsv") or "")))
+_entq = [r for r in _upq[1:] if len(r) > 2 and r[2] == "900001"]
+_midq = dk_midslate(R5, GAMES5, _entq)
+_bq = next(x for x in R5 if x["Team"] not in _g0 and x["Starting"] == "false" and 3800 <= x["Salary"] <= 4600)
+_R5n = [dict(x, Starting="true", Projection=45.0, Minutes=30) if x is _bq else x for x in R5]
+_swq = LS.run_late_swap(proj_csv(_R5n), _midq, "", {"noPullSave": True}, log_path=LS_LOG)
+_lnq = _swq.get("lateNews") or {}
+_tookq = [x for x in _swq.get("swaps", []) if _bq["Player"] in (x.get("newsIn") or [])]
+check("late news in the swap: the new starter is found against the build's whole file, whether or not he was held",
+      not _swq.get("error") and not _lnq.get("error")
+      and any(r["name"] == _bq["Player"] and "file" in r["source"] for r in (_lnq.get("news") or {}).get("newStarters", [])),
+      str(_swq.get("error") or _lnq.get("error") or [r["name"] for r in (_lnq.get("news") or {}).get("newStarters", [])]))
+_legq = True
+for x in _tookq:
+    _b = next(csv.reader(io.StringIO(x["rowBefore"])))[4:12]
+    _a = next(csv.reader(io.StringIO(x["rowAfter"])))[4:12]
+    _lk = [next(y["Team"] for y in R5 if y["Player"] == c.rsplit(" (", 1)[0]) in _g0 for c in _b]
+    _legq = _legq and all(b == a for b, a, k in zip(_b, _a, _lk) if k) and len(set(_a)) == 8 \
+        and sum(next(y["Salary"] for y in _R5n if y["Player"] == c.rsplit(" (", 1)[0]) for c in _a) <= 50000
+check("late news in the swap: he goes into lineups by himself, every changed row keeps its locked players and the cap, "
+      "and the upload carries the change",
+      len(_tookq) >= 1 and _legq and _swq["changed"] >= len(_tookq)
+      and sum(1 for ln in _swq["dkCsv"].splitlines() if _bq["Player"] in ln) >= len(_tookq)
+      and any("Late news" in n["text"] and _bq["Player"] in n["text"] for n in _swq["notes"]),
+      f"{len(_tookq)} lineups took him; changed {_swq.get('changed')}")
+check("late news in the swap: nobody goes over the build's top share of the set",
+      sum(1 for x in _swq.get("swaps", []) if any(_bq["Player"] == a["name"] for a in x["after"])) <= int(0.60 * len(_entq)))
+_swn = LS.run_late_swap(proj_csv(_R5n), _midq, "", {"noPullSave": True, "noLateNews": True}, log_path=LS_LOG)
+check("late news in the swap: switched off, the swap is outs only as before",
+      not _swn.get("error") and _swn["changed"] == 0 and not _swn.get("lateNews"), f"changed {_swn.get('changed')}")
+_swo = LS.run_late_swap(PROJ5, _midq, "", {"noPullSave": True}, log_path=LS_LOG)
+check("late news in the swap: the same file as the build moves nothing",
+      not _swo.get("error") and _swo["changed"] == 0
+      and any("no new starter" in n["text"] for n in _swo["notes"]), f"changed {_swo.get('changed')}")
+_slq = [json.loads(l) for l in open(LS.SWAP_LOG_PATH, encoding="utf-8")]
+check("late news in the swap: the news list and every move are saved in the swap log",
+      any((r.get("lateNews") or {}).get("auto") and (r["lateNews"].get("news") or {}).get("newStarters") for r in _slq))
+
 # The summary and exit MUST stay last — appending a new section after them
 # silently skips it and the suite still reports a clean pass.
 print(f"\n{'=' * 56}\n  {ok} passed, {fail} failed\n{'=' * 56}")

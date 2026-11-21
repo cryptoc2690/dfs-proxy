@@ -13,7 +13,7 @@ from the files — the DK export names its slots — and is said out loud.
 
     python3 nba/app.py --grade contest-standings-123.csv   # after the slate
 
-Late swap: lateswap.py (outs only).
+Late swap: lateswap.py (outs, then late news by itself: see_news.py, news_swap.py).
 """
 
 from __future__ import annotations
@@ -1504,8 +1504,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                 + ". A fresh pull after his lineup is out settles it.")
     waves = BR.tip_waves([p for p in players if NB.is_active(p, inj)])
     if waves:
-        say("info", "Later tip waves — pull a fresh Stokastic file and run late swap (outs "
-                    "only) by: " + "; ".join(
+        say("info", "Later tip waves — pull a fresh Stokastic file and run late swap "
+                    "from: " + "; ".join(
                         f"{BR.clock(w['pullBy'])} for the {BR.clock(w['tip'])} tip "
                         f"({', '.join(w['teams'])})" for w in waves)
             + ". Each wave's lineups are out about 30 minutes before its tip (G22).")
