@@ -2,6 +2,29 @@
 
 Newest first. One entry per change, in plain words: what changed and why.
 
+## Nov 22, 2026 — a typed minimum that is met, the pair in the 150, the mark lists
+
+From `NBA Contest Review And Late Swap Report 11-22.md` and `NBA Minimum Box For A Stud Report 11-22.md`. The data chat's code is applied as handed over (`Prototype/minbox/`, `Prototype/swap/pair150/`, `Prototype/out/r22/s3_patch/`).
+
+**1. The minimum box meets what is typed, at any price.**
+- **What was wrong.** A minimum was met by swapping the player in for someone near his price. Nobody is near a $12,000 player, so a minimum on the slate's top player did nothing: Wembanyama 49 on Nov 21 gave 34 of 150, the same as nothing typed. The swap also ignored the limit of 5 and the winners' ranges.
+- **Now** his best lineups, in the pick's own order, take the place of the last lineups in the pick order that do not hold him. They come from the set's own draw, then (5+ games) Stokastic's file cut to the pool, then 1,500 more lineups drawn around him inside the winners' ranges, then the same draw without the ranges (the build says so). Every limit holds for a lineup that comes in. A cap on the same player wins. If it still falls short the build says so in one line.
+- **A count is lineups of the 150.** Each 20 gets the same share (49 of 150 is 7 of 20), never fewer than 2, and meets it by itself. "Drummond 2" is still 2 of each. A percentage works: "Wembanyama 33%".
+- With nothing typed every lineup is the same as before (4, 6 and 9 game nights checked).
+- **Not built, on the record:** holding the slate's top-projected player at the field as a rule. BACKTEST, ten short nights: the 150 0.94x (3 / 2), all of it one night; level.
+
+**2. The pair, in contests of more than 20 entries** (`lateswap.NEWS_PAIR`, `see_news.PAIR_MIN_ENTRIES = 21`). When a late-news swap frees salary, another open spot may be lifted to the best pool projection that fits, when the two together project at least as much as the two they replace. The lineup takes whichever gains more, the single swap or the pair. Every guard and limit is unchanged. Off in a 20-max.
+- **Record:** BACKTEST 28 nights and LIVE 2: the 150's best lineup 0.74x of outs only against 0.90x without it, higher on 5 nights, lower on none. Nov 21's inputs: 83rd against 365th. It rests on four nights, gives back one top 10 in one draw of six, and on Nov 21 spent the freed salary on chalk.
+- **Turn it off** (`NEWS_PAIR = False`) if the 150 with the pair is not ahead of the single swap on the next three nights it acts, or it gives back a second top 10.
+
+**3. The swap log holds what grading a swap night needed.** Which rule made each move (new starter, teammate of a starter who is out, the pair) and who it was for; how many lineups each limit stopped for each news player; our count of every player the step touched, before and after; both files' projection, ownership and starting flag for each of them; the time of the run, each game's tip and the minutes to it; the names and saved times of the files dropped; whether the standings file was this contest's; what the press left alone; which saved build the entries match. None of it changes a roster.
+
+**4. The morning refit never takes a file saved after lock** (a clock time or "late swap" in its name) when a pre-lock file is there. Nov 20 had been fitted from its 7:52pm late swap file. The cache is keyed by file name, so Nov 20 is worked out again by itself at the next refit.
+
+**5. The lists behind each mark.** `mark_records.py` runs after the morning refit and writes `logs/mark_records.json` (a copy ships beside the code): for every mark, every earlier player-night that carried it, judged by the table fitted without that night. The sheet prints each mark's record from the list, so the count on the page is the list. On the page, hover over a record (or click it) to see the players: night, price, own, projection, what he needed, what he scored, who was out. The old printed counts came from the harness's table and did not match (the suggested cap said 7 players, 2 reached; the list is 14 players, 1 reached, none a big game).
+
+**6. "Under his line and on the bench" shows only when no regular is out on his team.** With a regular out 6 of 10 such players reached what they needed; with nobody out 1 of 9. On Nov 21 the only line that changes is Jordan Poole, who loses the mark.
+
 ## Nov 22, 2026 — one late swap run for every contest
 
 Asked for by the user after the Nov 21 review: one projections file, one DK entries export, every contest's standings, one press.

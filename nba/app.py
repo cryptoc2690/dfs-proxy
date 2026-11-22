@@ -129,7 +129,7 @@ def _player_caps(text, players, n=None):
     return caps, missing, bad, big
 
 
-_FLOOR_LINE = re.compile(r"^(.*?)[\s,:=]+(\d{1,3})$")
+_FLOOR_LINE = re.compile(r"^(.*?)[\s,:=]+(\d{1,3})\s*(%?)$")
 
 
 def _player_floors(text, players):
@@ -160,6 +160,42 @@ def _player_floors(text, players):
             missing.append(line)
             continue
         out[p.dk_id] = int(m.group(2))
+    return out, missing, bad
+
+
+def _floor_lineups(text, players, n, n_big=0):
+    """-> ({dk_id: lineups of this set}, [unmatched lines], [unreadable lines])
+
+    What a typed minimum means for a set of n lineups (Minimum Box quick ask,
+    Nov 22). "Victor Wembanyama 49" is 49 lineups of the 150. A 20-max built
+    beside a 150 (n_big) gets the same share of its 20, and never fewer than 2
+    (1 if 1 was typed), so "Andre Drummond 2" stays 2 of each 20. With no 150
+    entered a count is lineups of the 20 itself. "Victor Wembanyama 33%" is
+    that share of every set, at least 1 lineup. Each 20 meets its minimum by
+    itself."""
+    counts, missing, bad = _player_floors(text, players)
+    pct = set()
+    by_name = {normalize_name(p.name): p for p in players}
+    for raw in re.split(r"[\r\n;]+", text or ""):
+        m = _FLOOR_LINE.match(raw.strip())
+        if m and m.group(3):
+            key = normalize_name(m.group(1).strip())
+            p = by_name.get(key)
+            if p is None and key:
+                hits = [v for k, v in by_name.items() if k.startswith(key)]
+                p = hits[0] if len(hits) == 1 else None
+            if p is not None:
+                pct.add(p.dk_id)
+    out = {}
+    for k, v in counts.items():
+        if v <= 0:
+            continue
+        if k in pct:
+            out[k] = min(n, max(1, int(round(min(v, 100) / 100.0 * n))))
+        elif n_big and n < n_big:
+            out[k] = min(n, max(int(round(v * n / float(n_big))), min(v, 2)))
+        else:
+            out[k] = min(v, n)
     return out, missing, bad
 
 
@@ -1166,6 +1202,19 @@ def refit_needs(wait=False):
                 with open(path + ".tmp", "w", encoding="utf-8") as fh:
                     json.dump(T, fh, indent=1)
                 os.replace(path + ".tmp", path)
+            # The players behind each mark, remade from the same saved nights (Nov 22):
+            # the sheet prints its records from this file and the page shows the lists.
+            # In its own process: it loads its own copies of the sheet and the fit.
+            import subprocess
+            here = os.path.dirname(os.path.abspath(__file__))
+            out = os.path.join(NB.LOG_DIR, "mark_records.json")
+            done = subprocess.run([sys.executable, os.path.join(here, "mark_records.py"),
+                                   "--out", out + ".tmp"], capture_output=True, text=True,
+                                  timeout=1200, env=dict(os.environ))
+            if done.returncode == 0 and os.path.exists(out + ".tmp"):
+                os.replace(out + ".tmp", out)
+            else:
+                print(f"mark lists not remade: {(done.stderr or '').strip()[-300:]}")
         except Exception as e:                # the shipped table stays in use
             print(f"break-even table not refit: {type(e).__name__}: {e}")
         finally:
@@ -1265,7 +1314,15 @@ def sheet_preview(proj_text, linestar_text="", options=None):
         S["top"]["alerts"].append("ESPN box scores are missing for "
                                   + ", ".join(sync["missing"][:4])
                                   + (f" ({sync['error']})" if sync["error"] else "") + ".")
-    return {"sheet": S, "plan": CS.tick_plan(S, sheet_ticks(o), n_games),
+    # The players behind each mark on tonight's sheet, for the hover on its record
+    # (mark_records.py makes the lists each morning; the counts printed are these lists).
+    recs = CS.mark_records()
+    on_sheet = {m["mark"] for x in S["lines"] for m in x["marks"]}
+    keep = ("night", "games", "player", "team", "price", "projected_own", "needs", "big_game_score",
+            "projection", "gap", "scored", "played", "reached_it", "big_game", "who_was_out")
+    lists = {k: [{f: r.get(f) for f in keep} for r in v["players"]]
+             for k, v in recs.items() if k in on_sheet}
+    return {"sheet": S, "plan": CS.tick_plan(S, sheet_ticks(o), n_games), "markLists": lists,
             # for the page's flags: where the sheet's one suggested cap starts
             "flag": {"heavyOwn": CS.HEAVY_OWN, "heavyGap": CS.HEAVY_GAP, "games": n_games}}
 
@@ -1710,8 +1767,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
             if pbig:
                 say("warn", "These caps are more lineups than the set, so they cap "
                             "nothing: " + "; ".join(pbig))
-        floors, fmiss, fbad = _player_floors(floors_text, players)
-        floors = {k: min(v, n) for k, v in floors.items()}
+        floors, fmiss, fbad = _floor_lineups(floors_text, players, n,
+                                             n_big if kind == "small" else 0)
         if kind == "small":
             floors.update({k: min(v, n) for k, v in tick_small.items() if k in floors})
         if (kind == "big" or not n_big) and (fmiss or fbad):
@@ -1745,7 +1802,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
         if kind == "small" and from150:
             # G17: each 20-max takes 20 of the 150, every 7th lineup.
             if base150 is None:
-                fl150 = {k: min(v, 150) for k, v in floors.items()}
+                fl150 = _floor_lineups(floors_text, players, 150)[0]
                 c150 = {k: int(round(v * 150)) for k, v in pc.items()}
                 c150.update({k: 0 for k in weak_caps})
                 c150.update(g21_caps)
@@ -1753,6 +1810,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                                caps_=c150, floors_=fl150)
             res = {"rosters": [], "sources": [], "notes": [], "meta": dict(base150["meta"])}
             res["chunks"] = NB.twenties_from(base150["rosters"], base150["sources"], copies)
+            res["notes"] += NB.twenties_min(res["chunks"], base150["rosters"],
+                                            base150["sources"], floors, by_id)
             res["rosters"], res["sources"] = res["chunks"][0]
             res["meta"]["from150"] = {"step": NB.FROM150_STEP, "copies": len(res["chunks"]),
                                       "starts": [ci % NB.FROM150_STEP + 1
@@ -1810,7 +1869,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
             c0 = {k: int(round(v * n)) for k, v in pc0.items()}
             c0.update({k: 0 for k in weak_caps})
             c0.update(g21_caps)
-            f0 = {k: min(v, n) for k, v in _player_floors(typed_floors, players)[0].items()}
+            f0 = _floor_lineups(typed_floors, players, n)[0]
             sh = bset(caps_=c0, floors_=f0)
             nb_shadow.setdefault("sheet_noTicks", {})["big"] = names_of(sh["chunks"])
             sheet_effect = CS.tick_effect(sh["rosters"], res["rosters"])

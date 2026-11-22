@@ -848,6 +848,111 @@ def tail_fix(rosters, by_id, min_count, keep=(), caps=None):
     return moved
 
 
+# --- a typed minimum that is met (Minimum Box quick ask, Nov 22) -------------
+# A minimum is met from the pick's own lineups, at any price. The player's best
+# lineups, in the pick's own order, take the place of the last lineups in the
+# pick order that do not hold him. A lineup that comes in keeps every limit of
+# the set: not already in it, the cap on any one player, typed and ticked caps,
+# the shared-player limit, another player's minimum. The swap is no longer
+# used for a minimum (it checked none of those). MIN_DRAW: when the set's own
+# lineups run out, this many more are drawn around him, inside the winners'
+# ranges; if that still leaves him short the ranges give way for his lineups
+# only (MIN_RANGES_GIVE_WAY, the way the tool already drops them when they
+# leave a set short); only then does the build fall short, and it says so.
+MIN_DRAW = dict(n=1500, tries=30000)
+MIN_RANGES_GIVE_WAY = True
+
+
+def meet_minimum(rosters, sources, pid, want, tiers, cnt, taken, max_exp, total,
+                 caps=None, keep=None, max_shared=None):
+    """One set (`rosters` in pick order, `sources` beside it), one player.
+    tiers: [(source label, name, function -> his candidates, best first)],
+    each tried only if the one before left him short. cnt / taken: the whole
+    pick's counts and lineup keys (updated). keep: {dk_id: lineups}, the other
+    players' minimums in this set, never broken.
+    -> {"held": lineups that hold him now, "added": {tier name: lineups}}"""
+    caps = caps or {}
+    keep = keep or {}
+    sets = [frozenset(p.dk_id for p in r) for r in rosters]
+    here = collections.Counter(k for s in sets for k in s)       # this set's own counts
+    held = here[pid]
+    added = collections.OrderedDict()
+    for label, name, get in tiers:
+        if held >= want:
+            break
+        for c in get():
+            if held >= want:
+                break
+            if c["key"] in taken:
+                continue
+            # the lineup that gives way: the last in the pick order that does not
+            # hold him and that no other player's minimum needs (a player the
+            # new lineup also holds is not lost)
+            j = next((j for j in range(len(rosters) - 1, -1, -1) if pid not in sets[j]
+                      and all(here[q] - 1 + (q in c["key"]) >= keep[q]
+                              for q in sets[j] if q in keep)), None)
+            if j is None:
+                continue
+            out = sets[j]
+            if any(cnt[p.dk_id] - (p.dk_id in out) + 1 > max_exp * total for p in c["ps"]):
+                continue
+            if any(cnt[p.dk_id] - (p.dk_id in out) + 1 > caps[p.dk_id]
+                   for p in c["ps"] if p.dk_id in caps):
+                continue
+            if max_shared is not None and any(len(c["key"] & s) > max_shared
+                                              for i, s in enumerate(sets) if i != j):
+                continue
+            for p in rosters[j]:
+                cnt[p.dk_id] -= 1
+                here[p.dk_id] -= 1
+            taken.discard(out)
+            rosters[j] = list(c["ps"])
+            sources[j] = label
+            sets[j] = c["key"]
+            taken.add(c["key"])
+            for p in c["ps"]:
+                cnt[p.dk_id] += 1
+                here[p.dk_id] += 1
+            held += 1
+            added[name] = added.get(name, 0) + 1
+    return {"held": held, "added": added}
+
+
+def twenties_min(chunks, rosters, sources, mins, by_id):
+    """G17's 20s (every 7th lineup of the 150) with a typed minimum: a 20 that
+    holds the player in fewer than mins[dk_id] lineups takes the 150's next
+    lineups that hold him (in the 150's order, not in any 20 yet) in place of
+    its own last lineups without him. -> [note lines] for a 20 still short."""
+    keys = [frozenset(p.dk_id for p in r) for r in rosters]
+    used = {frozenset(p.dk_id for p in r) for ros, _ in chunks for r in ros}
+    notes = []
+    for ci, (ros, src) in enumerate(chunks):
+        for pid in sorted(mins, key=lambda k: -by_id[k].proj):
+            want = min(mins[pid], len(ros))
+            has = lambda r: any(p.dk_id == pid for p in r)
+            held = sum(1 for r in ros if has(r))
+            spare = [i for i, k in enumerate(keys) if pid in k and k not in used]
+            while held < want and spare:
+                i = spare.pop(0)
+                here = collections.Counter(p.dk_id for r in ros for p in r)
+                j = next((j for j in range(len(ros) - 1, -1, -1) if not has(ros[j])
+                          and all(here[p.dk_id] - 1 + (p.dk_id in keys[i])
+                                  >= min(mins[p.dk_id], len(ros))
+                                  for p in ros[j] if p.dk_id in mins)), None)
+                if j is None:
+                    continue
+                used.discard(frozenset(p.dk_id for p in ros[j]))
+                ros[j] = list(rosters[i])
+                src[j] = sources[i] if i < len(sources) else "vendor"
+                used.add(keys[i])
+                held += 1
+            if held < want:
+                notes.append(f"Minimum not met: {by_id[pid].name} is in {held} of 20-max set "
+                             f"{ci + 1}'s {len(ros)} (asked {want}): the 150 holds him in too "
+                             f"few lineups")
+    return notes
+
+
 # --- the build ---------------------------------------------------------------
 def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, seed=0,
               history=None, slotting=None, copies=1, file_pick=None, raises=None,
@@ -933,6 +1038,7 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
     sheet = any(p.in_pool for p in players)
     allowed = pool if sheet else active
     cands = []
+    B_used = B                # the ranges in force for this set's draw (None once dropped)
     need_own = n_own > 0 or (big and len(fc) < n_file)
     if need_own or not big:
         cands = gen_candidates(allowed, draw, B, V, rng)
@@ -940,10 +1046,12 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
             notes.append(f"only {len(cands)} pool lineups fit the winners' ranges, "
                          f"so the ranges were dropped for tonight")
             cands = gen_candidates(allowed, dict(draw, ranges=False), None, V, rng)
+            B_used = None
         if sheet and len(cands) < 100:
             notes.append(f"your pool made only {len(cands)} legal lineups, so the "
                          f"whole slate was used")
             cands = gen_candidates(active, dict(draw, ranges=False), None, V, rng)
+            B_used = None
 
     cap = ((spread or {}).get("cap") or CAP_BIG) if big else CAP_SMALL
     cnt, taken = collections.Counter(), set()
@@ -1010,6 +1118,7 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
     allr = [list(c["ps"]) for c in chosen]
     chunks = []
     cut = raised = 0
+    min_info = {}
     lean, tk_lean = [], []
     hits = takeover(players, active, normals(history, players), inj) if big else {}
     for ci in range(copies):
@@ -1017,9 +1126,56 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
         csrc = sources[ci * n:(ci + 1) * n]
         if not rosters:
             break
+        # A typed minimum (Minimum Box quick ask, Nov 22): met from the pick's own
+        # lineups before the caps' re-target and the tail fix. A cap on the same
+        # player wins, and so does the cap on any one player.
+        top = int(cap * len(rosters) + 1e-9)
+        mins = {k: min(v, len(rosters), top, caps.get(k, 10 ** 6))
+                for k, v in floors.items() if k in active_ids and v > 0}
+        for k in sorted(mins, key=lambda k: -by_id[k].proj):
+            x = by_id[k]
+
+            def drawn(ranges, salt, x=x):
+                def get():
+                    cs = gen_candidates(allowed if x in allowed else allowed + [x],
+                                        dict(draw, ranges=ranges, **MIN_DRAW),
+                                        B_used if ranges else None, V,
+                                        random.Random(7919 * (salt + 1) + 31 * ci + seed), anchor=x)
+                    if upper is not None:
+                        for c in cs:
+                            c["upper"] = c["proj"] + UPPER_Z * sum(
+                                upper.get(p.dk_id, 0.0) ** 2 for p in c["ps"]) ** 0.5
+                    return sorted(cs, key=lambda c: -c[own_key])
+                return get
+            tiers = [("mine", "draw", lambda k=k: sorted((c for c in cands if k in c["key"]),
+                                                         key=lambda c: -c[own_key]))]
+            if big and n_file:
+                tiers.append(("vendor", "file", lambda k=k: sorted(
+                    (c for c in fc if k in c["key"]), key=lambda c: -c[file_key])))
+                if fc_all is not fc:
+                    tiers.append(("vendor", "file2", lambda k=k: sorted(
+                        (c for c in fc_all if k in c["key"]), key=lambda c: -c[file_key])))
+            if B_used:
+                tiers.append(("mine", "more", drawn(True, 0)))
+            if not B_used or MIN_RANGES_GIVE_WAY:
+                tiers.append(("mine", "noranges" if B_used else "more", drawn(False, 1)))
+            got = meet_minimum(rosters, csrc, k, mins[k], tiers, cnt, taken, cap, n * copies,
+                               caps, {q: mins[q] for q in mins if q != k}, ms)
+            asked = min(floors[k], len(rosters))
+            where = "" if copies == 1 else f" (20-max set {ci + 1})"
+            if got["added"].get("noranges"):
+                notes.append(f"Minimum for {x.name}{where}: {got['added']['noranges']} of his "
+                             f"lineups were drawn outside the winners' ranges (too few fit them)")
+            if mins[k] < asked:
+                notes.append(f"Minimum for {x.name}{where} held to {mins[k]} of {len(rosters)} "
+                             f"(you asked {asked}): his cap wins")
+            if got["held"] < mins[k]:
+                notes.append(f"Minimum not met: {x.name} is in {got['held']} of {len(rosters)}"
+                             f"{where} (asked {mins[k]}): no more of his lineups fit the set's "
+                             f"limits")
+            min_info.setdefault(x.name, []).append(
+                {"asked": asked, "want": mins[k], "held": got["held"], "added": dict(got["added"])})
         targets = {}
-        for k, v in floors.items():
-            targets[k] = (min(v, len(rosters)), None)
         for k, v in caps.items():
             lo_, _ = targets.get(k, (None, None))
             targets[k] = (lo_, v)
@@ -1112,7 +1268,7 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
                              [frozenset(p.dk_id for p in r) for r in rosters])
                              for b in [frozenset(p.dk_id for p in r) for r in rosters[:i]]),
                              default=0)),
-                     "tail": tail, "seed": seed,
+                     "tail": tail, "seed": seed, "minimums": min_info,
                      "raises": {by_id[k].name: round(v, 3) for k, v in (raises or {}).items()
                                 if k in by_id},
                      "leverage": lev,

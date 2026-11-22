@@ -58,7 +58,17 @@ def shape_allow(lock_players, lines=None):
     return allow
 
 
-def auto_step(rows, news, players, n_games, lock_players=None, settings=None):
+# The pair (Nov 22 review, late swap in depth). In a contest of PAIR_MIN_ENTRIES entries or more (the mini-MAX 150, not a
+# 20-max), a new player may also come in for a dearer open player when the salary that frees lifts another open spot to
+# the best projection in the pool that fits, and the two together project at least as much as the two they replace. The
+# lineup takes whichever gains more by the fresh file, the single swap or the pair. Every guard and limit is the same
+# (never a $7,500+ or 15%+ player out, no two lineups share more than 5, the cap). No count and no share.
+# BACKTEST 28 nights + LIVE 2: the 150's best lineup 0.74x of outs only against 0.90x without the pair (higher on 5 nights
+# against 3, lower on none), picked with every night left out; the 20s get nothing from it (0.89x against 0.90x, worse out of sample).
+PAIR_MIN_ENTRIES = 21
+
+
+def auto_step(rows, news, players, n_games, lock_players=None, settings=None, upgrades=None):
     """The automatic late swap from the fresh file alone, one contest's rows at a time (the caller groups by contest).
     New starters the FILE shows (typed names are not used) and the best remaining starter of a team whose listed
     starter is out. `rows` are changed in place. -> (moves, log)."""
@@ -71,13 +81,16 @@ def auto_step(rows, news, players, n_games, lock_players=None, settings=None):
         k = normalize_name(r["name"])
         if r["locked"] or "file" not in r["source"] or k not in by:
             continue
-        who.append({"player": by[k], "proj": r["projNow"], "lost": None})
+        who.append({"player": by[k], "proj": r["projNow"], "lost": None, "rule": "new starter"})
     for r in news.get("gainsFromOut", []):
         k = normalize_name(r["name"])
         if not r["locked"] and k in by and all(k != normalize_name(w["player"].name) for w in who):
-            who.append({"player": by[k], "proj": r["projNow"], "lost": None})
+            who.append({"player": by[k], "proj": r["projNow"], "lost": None, "rule": "teammate of a starter who is out"})
     who.sort(key=lambda s: -(s["proj"] / max(1.0, s["player"].salary / 1000.0)))
-    return NS.news_step(rows, who, n_games, settings=st, allow=allow)
+    pair = bool(upgrades) and len(rows) >= PAIR_MIN_ENTRIES     # upgrades: see upgrades_for (the pool, not locked, not out, best first)
+    if pair:
+        st["pair"] = True
+    return NS.news_step(rows, who, n_games, settings=st, allow=allow, upgrades=upgrades if pair else None)
 
 
 SHADOW_VERSIONS = {

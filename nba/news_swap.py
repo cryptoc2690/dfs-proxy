@@ -132,6 +132,10 @@ def news_step(rows, starters, n_games, settings=None, start_of=None, upgrades=No
         held = sum(1 for ids in sets if x.dk_id in ids)
         need = min(target, cap_n) - held
         entry = {"name": x.name, "proj": round(xproj, 2), "held": held, "target": target, "added": 0, "why_short": ""}
+        # Log only (Nov 22 review, what the swap log was missing): which rule brought him, the cap in
+        # lineups, and how many lineups each limit stopped. No decision reads any of these.
+        stop = {"dear": 0, "own": 0, "price": 0, "bar": 0, "taken": 0, "seat": 0, "shape": 0, "shared": 0, "same": 0}
+        entry.update(rule=s.get("rule"), cap=cap_n, need=max(0, need), stopped=stop)
         log.append(entry)
         if need <= 0:
             entry["why_short"] = "already held in that many"
@@ -139,7 +143,10 @@ def news_step(rows, starters, n_games, settings=None, start_of=None, upgrades=No
         cands = []
         for ri, r in enumerate(rows):
             if x.dk_id in sets[ri] or (S["one_per_lineup"] and ri in taken):
+                if x.dk_id not in sets[ri]:
+                    stop["taken"] += 1
                 continue
+            n_before, far = len(cands), -1          # log only: the furthest check any open player reached
             lineup, lk = r["lineup"], r["is_locked"]
             left = SALARY_CAP - sum(p.salary for p in lineup)
             n_open = sum(1 for v in lk if not v)
@@ -148,15 +155,20 @@ def news_step(rows, starters, n_games, settings=None, start_of=None, upgrades=No
                 if lk[i] or y.dk_id in new_ids:
                     continue
                 if y.salary >= S["never_out"]:
+                    far = max(far, 0)
                     continue
                 if S["never_out_own"] is not None and y.ownership >= S["never_out_own"]:
+                    far = max(far, 1)
                     continue
                 if S["only_out_own"] is not None and not (S["only_out_own"][0] <= y.ownership < S["only_out_own"][1]):
+                    far = max(far, 1)
                     continue
                 if x.salary - y.salary > left or y.salary - x.salary > S["price_band"]:
+                    far = max(far, 2)
                     continue
                 gain = xproj - y.proj
                 if S["min_gain"] is not None and gain < S["min_gain"]:
+                    far = max(far, 3)
                     continue
                 is_lost = bool(lost is not None and y.dk_id == lost.dk_id)
                 if S["which"] == "lost":
@@ -204,6 +216,8 @@ def news_step(rows, starters, n_games, settings=None, start_of=None, upgrades=No
                     if S["which"] == "lost":
                         key = (1, -gain, ri)
                     cands.append((key, ri, best[1], gain))
+            if len(cands) == n_before and far >= 0:
+                stop[("dear", "own", "price", "bar")[far]] += 1
         cands.sort(key=lambda c: c[0])
         for _key, ri, repl, gain in cands:
             if entry["added"] >= need:
@@ -215,16 +229,21 @@ def news_step(rows, starters, n_games, settings=None, start_of=None, upgrades=No
                 continue
             new = _seat_many(r["lineup"], r["is_locked"], repl, start_of)
             if new is None or C.legal(new):
+                stop["seat"] += 1
                 continue
             if allow is not None and not allow(new):
+                stop["shape"] += 1
                 continue
             ids = _ids(new)
             if S["max_shared"] is not None and any(len(ids & o) > S["max_shared"] for j, o in enumerate(sets) if j != ri):
+                stop["shared"] += 1
                 continue
             if any(ids == o for j, o in enumerate(sets) if j != ri):
+                stop["same"] += 1
                 continue
             moves.append({"entry_id": r.get("entry_id"), "out": [r["lineup"][i].name for i in sorted(repl)],
                           "in": [repl[i].name for i in sorted(repl)], "gain": round(gain, 2),
+                          "for": x.name, "rule": s.get("rule"), "pair": len(repl) > 1,
                           "before": [p.name for p in r["lineup"]], "after": [p.name for p in new]})
             r["lineup"][:] = new
             sets[ri] = ids

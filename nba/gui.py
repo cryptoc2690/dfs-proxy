@@ -73,6 +73,15 @@ INDEX_HTML = r"""<!doctype html>
   .sline .under{color:#ff9f9f;font-weight:650} .sline .over{color:#6ee7a0;font-weight:650}
   .smark{margin-top:3px;color:#e8cf9a} .smark.ok{color:#a8e0c4}
   .svote,.sbox,.snote{color:var(--muted);font-size:12.5px;margin-top:2px}
+  .smark{position:relative}
+  .srec{border-bottom:1px dotted var(--muted);cursor:help}
+  .srec .slist{display:none;position:absolute;left:0;top:100%;z-index:40;width:max-content;max-width:min(860px,100%);cursor:default;
+    max-height:340px;overflow:auto;background:var(--panel);border:1px solid #7a5a1e;border-radius:9px;
+    padding:8px 10px;box-shadow:0 10px 30px rgba(0,0,0,.55);color:var(--text);font-size:12px;line-height:1.35}
+  .srec:hover .slist,.srec.open .slist{display:block}
+  .slist table{border-collapse:collapse} .slist td,.slist th{padding:1px 8px 1px 0;text-align:left;white-space:nowrap}
+  .slist th{color:var(--muted);font-weight:600} .slist .num{text-align:right}
+  .slist .hit{color:#6ee7a0} .slist .miss{color:#ff9f9f} .slist .dnp{color:var(--muted)}
   .sbadge{float:right;font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
           padding:2px 8px;border-radius:999px;border:1px solid #7a5a1e;color:#e8cf9a}
   .sbadge.cap{background:#b9892e;border-color:#b9892e;color:#1a1408}
@@ -271,9 +280,12 @@ INDEX_HTML = r"""<!doctype html>
       <label style="margin-top:14px">Minimum lineups for a player</label>
       <textarea id="floorplayers" rows="2" spellcheck="false"
                 placeholder="Andre Drummond 2"></textarea>
-      <div class="picknote">One player and a NUMBER of lineups per line. Gets a
-        game-script play into a lineup or two; he is added to the pool if he is
-        not on it. The build says if a minimum could not be met.</div>
+      <div class="picknote">One player and a NUMBER of lineups per line, at any
+        price. The number is lineups of the 150; each 20-max gets the same share
+        ("49" is 49 of 150 and 7 of each 20, never fewer than 2). Add % for a share
+        of every set ("Victor Wembanyama 33%"). He is added to the pool if he is not
+        on it. A cap on the same player wins. The build says if a minimum could not
+        be met.</div>
     </div>
     <details id="advwrap">
       <summary>Advanced — leave alone unless overriding</summary>
@@ -340,7 +352,7 @@ INDEX_HTML = r"""<!doctype html>
 const $ = s => document.querySelector(s);
 const files = {proj:null, field:null, fieldMore:[], dk:null, linestar:null, standings:null,
                standingsMore:[], standingsNames:[]};
-const fileNames = {};
+const fileNames = {}, fileTimes = {};
 let result = null, roster = [], fmt = 'showdown', fmtFromDk = false;
 // Which teams each file covers, and the slots themselves, so the projections
 // and the DK entries can be checked against each other: on Oct 21 the morning's
@@ -422,6 +434,7 @@ function slot(key, el){
         const d = await res.json();
         if(d.ok){
           files[key] = text; fileNames[key] = f.name;
+          fileTimes[key] = f.lastModified ? new Date(f.lastModified).toISOString() : null;
           slates[key] = d.teams || null;
           slotUi[key].ok = '✓ ' + f.name + ' — ' + d.msg
             + (multi && more ? ' · +' + more + ' more file' + (more > 1 ? 's' : '') : '');
@@ -603,7 +616,7 @@ function weakKeep(){
 // One line per chalk player: what he needs at his price and ownership, the
 // marks and ticks. Nothing starts ticked and nothing moves the build without a
 // tick. A tick is sent with the build and becomes a cap.
-let sheet = null, sheetFlag = null, sheetTicks = {}, leftOff = new Set(), letIn = new Set(), sheetTimer = null, sheetSeq = 0;
+let sheet = null, sheetFlag = null, markLists = {}, sheetTicks = {}, leftOff = new Set(), letIn = new Set(), sheetTimer = null, sheetSeq = 0;
 function clearSheet(){
   sheet = null; sheetTicks = {}; leftOff = new Set(); letIn = new Set();
   $('#sheetbody').innerHTML = '';
@@ -614,6 +627,33 @@ function sheetSoon(){
   clearTimeout(sheetTimer);
   sheetTimer = setTimeout(loadSheet, 700);
 }
+// The players behind a mark's record: hover over the record (or click it) to see
+// every earlier player who carried the mark, newest first, and what he did.
+function recHover(m, who){
+  const rows = (markLists[m.mark] || []).slice().reverse();
+  if(!rows.length) return esc(m.record);
+  const md = r => r.night;
+  const body = rows.map(r => '<tr' + (r.played === false ? ' class="dnp"' : '') + '><td>' + esc(md(r)) + '</td><td>'
+    + r.games + 'g</td><td>' + esc(r.player) + '</td><td>' + esc(r.team || '') + '</td><td class="num">$'
+    + Number(r.price).toLocaleString() + '</td><td class="num">' + Math.round(r.projected_own) + '%</td><td class="num">'
+    + Number(r.projection).toFixed(1) + '</td><td class="num">' + Number(r.needs).toFixed(1) + '</td><td class="num">'
+    + (r.gap >= 0 ? '+' : '') + Number(r.gap).toFixed(1) + '</td><td class="num">'
+    + (r.played === false ? 'did not play' : Number(r.scored).toFixed(1)) + '</td><td class="'
+    + (r.played === false ? 'dnp' : r.big_game ? 'hit' : r.reached_it ? 'hit' : 'miss') + '">'
+    + (r.played === false ? '' : r.big_game ? 'big game' : r.reached_it ? 'reached it' : 'missed') + '</td><td>'
+    + esc((r.who_was_out || []).join(', ')) + '</td></tr>').join('');
+  return '<span class="srec">' + esc(m.record) + '<span class="slist"><b>' + rows.length
+    + ' earlier players with this mark</b> <span class="muted">(every saved night, any price; each judged by the table '
+    + 'fitted without his night)</span><table><thead><tr><th>night</th><th></th><th>player</th><th></th>'
+    + '<th class="num">price</th><th class="num">own</th><th class="num">proj</th><th class="num">needed</th>'
+    + '<th class="num">gap</th><th class="num">scored</th><th></th><th>out on his team</th></tr></thead><tbody>'
+    + body + '</tbody></table></span></span>';
+}
+document.addEventListener('click', e => {       // a click pins the list open (or closes it)
+  const r = e.target.closest ? e.target.closest('.srec') : null;
+  document.querySelectorAll('.srec.open').forEach(x => { if(x !== r) x.classList.remove('open'); });
+  if(r && !e.target.closest('.slist')) r.classList.toggle('open');
+});
 async function loadSheet(){
   if(!files.proj || fmt === 'showdown'){ return; }
   const seq = ++sheetSeq;
@@ -628,7 +668,7 @@ async function loadSheet(){
     const d = await res.json();
     if(seq !== sheetSeq) return;            // a newer request is on its way
     if(d.error){ $('#sheetwho').textContent = '— ' + d.error; return; }
-    sheet = d.sheet; sheetFlag = d.flag || null;
+    sheet = d.sheet; sheetFlag = d.flag || null; markLists = d.markLists || {};
     // keep only the ticks that are still on the sheet
     const names = new Set(sheet.lines.map(x => x.name).concat(sheet.off_pool.rows.map(r => r.name)));
     Object.keys(sheetTicks).forEach(n => { if(!names.has(n)) delete sheetTicks[n]; });
@@ -697,7 +737,7 @@ function drawSheet(){
          + ' reached ' + x.big_game.toFixed(1) : '') + '</span></div>';
     r += x.marks.map(m => '<div class="smark' + (warn.includes(m) ? '' : ' ok') + '">'
       + (warn.includes(m) ? '⚠ ' : '✓ ') + '<b>' + esc(m.mark.charAt(0).toUpperCase() + m.mark.slice(1)) + '</b>'
-      + ' <span class="muted">— ' + esc(m.rule) + '. Record: ' + esc(m.record) + '.</span>'
+      + ' <span class="muted">— ' + esc(m.rule) + '. Record: ' + recHover(m, x.name) + '.</span>'
       + (m.suggested_tick ? ' <b>Suggested tick: ' + esc(m.suggested_tick) + '.</b>' : '') + '</div>').join('');
     if(rk === 2) r += '<div class="smark" style="color:var(--muted)">Projected ' + Math.abs(x.gap).toFixed(1)
       + ' under what he needs, but no warning mark fits him, so the record gives no reason to cap him. '
@@ -1290,6 +1330,8 @@ $('#ls').addEventListener('click', async () => {
       body: JSON.stringify({proj: files.proj, dk: files.dk, standings: files.standings,
         standingsMore: (files.standingsMore || []).filter(Boolean),
         options: {standingsNames: files.standingsNames,
+                  fileInfo: {names: {proj: fileNames.proj, dk: fileNames.dk, standings: files.standingsNames},
+                             saved: {proj: fileTimes.proj, dk: fileTimes.dk, standings: fileTimes.standings}},
                   pool: [...sel.pool].join('\n'), cores: [...sel.core].join('\n'),
                   remove: $('#remove').value,
                   capPlayers: $('#capplayers').value}})

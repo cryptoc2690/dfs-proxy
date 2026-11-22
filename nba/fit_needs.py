@@ -94,6 +94,7 @@ def _season_key(month, day):
 
 
 _DATE = re.compile(r"(\d{1,2})-(\d{1,2})(?:\D|$)")
+_LATE = re.compile(r"\d{1,2}\.\d{2}\s*(am|pm)|late swap", re.I)      # a file saved after lock: a clock time or "late swap" in its name
 
 
 def nights(folder=None, before=None):
@@ -116,7 +117,9 @@ def nights(folder=None, before=None):
                 continue
             rest = tail[m.end(2):].replace(".csv", "").strip()
             pull = int(rest) if rest.isdigit() else 0 if not rest else -1      # '' exact, '2', '1', or an odd name
-            pref = (rank, 0 if not rest else 1 if pull > 0 else 2, -pull)
+            # A file saved after lock is the last choice: its ownership is the field's after the news
+            # (Nov 20 was fitted from "11-20 7.52pm late swap" until Nov 22).
+            pref = (1 if _LATE.search(rest) else 0, rank, 0 if not rest else 1 if pull > 0 else 2, -pull, rest)
             st = os.path.join(folder, f"NBA Contest Standing Main mini-MAX {date}.csv")
             if os.path.exists(st) and (date not in found or pref < found[date][4]):
                 found[date] = (key, date, path, st, pref)

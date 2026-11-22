@@ -289,6 +289,17 @@ NEWS_STEP = True
 # but switches the step off there (Nov 13: 25 lineups to 1). Off: the user wants
 # new value on the board and takes whatever count comes out.
 NEWS_SHAPE_CHECK = False
+# The pair (Nov 22 review), for a contest of more than 20 entries
+# (see_news.PAIR_MIN_ENTRIES): the salary a late-news swap frees may lift another
+# open spot to the best pool projection that fits, when the two together project
+# at least as much as the two they replace. The lineup takes whichever gains
+# more, the single swap or the pair. BACKTEST 28 nights + LIVE 2: the 150's best
+# lineup 0.74x of outs only against 0.90x without it (higher on 5 nights, lower
+# on none); the 20s get nothing from it, so it is off there. It rests on four
+# nights. Turn it off (False = the step as it ran on Nov 21) if the 150 with the
+# pair is not ahead of the single swap on the next three nights it acts, or it
+# gives back a second top 10.
+NEWS_PAIR = True
 
 
 def _lock_file(base_row):
@@ -360,11 +371,40 @@ def late_news(players, lock_text, dk, locked, rows, n_games, skip_ids=None, day=
             news_c[k] = [r for r in news.get(k, [])
                          if getattr(by_name.get(normalize_name(r["name"])), "dk_id", None)
                          not in skip]
+        ups = None
+        if NEWS_PAIR:
+            has_pool = any(getattr(q, "in_pool", False) and not getattr(q, "core", False)
+                           for q in players)
+            pool = ({normalize_name(q.name) for q in players if getattr(q, "in_pool", False)}
+                    if has_pool else set())
+            ups = [q for q in SN.upgrades_for(players, locked, pool, news_c)
+                   if q.dk_id not in skip]
+        before = collections.Counter(q.name for r in rs for q in r["lineup"])
         mv, lg = SN.auto_step(rs, news_c, players, n_games,
-                              lock_players=lock_players if NEWS_SHAPE_CHECK else None)
+                              lock_players=lock_players if NEWS_SHAPE_CHECK else None,
+                              upgrades=ups)
+        after = collections.Counter(q.name for r in rs for q in r["lineup"])
+        moved = sorted({nm for m in mv for nm in m["out"] + m["in"]} | {g["name"] for g in lg})
         auto[cid] = {"contest": rs[0].get("contest"), "entries": len(rs),
-                     "moves": mv, "log": lg}
-    return {"news": news, "auto": auto, "games": n_games,
+                     "moves": mv, "log": lg, "pair": bool(ups) and len(rs) >= SN.PAIR_MIN_ENTRIES,
+                     # log only: our count of every player the step touched, before and after
+                     "counts": {nm: [before.get(nm, 0), after.get(nm, 0)] for nm in moved}}
+    # Log only: every player the step named or moved, as the build's file had him and
+    # as this file has him (ownership here is the real one where DK has revealed it).
+    lock_by = {normalize_name(q.name): q for q in lock_players}
+    now_by = {normalize_name(q.name): q for q in players}
+    names = {nm for a in auto.values() for nm in a["counts"]}
+    names |= {r["name"] for k in ("newStarters", "lostStarts", "outs", "gainsFromOut")
+              for r in news.get(k) or [] if isinstance(r, dict) and r.get("name")}
+    both = {}
+    for nm in sorted(names):
+        a_, b_ = lock_by.get(normalize_name(nm)), now_by.get(normalize_name(nm))
+        both[nm] = {"salary": getattr(b_ or a_, "salary", None),
+                    "build": {"proj": a_.proj, "own": a_.ownership, "starting": a_.starting,
+                              "minutes": a_.minutes} if a_ else None,
+                    "now": {"proj": b_.proj, "own": b_.ownership, "starting": b_.starting,
+                            "minutes": b_.minutes} if b_ else None}
+    return {"news": news, "auto": auto, "games": n_games, "players": both,
             "shapeCheck": bool(NEWS_SHAPE_CHECK and 5 <= n_games <= 7)}
 
 
@@ -422,6 +462,13 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
         say("warn", "Not on this slate, so NOT removed: " + ", ".join(rem_missing))
 
     baseline, base_row = news_baseline(log_path or _build_log(), games)
+    # Log only (Nov 22 review, what the swap log was missing): the clock, the files,
+    # which build these entries came from, and what the run did not cover.
+    run_info = {"standings": None}
+    try:
+        run_info.update(_run_facts(dk, players, locked, games, o, log_path or _build_log()))
+    except Exception as exc:                   # never break a swap over a log line
+        run_info["error"] = str(exc)
     try:
         import newbuild
         if not o.get("noPullSave"):
@@ -601,6 +648,8 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
     if (standings_text or "").strip():
         stand, srep = read_standings(standings_text)
         ours_in = {e["entry_id"] for e in dk["entries"]} & {r["entry_id"] for r in stand}
+        run_info["standings"] = {"entries": len(stand), "ours": len(ours_in),
+                                 "used": bool(ours_in) and not srep.get("error")}
         if srep.get("error"):
             say("warn", f"Standings file: {srep['error']}")
         elif not ours_in:
@@ -1142,7 +1191,8 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
                         for nm in m["in"]:
                             took.setdefault(nm, {}).setdefault(a["contest"], 0)
                             took[nm][a["contest"]] += 1
-                    a["moves"] = [{k: m[k] for k in ("entry_id", "out", "in", "gain")}
+                    a["moves"] = [{k: m.get(k) for k in ("entry_id", "out", "in", "gain",
+                                                         "for", "rule", "pair")}
                                   for m in kept]
                 n_entries = {a["contest"]: a["entries"] for a in late["auto"].values()}
                 fresh = [r["name"] for r in late["news"]["newStarters"]
@@ -1191,11 +1241,71 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
                     "offPool": SWAP_OFF_POOL_GAIN},
            "news": {k: v for k, v in news.items()}, "benchMoves": bench_moves,
            "roleMoves": role_moves,
-           "lateNews": late,
+           "lateNews": late, "run": run_info,
            "swaps": results, "csvHeader": lines[0],
            "dkCsv": "\n".join(lines) + "\n"}
     _log_swap(out, players, baseline, games, o,
               {"proj.csv": proj_text, "dk.csv": dk_text, "standings.csv": standings_text})
+    return out
+
+
+def _run_facts(dk, players, locked, games, o, log_path):
+    """Log only: facts about this run that grading a swap night needs and the log
+    did not hold (Nov 22 review). Nothing here is read by the swap."""
+    now = datetime.now().astimezone()
+    out = {"runAt": now.isoformat(timespec="seconds"), "files": o.get("fileInfo") or None,
+           "runOf": o.get("runOf") or None}
+    # Each game's tip (DraftKings' Eastern time) and the minutes from now to it.
+    tips = {}
+    for p in players:
+        if p.start and "@" in (p.game or ""):
+            tips.setdefault(p.game, p.start)
+    try:
+        from zoneinfo import ZoneInfo
+        east = now.astimezone(ZoneInfo("America/New_York")).replace(tzinfo=None)
+    except Exception:
+        east = None
+    info = []
+    for g in sorted(tips, key=lambda k: tips[k]):
+        mins = None
+        if east is not None:
+            try:
+                mins = round((datetime.fromisoformat(tips[g]) - east).total_seconds() / 60.0)
+            except ValueError:
+                mins = None
+        info.append({"game": g, "tipEastern": tips[g], "minutesToTip": mins,
+                     "locked": any(normalize_name(p.name) in locked
+                                   for p in players if p.game == g)})
+    out["tips"] = info
+    ahead = [t["minutesToTip"] for t in info
+             if t["minutesToTip"] is not None and not t["locked"]]
+    out["minutesToNextTip"] = min(ahead) if ahead else None
+    # Which saved build of this slate the entries match, roster for roster.
+    mine = {e["entry_id"]: frozenset(normalize_name(c["name"]) for c in e["cells"] if c)
+            for e in dk["entries"] if e.get("cells")}
+    out["entries"] = len(mine)
+    want, builds = sorted(games or []), {}
+    try:
+        with open(log_path, encoding="utf-8") as fh:
+            for line in fh:
+                if '"entry_id"' not in line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if r.get("entry_id") in mine and sorted(r.get("games") or []) == want:
+                    b = builds.setdefault(r.get("build_id") or r.get("ts"),
+                                          {"ts": r.get("ts"), "entries": 0, "same": 0})
+                    b["entries"] += 1
+                    if frozenset(normalize_name(q["name"]) for q in r.get("players") or []) \
+                            == mine[r["entry_id"]]:
+                        b["same"] += 1
+    except OSError:
+        pass
+    out["builds"] = [builds[k] for k in sorted(builds)]
+    best = max(out["builds"], key=lambda b: (b["same"], b["ts"] or ""), default=None)
+    out["fromBuild"] = best["ts"] if best and best["same"] else None
     return out
 
 
@@ -1296,6 +1406,9 @@ def run_late_swap_all(proj_text, dk_text, standings_texts=None, options=None, lo
     outs = []
     for k, cid in enumerate(keep):
         oo = dict(o, onlyContests=[cid])
+        oo["runOf"] = {"run": k + 1, "of": len(keep), "standingsFile": st_name.get(cid),
+                       "leftAlone": [{"contest": cname[c], "entries": len(by_c[c])}
+                                     for c in left + empty]}
         if k:
             oo["noPullSave"] = True
         r = run_late_swap(proj_text, dk_text, st_for.get(cid, ""), oo, log_path)
@@ -1424,6 +1537,7 @@ def _log_swap(out, players, baseline, games, options, inputs=None):
                "hadBaseline": bool(baseline), "news": out["news"],
                "benchMoves": out.get("benchMoves"), "noNewsSwaps": out.get("noNewsSwaps"),
                "roleMoves": out.get("roleMoves"), "lateNews": out.get("lateNews"),
+               "run": out.get("run"),
                "neutral": out.get("neutral"), "inputs": saved,
                "projectionsMoved": moved, "risersNotActed": out.get("risersNotActed"),
                "swaps": [{k: v for k, v in s.items() if k not in ("rowBefore", "rowAfter", "before", "after")}

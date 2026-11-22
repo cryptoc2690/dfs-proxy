@@ -2296,6 +2296,116 @@ check("swap: another contest's standings file is named and not used (Nov 21)",
       == {x["entryId"]: x.get("rowAfter") for x in
           LS.run_late_swap(proj_csv(_R5n), dk_midslate(R5, GAMES5, _e2), "", {"noPullSave": True}, log_path=_blog)["swaps"]})
 
+# ---- Nov 22: the pair, the swap log, the mark lists, the bench mark, the refit ----
+print("\n-- Nov 22: the pair in the 150, the swap log, the mark lists --")
+
+
+def _prow(n):
+    return [_nl(f"P{i}", _np(f"Cheap{i}", "SF", "DDD", "CCC", 4400, 20.0)) for i in range(n)]
+
+
+_upc = [_np("Lift C", "C", "CCC", "DDD", 6600, 33.0)]
+_p30, _ = _SN.auto_step(_prow(30), _nws, [_nx] + _upc, 4, upgrades=_upc)
+_p20, _ = _SN.auto_step(_prow(20), _nws, [_nx] + _upc, 4, upgrades=_upc)
+_p30n, _l30n = _SN.auto_step(_prow(30), _nws, [_nx] + _upc, 4)
+check("the pair: in a contest of more than 20 entries the salary a swap frees lifts another open spot",
+      _p30 and any(m["pair"] and len(m["in"]) == 2 and "Lift C" in m["in"] and "New Starter" in m["in"] for m in _p30)
+      and max(m["gain"] for m in _p30) > max(m["gain"] for m in _p30n),
+      str([(m["in"], m["gain"]) for m in _p30[:2]]))
+check("the pair: off in a 20-max, and off when no upgrades are given",
+      _p20 and all(not m["pair"] and len(m["in"]) == 1 for m in _p20)
+      and all(not m["pair"] for m in _p30n))
+_pr30 = _prow(30)
+_pm, _ = _SN.auto_step(_pr30, _nws, [_nx] + _upc, 4, upgrades=_upc)
+_pk = [frozenset(q.name for q in r["lineup"]) for r in _pr30]
+check("the pair: every changed lineup is under the cap, keeps its locked players, and no two share more than 5",
+      all(sum(q.salary for q in r["lineup"]) <= 50000 and len({q.name for q in r["lineup"]}) == 8
+          and [q.name for q in r["lineup"][:3]] == [f"{r['entry_id']}PG", f"{r['entry_id']}SG", f"{r['entry_id']}SF"]
+          for r in _pr30)
+      and max(len(a & b) for i, a in enumerate(_pk) for b in _pk[:i]) <= 5)
+check("swap log: each move says who it was for, which rule brought him and whether it was a pair; the step's log "
+      "says how many lineups each limit stopped",
+      all(m["for"] == "New Starter" and m["rule"] == "new starter" for m in _p30n)
+      and _l30n and _l30n[0]["rule"] == "new starter" and isinstance(_l30n[0]["stopped"], dict)
+      and _l30n[0]["cap"] == int(0.85 * 30) and "shared" in _l30n[0]["stopped"],
+      str(_l30n[:1]))
+_slr = [json.loads(l) for l in open(LS.SWAP_LOG_PATH, encoding="utf-8")]
+_run = next((r["run"] for r in reversed(_slr) if (r.get("run") or {}).get("standings")), {})
+_lnr = next((r["lateNews"] for r in reversed(_slr) if (r.get("lateNews") or {}).get("auto")), {})
+check("swap log: a run saves the clock (each game's tip and the minutes to it), which build the entries came from, "
+      "whether the standings were this contest's, and what the press left alone",
+      _run.get("runAt") and _run.get("tips") and all("minutesToTip" in t and "locked" in t for t in _run["tips"])
+      and "minutesToNextTip" in _run and isinstance(_run.get("builds"), list) and "fromBuild" in _run
+      and set(_run["standings"]) == {"entries", "ours", "used"}
+      and any((r.get("run") or {}).get("runOf", {}) and r["run"]["runOf"].get("leftAlone") for r in _slr),
+      str({k: _run.get(k) for k in ("minutesToNextTip", "fromBuild", "standings")}))
+check("swap log: the late-news step saves our count of every player it touched, before and after, and both files' "
+      "numbers for him",
+      _lnr and all("counts" in a and "pair" in a for a in _lnr["auto"].values())
+      and any(v[1] > v[0] for a in _lnr["auto"].values() for v in a["counts"].values())
+      and _lnr.get("players") and all(set(v) == {"salary", "build", "now"} for v in _lnr["players"].values()),
+      str(list((_lnr.get("players") or {}).items())[:1]))
+check("swap: the pair is on for the 150 and off for a 20 in the tool's own run",
+      LS.NEWS_PAIR is True and _SN.PAIR_MIN_ENTRIES == 21)
+
+_bm = lambda **k: [m["mark"] for m in _CS.player_marks(20, 6000, -1, False, False, **k)]
+check("sheet: 'under his line and on the bench' shows only when nobody is out on his team",
+      "under his line and on the bench" in _bm() and "under his line and on the bench" not in _bm(someone_out=True))
+_mrec = _CS.mark_records()
+check("sheet: every mark's record is printed from the list of players behind it",
+      _mrec and all(v["players"] and v["record"] for v in _mrec.values())
+      and "heavily owned and under what he needs" in _mrec
+      and all(str(sum(1 for r in v["players"] if r["played"])) in v["record"] for v in _mrec.values()),
+      str({k: v["record"] for k, v in list(_mrec.items())[:2]}))
+_on5 = {m["mark"] for x in _sh5.get("lines", []) for m in x["marks"]}
+_sp2 = app.sheet_preview(PROJ5, "", {"pool": _pool5})
+check("sheet: the page gets the list behind every mark on tonight's sheet, once, and the lines stay small",
+      set(_sp2.get("markLists") or {}) == (_on5 & set(_mrec))
+      and all("players" not in m for x in _sp2["sheet"]["lines"] for m in x["marks"])
+      and all(m["record"] == _mrec[m["mark"]]["record"] or "players carry this mark tonight" in m["record"]
+              for x in _sp2["sheet"]["lines"] for m in x["marks"] if m["mark"] in _mrec),
+      str(sorted(_sp2.get("markLists") or {})))
+import fit_needs as _FN                       # noqa: E402
+_fd = os.path.join(_TMP, "nights")
+os.makedirs(_fd, exist_ok=True)
+for _f in ("NBA Stokastic Data Hub Projections Main 11-20 7.52pm late swap.csv",
+           "NBA Stokastic Data Hub Projections Main 11-20 pregame.csv",
+           "NBA Contest Standing Main mini-MAX 11-20.csv",
+           "NBA Stokastic Data Hub Projections Main 11-19 6.05pm.csv",
+           "NBA Contest Standing Main mini-MAX 11-19.csv"):
+    open(os.path.join(_fd, _f), "w").close()
+_fn = {d: os.path.basename(pp) for _k, d, pp, _s in _FN.nights(_fd)}
+check("refit: a night's file is never one saved after lock when a pre-lock file is there (Nov 20), and a late "
+      "file is still used when it is the only one",
+      _fn == {"11-20": "NBA Stokastic Data Hub Projections Main 11-20 pregame.csv",
+              "11-19": "NBA Stokastic Data Hub Projections Main 11-19 6.05pm.csv"}, str(_fn))
+
+# ---- Nov 22: a typed minimum that is met at any price ---------------------------
+print("\n-- a typed minimum that is met --")
+_fp, _fn1 = S.read_projections(PROJ5)[0], R5[0]["Player"]
+_fl = lambda txt, n, nb=0: list(app._floor_lineups(txt, _fp, n, nb)[0].values())
+check("minimum: a count is lineups of the 150; a 20 beside it gets the same share, never fewer than 2; a percentage "
+      "is that share of every set",
+      [_fl(f"{_fn1} 49", 150), _fl(f"{_fn1} 49", 20, 150), _fl(f"{_fn1} 2", 20, 150), _fl(f"{_fn1} 33%", 150),
+       _fl(f"{_fn1} 33%", 20, 150), _fl(f"{_fn1} 15", 20)] == [[49], [7], [2], [50], [7], [15]],
+      str([_fl(f"{_fn1} 49", 150), _fl(f"{_fn1} 49", 20, 150), _fl(f"{_fn1} 33%", 20, 150)]))
+_top5 = max(R5, key=lambda x: x["Salary"])
+_km = _nlog()
+_rmin = _real_run_build(PROJ5, FIELD5, DK5b, {"pool": _pool5, "floorPlayers": f"{_top5['Player']} 60"})
+_rm150 = [r for r in _rows_of(_km) if r["contest_id"] == "900001"]
+_h150 = sum(1 for r in _rm150 if any(q["name"] == _top5["Player"] for q in r["players"]))
+_kn = _nlog()
+_rnone = _real_run_build(PROJ5, FIELD5, DK5b, {"pool": _pool5})
+_h0 = sum(1 for r in _rows_of(_kn) if r["contest_id"] == "900001"
+          and any(q["name"] == _top5["Player"] for q in r["players"]))
+_mk = [frozenset(q["name"] for q in r["players"]) for r in _rm150]
+check("minimum: the slate's most expensive player is held in the lineups typed, or the build says why not",
+      not _rmin.get("error") and len(_rm150) == 150
+      and (_h150 >= 60 or any("Minimum" in n["text"] and _top5["Player"] in n["text"] for n in _rmin["notes"])),
+      f"{_top5['Player']} ${_top5['Salary']}: {_h150} of 150 with 60 typed, {_h0} with nothing typed")
+check("minimum: the set stays legal: 150 different lineups, none over the cap",
+      len(set(_mk)) == 150 and all(sum(q["salary"] for q in r["players"]) <= 50000 for r in _rm150))
+
 # The summary and exit MUST stay last — appending a new section after them
 # silently skips it and the suite still reports a clean pass.
 print(f"\n{'=' * 56}\n  {ok} passed, {fail} failed\n{'=' * 56}")

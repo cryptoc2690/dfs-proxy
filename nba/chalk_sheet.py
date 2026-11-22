@@ -43,6 +43,25 @@ from dk import normalize_name
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 NEEDS_PATH = os.path.join(HERE, "needs.json")
+# The lists behind each mark (mark_records.py makes the file each morning): the morning's file in
+# logs/ when there is one, else the one shipped beside this file.
+MARK_RECORDS_PATHS = [os.environ.get("NBA_MARK_RECORDS") or "", os.path.join(HERE, "logs", "mark_records.json"),
+                      os.path.join(HERE, "mark_records.json")]
+
+
+def mark_records(path=None):
+    """{mark: {"record": the line the sheet prints, "players": every past player-night that
+    carried the mark}}. {} when there is no file: the strings in player_marks() then stay."""
+    for p in ([path] if path else MARK_RECORDS_PATHS):
+        if not p or not os.path.exists(p):
+            continue
+        try:
+            with open(p, encoding="utf-8") as fh:
+                M = json.load(fh)["marks"]
+        except (OSError, ValueError, KeyError):
+            continue
+        return {k: {"record": m["record_text"], "players": m["rows"]} for k, m in M.items() if m.get("record_text")}
+    return {}
 
 # --- who gets a line ---------------------------------------------------------
 CHALK_OWN = 15.0          # every player at 15%+ projected own (Stokastic's)
@@ -144,7 +163,7 @@ def read_notes(path):
 
 
 # --- the marks and the ticks (pure functions: the tests call them) ---------------------
-def player_marks(own, price, gap, starting, nobody_out, short_gap=SHORT_GAP, clear_gap=CLEAR_GAP):
+def player_marks(own, price, gap, starting, nobody_out, short_gap=SHORT_GAP, clear_gap=CLEAR_GAP, someone_out=False):
     """The marks on one line. own: Stokastic's projected own (%). gap: his projection less his
     break-even. starting: Stokastic's flag (True / False / None). nobody_out: no regular of his
     team is out tonight (boxread.team_outs is empty for his team)."""
@@ -159,9 +178,9 @@ def player_marks(own, price, gap, starting, nobody_out, short_gap=SHORT_GAP, cle
         marks.append({"mark": "cheap and under what he needs (found after the fact)",
                       "rule": "under $5,500, 15%+ projected own, projected half a point or more under his break-even",
                       "record": "29 players, 1 big game", "post_hoc": True, "suggested_tick": None})
-    if chalk and gap < 0 and bench:
+    if chalk and gap < 0 and bench and not someone_out:      # with a regular out, the bench player under his line reached it 6 times in 10
         marks.append({"mark": "under his line and on the bench",
-                      "rule": "projected under his break-even and Stokastic has him on the bench",
+                      "rule": "projected under his break-even, Stokastic has him on the bench, and no regular is out on his team",
                       "record": "1 big game in 22", "post_hoc": False, "suggested_tick": None})
     if chalk and cheap and nobody_out and gap <= short_gap:
         marks.append({"mark": "fails both checks" + (": under his line, cheap, nobody out" if gap < 0 else ""),
@@ -320,7 +339,8 @@ def chalk_sheet(players, active, logs, history, games, linestar, pool_names,
         bench = p.starting is False
         lsown = (ls.get(k) or {}).get("own")
 
-        marks = player_marks(p.ownership, p.salary, gap, p.starting, nobody_out, short_gap, clear_gap)
+        marks = player_marks(p.ownership, p.salary, gap, p.starting, nobody_out, short_gap, clear_gap,
+                             someone_out=bool(have_box and team_out))
         heavy = any(m["suggested_tick"] for m in marks)
         ticks = player_ticks(p.ownership, heavy) if chalk else []
 
@@ -358,6 +378,11 @@ def chalk_sheet(players, active, logs, history, games, linestar, pool_names,
     # a small slate where nearly everyone is heavily owned (Nov 5: 12 players carried the heavy
     # mark on a two-game night). Past three players the mark stops separating, so the tick stays
     # suggested only for the cheap ones, the half of the kind that cost.
+    recs = mark_records()                    # the count on the page is the list on the hover
+    for x in lines:
+        for m in x["marks"]:
+            if m["mark"] in recs:
+                m["record"] = recs[m["mark"]]["record"]      # the lists go to the page once, not on every line (app.sheet_preview)
     crowd = [x for x in lines if any(m["suggested_tick"] for m in x["marks"])]
     crowded = len(crowd) > HEAVY_CROWD
     if crowded:
