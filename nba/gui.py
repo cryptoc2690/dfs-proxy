@@ -203,7 +203,7 @@ INDEX_HTML = r"""<!doctype html>
   <div class="fslot" id="s_ls"><b>4 · LineStar <span style="opacity:.6">(optional)</span></b>
     <span class="fstate">only warns if it has a player at 0</span></div>
   <div class="fslot" id="s_st"><b>5 · DK contest standings <span style="opacity:.6">(live or final)</span></b>
-    <span class="fstate">grade last night's build — drop or click</span></div>
+    <span class="fstate">late swap: drop every contest's file at once · morning: grade — drop or click</span></div>
 </div>
 
 <details id="setwrap">
@@ -298,7 +298,7 @@ INDEX_HTML = r"""<!doctype html>
   <div class="row">
     <button id="go" disabled>Build lineups</button>
     <button id="dl" class="alt" style="display:none">&#11015; Download DK file</button>
-    <button id="ls" class="alt" disabled title="needs a fresh Stokastic pull (1), your current DK entries export (3), and ideally the live standings (6)">&#8635; Late swap</button>
+    <button id="ls" class="alt" disabled title="needs a fresh Stokastic pull (1), your current DK entries export (3), and ideally every contest's live standings (5, all at once)">&#8635; Late swap</button>
     <button id="lsdl" class="alt" style="display:none">&#11015; Download late-swap file</button>
     <span style="margin:0 4px;font-size:12.5px;color:var(--muted)"
           title="Late swap replaces a player who is out (ruled out, removed, or over a typed cap) plus at most one more. Then a player the fresh file shows starting who was on the bench at the build, and the best remaining starter of a team whose starter is out, goes into every lineup where he is the better play near his price. He never takes out a $7,500+ player or one at 15%+ own.">Late swap: outs and late news</span>
@@ -327,7 +327,9 @@ INDEX_HTML = r"""<!doctype html>
       entries export in 3, then press Late swap. It replaces players who are
       out (ruled out, removed, or over a cap you typed). Then a new starter the
       fresh file shows goes into any lineup where he is the better play near his
-      price. Nothing else moves.</p>
+      price. Nothing else moves. <b>One run does every contest:</b> drop the whole
+      DK export in 3 and every contest's live standings in 5 together. Each standings
+      file goes to its own contest, and a contest the tool did not build is left alone.</p>
     <p>5 is for the morning after: drop DK's contest standings and grade the
       build you logged against the real field.</p>
   </div>
@@ -336,7 +338,8 @@ INDEX_HTML = r"""<!doctype html>
 
 <script>
 const $ = s => document.querySelector(s);
-const files = {proj:null, field:null, fieldMore:[], dk:null, linestar:null, standings:null};
+const files = {proj:null, field:null, fieldMore:[], dk:null, linestar:null, standings:null,
+               standingsMore:[], standingsNames:[]};
 const fileNames = {};
 let result = null, roster = [], fmt = 'showdown', fmtFromDk = false;
 // Which teams each file covers, and the slots themselves, so the projections
@@ -390,12 +393,17 @@ function slot(key, el){
   };
   slotUi[key] = {mark, ok: ''};
 
+  // Slots that take several files at once: Stokastic's lineups, and the contest
+  // standings (late swap sends each standings file to its own contest).
+  const multi = key === 'field' || key === 'standings';
   let more = 0;
   const readMore = list => {
-    files.fieldMore = []; more = list.length - 1;
-    [...list].slice(1).forEach(f => {
+    const got = []; more = list.length - 1;
+    if(key === 'field') files.fieldMore = got; else files.standingsMore = got;
+    if(key === 'standings') files.standingsNames = [...list].map(f => f.name);
+    [...list].slice(1).forEach((f, i) => {
       const r = new FileReader();
-      r.onload = e => { files.fieldMore.push(e.target.result); };
+      r.onload = e => { got[i] = e.target.result; };
       r.readAsText(f);
     });
   };
@@ -416,7 +424,7 @@ function slot(key, el){
           files[key] = text; fileNames[key] = f.name;
           slates[key] = d.teams || null;
           slotUi[key].ok = '✓ ' + f.name + ' — ' + d.msg
-            + (key === 'field' && more ? ' · +' + more + ' more file' + (more > 1 ? 's' : '') : '');
+            + (multi && more ? ' · +' + more + ' more file' + (more > 1 ? 's' : '') : '');
           mark('loaded', slotUi[key].ok);
           if(d.format) setFmt(d.format, key === 'dk');
           if(key === 'standings') $('#graderow').style.display = '';
@@ -440,9 +448,9 @@ function slot(key, el){
     r.readAsText(f);
   };
 
-  if(key === 'field') input.multiple = true;
+  if(multi) input.multiple = true;
   input.addEventListener('change', () => {
-    if(key === 'field') readMore(input.files);
+    if(multi) readMore(input.files);
     read(input.files[0]); input.value='';
   });
   el.addEventListener('click', e => { if(e.target !== input) input.click(); });
@@ -455,7 +463,7 @@ function slot(key, el){
   el.addEventListener('drop', e => {
     e.preventDefault(); e.stopPropagation(); el.classList.remove('over');
     const dt = e.dataTransfer;
-    if(key === 'field' && dt.files) readMore(dt.files);
+    if(multi && dt.files) readMore(dt.files);
     read(dt.files && dt.files[0]);
   });
   mark('req', empty);
@@ -1280,7 +1288,8 @@ $('#ls').addEventListener('click', async () => {
     const res = await fetch('/api/lateswap', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({proj: files.proj, dk: files.dk, standings: files.standings,
-        options: {
+        standingsMore: (files.standingsMore || []).filter(Boolean),
+        options: {standingsNames: files.standingsNames,
                   pool: [...sel.pool].join('\n'), cores: [...sel.core].join('\n'),
                   remove: $('#remove').value,
                   capPlayers: $('#capplayers').value}})

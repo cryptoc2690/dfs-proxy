@@ -37,6 +37,7 @@ two players (Oct 29).
 from __future__ import annotations
 
 import bisect
+import collections
 import json
 import math
 import os
@@ -392,6 +393,11 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
     dk = read_dk_entries(dk_text)
     if not dk["pool"]:
         return {"error": "Couldn't read that as a DK entries export (no player pool)."}
+    only = o.get("onlyContests")              # run_late_swap_all: one contest a run
+    if only is not None:
+        only = {str(x) for x in only}
+        dk["entries"] = [e for e in dk["entries"]
+                         if str(e["contest_id"] or e["contest"]) in only]
     slots = list(dk["slots"])
     if tuple(slots) != CLASSIC_SLOTS:
         return {"error": f"Late swap is classic only; this file's slots are "
@@ -594,8 +600,15 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
     contest = None
     if (standings_text or "").strip():
         stand, srep = read_standings(standings_text)
+        ours_in = {e["entry_id"] for e in dk["entries"]} & {r["entry_id"] for r in stand}
         if srep.get("error"):
             say("warn", f"Standings file: {srep['error']}")
+        elif not ours_in:
+            # Nov 21: the mini-MAX run was given the And-One's standings and nothing
+            # said so. Another contest's rank and ownership are not this one's.
+            say("warn", "That standings file is for a DIFFERENT contest — none of these "
+                        "entries is in it — so it was not used: no live score and no rank, "
+                        "every lineup is judged neutrally.")
         else:
             contest = {"rows": stand, "rep": srep}
             for p in players:                      # real ownership where revealed
@@ -1183,6 +1196,158 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
            "dkCsv": "\n".join(lines) + "\n"}
     _log_swap(out, players, baseline, games, o,
               {"proj.csv": proj_text, "dk.csv": dk_text, "standings.csv": standings_text})
+    return out
+
+
+def _built_contests(log_path, games):
+    """Contest ids the tool's builds of this game set entered, from the build log."""
+    want, got = sorted(games or []), set()
+    try:
+        with open(log_path, encoding="utf-8") as fh:
+            for line in fh:
+                if '"contest_id"' not in line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if r.get("contest_id") and sorted(r.get("games") or []) == want:
+                    got.add(str(r["contest_id"]))
+    except OSError:
+        pass
+    return got
+
+
+def run_late_swap_all(proj_text, dk_text, standings_texts=None, options=None, log_path=None):
+    """One run for the whole DK export (the user, Nov 22: one projections file, one
+    entries file, every contest's standings, and the tool sorts them out).
+
+    - Each standings file goes to the contest whose entry ids are in it. A file
+      that matches no contest is named and not used.
+    - Only the contests the tool BUILT for this slate are swapped (the build log
+      holds their contest ids), whatever their size. A hand-built contest is left
+      out of the run and out of the upload file. With no build of this slate on
+      record, every contest is swapped, as before.
+    - Each contest is then one run of run_late_swap, exactly as when the contests
+      were broken out by hand: its own rank, its own revealed ownership, its own
+      log row. The results are joined into one table and one upload file.
+    """
+    o = dict(options or {})
+    texts = [t for t in (standings_texts or []) if (t or "").strip()]
+    names = list(o.pop("standingsNames", None) or [])
+    dk = read_dk_entries(dk_text) if (dk_text or "").strip() else None
+    if not dk or not dk.get("entries"):
+        return run_late_swap(proj_text, dk_text, texts[0] if texts else "", o, log_path)
+    order, by_c = [], {}
+    for e in dk["entries"]:
+        cid = str(e["contest_id"] or e["contest"])
+        if cid not in by_c:
+            order.append(cid)
+            by_c[cid] = []
+        by_c[cid].append(e)
+    cname = {cid: (by_c[cid][0].get("contest") or cid).strip() for cid in order}
+    notes = []
+
+    def say(kind, text):
+        notes.append({"type": kind, "text": text})
+
+    # Which contests are the tool's.
+    players, rep = read_projections(proj_text or "")
+    games = sorted({p.game for p in players if "@" in (p.game or "") and p.proj > 0})
+    built = _built_contests(log_path or _build_log(), games) if not rep.get("error") else set()
+    keep = [cid for cid in order if cid in built] or list(order)
+    left = [cid for cid in order if cid not in keep]
+    empty = [cid for cid in keep
+             if not any(e.get("cells") and all(e["cells"]) for e in by_c[cid])]
+    keep = [cid for cid in keep if cid not in empty]
+    for cid in left:
+        say("info", f"Left alone, not built by the tool: {cname[cid]} "
+                    f"({len(by_c[cid])} entr{'y' if len(by_c[cid]) == 1 else 'ies'}). "
+                    f"Not in the upload file.")
+    for cid in empty:
+        say("info", f"Left alone, no filled-in lineup: {cname[cid]}.")
+    if not keep:
+        return {"error": "No contest in that DK file has a filled-in lineup the tool built.",
+                "notes": notes}
+
+    # Which standings file is whose.
+    st_for, st_name = {}, {}
+    for i, t in enumerate(texts):
+        label = names[i] if i < len(names) and names[i] else f"standings file {i + 1}"
+        stand, srep = read_standings(t)
+        if srep.get("error"):
+            say("warn", f"{label}: {srep['error']}")
+            continue
+        ids = {r["entry_id"] for r in stand}
+        hit = {cid: len(ids & {e["entry_id"] for e in by_c[cid]}) for cid in order}
+        cid = max(order, key=lambda c: hit[c])
+        if not hit[cid]:
+            say("warn", f"{label} is not for any contest in your entries file "
+                        f"({len(stand):,} entries, none of them yours). Not used.")
+            continue
+        if cid in st_for:
+            say("warn", f"Two standings files are for {cname[cid]}; the later one is used.")
+        st_for[cid], st_name[cid] = t, label
+    for cid in keep:
+        if cid not in st_for:
+            say("warn", f"No standings file for {cname[cid]}: no live score and no rank "
+                        f"there, every lineup judged neutrally.")
+
+    outs = []
+    for k, cid in enumerate(keep):
+        oo = dict(o, onlyContests=[cid])
+        if k:
+            oo["noPullSave"] = True
+        r = run_late_swap(proj_text, dk_text, st_for.get(cid, ""), oo, log_path)
+        if r.get("error"):
+            return r
+        outs.append((cid, r))
+    if len(outs) == 1 and not notes:
+        return outs[0][1]
+
+    seen_in = collections.Counter(t for _c, r in outs for t in {n["text"] for n in r["notes"]})
+    said = set()
+    for cid, r in outs:
+        say("good" if r["changed"] else "info",
+            f"{cname[cid]}: {r['changed']} of {r['entries']} lineups would change"
+            + (f"; standings from {st_name[cid]}." if cid in st_name else "; no standings."))
+    for cid, r in outs:
+        for n in r["notes"]:
+            if "lineups would change; the rest" in n["text"]:
+                continue                               # said above, one line a contest
+            if "No contest standings, so there is no live score" in n["text"]:
+                continue                               # said above, by contest
+            if seen_in[n["text"]] == len(outs) and len(outs) > 1:
+                if n["text"] not in said:
+                    said.add(n["text"])
+                    notes.append(n)
+            else:
+                notes.append(n if cname[cid] in n["text"] or len(outs) == 1 else
+                             {"type": n["type"], "text": f"{cname[cid]}: {n['text']}"})
+    first = outs[0][1]
+    late = None
+    for _cid, r in outs:
+        ln = r.get("lateNews")
+        if not ln or ln.get("error"):
+            continue
+        if late is None:
+            late = dict(ln, auto=dict(ln.get("auto") or {}))
+        else:
+            late["auto"].update(ln.get("auto") or {})
+    lines = [first["csvHeader"]]
+    for _cid, r in outs:
+        lines += [x for x in r["dkCsv"].split("\n")[1:] if x.strip()]
+    out = dict(first)
+    out.update(notes=notes, entries=sum(r["entries"] for _c, r in outs),
+               changed=sum(r["changed"] for _c, r in outs),
+               winLine=first["winLine"] if len(outs) == 1 else None,
+               swaps=[s for _c, r in outs for s in r["swaps"]],
+               lateNews=late, dkCsv="\n".join(lines) + "\n",
+               contests=[{"id": cid, "name": cname[cid], "entries": r["entries"],
+                          "changed": r["changed"], "winLine": r.get("winLine"),
+                          "standings": st_name.get(cid)} for cid, r in outs],
+               leftAlone=[{"id": cid, "name": cname[cid], "entries": len(by_c[cid])}
+                          for cid in left])
     return out
 
 

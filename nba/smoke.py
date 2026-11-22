@@ -2239,6 +2239,63 @@ check("pool: with no pool typed the file is left as it is",
 check("sheet: the 'hold at his projected own' tick is gone",
       app.sheet_ticks({"sheetTicks": {"A": "hold at his projected own", "B": "out"}}) == {"B": "out"})
 
+# ---- Nov 22: one late swap run for the whole export ----------------------------
+print("\n-- one late swap run, every contest --")
+_ea = [r for r in _upq[1:] if len(r) > 2 and r[2] in ("900001", "900002", "900004", "900003")]
+_e1 = [r for r in _ea if r[2] == "900001"]
+_e2 = [r for r in _ea if r[2] == "900002"]
+_mida = dk_midslate(R5, GAMES5, _ea)
+_st1, _st2 = stand_midslate(_e1, fe[:300]), stand_midslate(_e2, fe[300:500])
+_stx = stand_midslate([], fe[500:560])
+_blog = os.path.join(_TMP, "builds_two_contests.jsonl")      # a slate where the tool built two of the four
+with open(LS_LOG, encoding="utf-8") as _fi, open(_blog, "w", encoding="utf-8") as _fo:
+    for _l in _fi:
+        if '"contest_id": "900004"' not in _l and '"contest_id": "900003"' not in _l:
+            _fo.write(_l)
+_gs5 = sorted({q.game for q in S.read_projections(PROJ5)[0] if "@" in (q.game or "") and q.proj > 0})
+check("one run: the build log says which contests the tool built",
+      LS._built_contests(_blog, _gs5) == {"900001", "900002"}
+      and {"900001", "900002", "900004"} <= LS._built_contests(LS_LOG, _gs5),
+      str(LS._built_contests(_blog, _gs5)))
+_nsl = sum(1 for _ in open(LS.SWAP_LOG_PATH, encoding="utf-8"))
+_oa = LS.run_late_swap_all(proj_csv(_R5n), _mida, [_stx, _st2, _st1],
+                           {"noPullSave": True, "standingsNames": ["stray.csv", "andone.csv", "mini.csv"]},
+                           log_path=_blog)
+_oc = {c["id"]: c for c in _oa.get("contests") or []}
+check("one run: only the contests the tool built are swapped; a hand-built one is left out of the run and the upload",
+      not _oa.get("error") and set(_oc) == {"900001", "900002"}
+      and {x["id"] for x in _oa.get("leftAlone") or []} == {"900004", "900003"}
+      and len(_oa["swaps"]) == len(_e1) + len(_e2) == _oa["entries"]
+      and {next(csv.reader([ln]))[2] for ln in _oa["dkCsv"].splitlines()[1:]} == {"900001", "900002"}
+      and any("Left alone, not built by the tool" in n["text"] for n in _oa["notes"]),
+      str(_oa.get("error") or (sorted(_oc), _oa.get("leftAlone"))))
+check("one run: each standings file goes to its own contest whatever order it is dropped in, and a file "
+      "for no contest of yours is named and not used",
+      _oc.get("900001", {}).get("standings") == "mini.csv" and _oc.get("900002", {}).get("standings") == "andone.csv"
+      and any("stray.csv is not for any contest" in n["text"] for n in _oa["notes"]),
+      str({k: v.get("standings") for k, v in _oc.items()}))
+_h2 = LS.run_late_swap(proj_csv(_R5n), dk_midslate(R5, GAMES5, _e2), _st2, {"noPullSave": True}, log_path=_blog)
+_a2 = {x["entryId"]: (x.get("rowAfter"), x.get("pct")) for x in _oa["swaps"] if x["contest"].startswith("NBA $8K")}
+check("one run: a contest comes out exactly as when its file and standings are run by themselves",
+      not _h2.get("error") and len(_a2) == len(_e2)
+      and {x["entryId"]: (x.get("rowAfter"), x.get("pct")) for x in _h2["swaps"]} == _a2
+      and any(v[1] is not None for v in _a2.values()),
+      f"{sum(1 for x in _h2['swaps'] if _a2.get(x['entryId']) == (x.get('rowAfter'), x.get('pct')))} of {len(_e2)}")
+check("one run: every contest is its own row in the swap log, as before",
+      sum(1 for _ in open(LS.SWAP_LOG_PATH, encoding="utf-8")) - _nsl == 3)
+_ob = LS.run_late_swap_all(proj_csv(_R5n), _mida, [], {"noPullSave": True, "noLateNews": True},
+                           log_path=os.path.join(_TMP, "no_such_log.jsonl"))
+check("one run: with no build of the slate on record every contest is swapped, as before",
+      not _ob.get("error") and len(_ob.get("contests") or []) == 4 and not _ob.get("leftAlone"),
+      str(_ob.get("error") or len(_ob.get("contests") or [])))
+_ow = LS.run_late_swap(proj_csv(_R5n), dk_midslate(R5, GAMES5, _e2), _st1, {"noPullSave": True}, log_path=_blog)
+check("swap: another contest's standings file is named and not used (Nov 21)",
+      not _ow.get("error") and any("DIFFERENT contest" in n["text"] for n in _ow["notes"])
+      and all(x.get("pct") is None for x in _ow["swaps"])
+      and {x["entryId"]: x.get("rowAfter") for x in _ow["swaps"]}
+      == {x["entryId"]: x.get("rowAfter") for x in
+          LS.run_late_swap(proj_csv(_R5n), dk_midslate(R5, GAMES5, _e2), "", {"noPullSave": True}, log_path=_blog)["swaps"]})
+
 # The summary and exit MUST stay last — appending a new section after them
 # silently skips it and the suite still reports a clean pass.
 print(f"\n{'=' * 56}\n  {ok} passed, {fail} failed\n{'=' * 56}")

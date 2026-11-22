@@ -2,6 +2,21 @@
 
 Newest first. One entry per change, in plain words: what changed and why.
 
+## Nov 22, 2026 — one late swap run for every contest
+
+Asked for by the user after the Nov 21 review: one projections file, one DK entries export, every contest's standings, one press.
+
+**What was wrong.** A late swap run takes one standings file, and the standings are a contest's own (your rank, the field's revealed ownership, the stale-file check). So each contest had to be broken out and run by itself. On Nov 21 the mini-MAX run was given the And-One's standings and nothing said so, and the two hand-built $50K Zone entries sat in the export.
+
+**Now:**
+- **Slot 5 takes every contest's standings at once.** Each file goes to the contest whose entry ids are in it, whatever order they are dropped in. A file that matches no contest of yours is named and not used.
+- **Only the contests the tool built for this slate are swapped,** whatever their size (the build log holds their contest ids). A hand-built contest is left out of the run and out of the upload file, and one line says so. With no build of the slate on record, every contest is swapped as before.
+- **Each contest is still its own run of the same swap** (`lateswap.run_late_swap_all` calls `run_late_swap` once a contest), so the rosters are what the one-by-one runs gave, and each contest is still its own row in the swap log. One table and one upload file come back.
+- **Run by itself, the swap no longer uses another contest's standings.** If none of the entries is in the standings file it says so and judges every lineup neutrally.
+- A contest with no standings file is still swapped, with a warning, as before.
+
+**Checked.** Nov 21's 6:48pm file, the all-contests export and the three live standings, dropped out of order: 190 of 190 entries the same as that night's swap log, the Zone left alone, 190 rows in the upload file. The data chat's Nov 21 check passes against the tool. It takes about as long as the three runs did (the 150 is about 45 seconds of it).
+
 ## Nov 21, 2026 — the pool respected on 5+ game slates
 
 From `NBA Pool On 5 To 7 Games Report 11-21.md`. The data chat's change to `newbuild.py` is applied as handed over (`Prototype/pool57/`).

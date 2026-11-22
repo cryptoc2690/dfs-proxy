@@ -3554,8 +3554,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400 if g.get("error") else 200, json.dumps(g))
             if self.path == "/api/lateswap":
                 import lateswap
-                r = lateswap.run_late_swap(p.get("proj") or "", p.get("dk") or "",
-                                           p.get("standings") or "", p.get("options") or {})
+                # One run for the whole export: every standings file dropped goes to
+                # its own contest, and only the contests the tool built are swapped.
+                st = [p.get("standings") or ""] + list(p.get("standingsMore") or [])
+                r = lateswap.run_late_swap_all(p.get("proj") or "", p.get("dk") or "",
+                                               st, p.get("options") or {})
                 return self._send(400 if r.get("error") else 200, json.dumps(r))
             if self.path == "/api/check":
                 d = _describe(p.get("kind") or "", p.get("text") or "")
