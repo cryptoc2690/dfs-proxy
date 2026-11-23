@@ -1259,10 +1259,32 @@ PROJ9, FIELD9, DK9 = proj_csv(R9), field_csv(R9), dk_classic(R9, GAMES9)
 _k9 = _nlog()
 nb9 = app.run_build(PROJ9, FIELD9, DK9, {"pool": "\n".join(x["Player"] for i, x in enumerate(R9) if i % 3 != 2)})
 _r9 = _rows_of(_k9)
-check("new build: 8+ games, 75 from Stokastic's lineups and 75 from the pool (old draw)",
-      not nb9.get("error") and collections.Counter(r["source"] for r in _r9) == {"vendor": 75, "mine": 75}
-      and _r9[0]["settings"]["sets"]["big"]["draw"] == "old",
-      str(nb9.get("error") or collections.Counter(r["source"] for r in _r9)))
+_s9 = (_r9[0]["settings"]["sets"]["big"] if _r9 else {})
+check("new build: 8+ games, no half and half (Nov 23): the 150 is asked of Stokastic's lineups cut to the pool, "
+      "and the old pool draw only fills what the file cannot give",
+      not nb9.get("error") and len(_r9) == 150 and _s9.get("draw") == "old"
+      and "75 from Stokastic" not in _s9.get("rule", "")
+      and _s9.get("file", 0) == min(150, max(_s9.get("file", 0), 0)) and len({frozenset(q["name"] for q in r["players"]) for r in _r9}) == 150,
+      str(nb9.get("error") or (_s9.get("rule"), collections.Counter(r["source"] for r in _r9))))
+_k9f = _nlog()
+nb9f = app.run_build(PROJ9, FIELD9, DK9, {"pool": "\n".join(x["Player"] for x in R9)})       # the whole slate as the pool
+_r9f = _rows_of(_k9f)
+_s9f = (_r9f[0]["settings"]["sets"]["big"] if _r9f else {})
+_m9 = _s9f.get("marked") or {}
+check("big slates: with a file to take from, all 150 come from Stokastic's lineups on 8+ games",
+      not nb9f.get("error") and len(_r9f) == 150 and "all 150 from Stokastic's lineups" in _s9f.get("rule", "")
+      and collections.Counter(r["source"] for r in _r9f)["vendor"] >= 140,
+      str(nb9f.get("error") or (_s9f.get("rule"), collections.Counter(r["source"] for r in _r9f))))
+check("big slates: on 8+ games the build reads the marked players and says whether the rule is on (70% of the "
+      "file's lineups must hold one) or off for the night",
+      set(_m9) >= {"file", "withOne", "share", "used", "marked"} and _m9["used"] == (_m9["withOne"] >= 0.70 * _m9["file"])
+      and any("ne marked player in every lineup" in n["text"] for n in nb9f["notes"]),
+      str({k: _m9.get(k) for k in ("file", "withOne", "share", "used")}))
+check("big slates: when the rule is on, every lineup taken from the file holds a marked player (the tail fix "
+      "may change a few after)",
+      not _m9.get("used") or _m9.get("filled") or sum(1 for r in _r9f if r["source"] == "vendor"
+                                 and not any(q["name"] in set(_m9["marked"]) for q in r["players"])) <= 8,
+      str(sum(1 for r in _r9f if r["source"] == "vendor" and not any(q["name"] in set(_m9.get("marked") or []) for q in r["players"]))))
 _cap_nm = _ex150.most_common(1)[0][0]
 _k5 = _nlog()
 nbc = app.run_build(PROJ5, FIELD5, DK5, {"pool": _pool5, "capPlayers": f"{_cap_nm} 10",
@@ -2405,6 +2427,41 @@ check("minimum: the slate's most expensive player is held in the lineups typed, 
       f"{_top5['Player']} ${_top5['Salary']}: {_h150} of 150 with 60 typed, {_h0} with nothing typed")
 check("minimum: the set stays legal: 150 different lineups, none over the cap",
       len(set(_mk)) == 150 and all(sum(q["salary"] for q in r["players"]) <= 50000 for r in _rm150))
+
+# ---- Nov 23: big slates -------------------------------------------------------
+print("\n-- Nov 23: 8+ game slates --")
+check("big slates: all from the file on 5+ games, the pool on 2 to 4, and the 20s unchanged",
+      (_NB.plan(150, 9, True)[:2], _NB.plan(150, 6, True)[:2], _NB.plan(150, 4, True)[:2], _NB.plan(150, 9, False)[:2],
+       _NB.plan(20, 9, True)[:2]) == ((0, 150), (0, 150), (150, 0), (150, 0), (20, 0)))
+
+
+def _mp(name, sal, proj, own, sd, pool=True):
+    q = _np(name, "SF", "CCC", "DDD", sal, proj, own=own)
+    q.sd, q.in_pool, q.removed = sd, pool, False
+    return q
+
+
+_bg = _NB.big_game_score(_mp("x", 6000, 30.0, 8.0, 8.0))
+_mk9 = [_mp("Near", 6000, _bg - 6.0, 8.0, 6.0), _mp("Far", 6000, _bg - 12.0, 8.0, 6.0),
+        _mp("Owned", 6000, _bg - 6.0, 12.0, 6.0), _mp("Low proj", 6000, 14.0, 8.0, 40.0),
+        _mp("Off pool", 6000, _bg - 6.0, 8.0, 6.0, pool=False)]
+check("big slates: a marked player is in the pool, under 10% own, projected 15+, with a ceiling within 3 points "
+      "of a big game for his price",
+      _NB.marked_players(_mk9) == {"Near"} and (_NB.MARK_ON, _NB.MARK_GAMES, _NB.MARK_OWN, _NB.MARK_PROJ,
+                                               _NB.MARK_GAP, _NB.MARK_MIN_SHARE) == (True, 8, 10.0, 15.0, 3.0, 0.70),
+      str(_NB.marked_players(_mk9)))
+_NB.MARK_ON = False
+_k9o = _nlog()
+nb9o = app.run_build(PROJ9, FIELD9, DK9, {"pool": "\n".join(x["Player"] for x in R9)})
+_NB.MARK_ON = True
+_r9o = _rows_of(_k9o)
+check("big slates: with the switch off the build is all-file with no marked rule; on 5 games the rule never runs",
+      not nb9o.get("error") and len(_r9o) == 150 and not _r9o[0]["settings"]["sets"]["big"].get("marked")
+      and not any("marked player" in n["text"] for n in nb9o["notes"])
+      and not ((_rm150[0]["settings"]["sets"]["big"]).get("marked")))
+check("sheet: the off-pool rows carry no hold tick and no lineup count (Nov 23)",
+      all("tick" not in r and "minimum_lineups_of_150" not in r for r in (_sh5.get("off_pool") or {}).get("rows", []))
+      and "hold at his projected own" not in (_sh5.get("ticks_offered") or {}))
 
 # The summary and exit MUST stay last — appending a new section after them
 # silently skips it and the suite still reports a clean pass.

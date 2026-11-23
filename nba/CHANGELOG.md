@@ -2,6 +2,23 @@
 
 Newest first. One entry per change, in plain words: what changed and why.
 
+## Nov 23, 2026 — 8+ game slates: all 150 from the file, one marked player in every lineup
+
+From `NBA Big Slates Tonight 11-23.md`, `NBA Big Slates One Marked Player Report 11-23.md` and `NBA Mini-MAX Tail And Big Slates Report 11-23.md`. The data chat's two changes to `newbuild.py` are applied as handed over (`Prototype/big8/`).
+
+**1. On 8+ games the 150 takes all of its lineups from Stokastic's file, cut to the pool,** as it already does on 5 to 7 games. The half drawn from the pool is gone; the old pool draw only fills what the file cannot give. The file pick stays the file's Top 10% figure, the limit of 5 and the 85% cap stay, and the top-10 shape and the 60% cap stay 5 to 7 games only. The 20s stay every 7th lineup of the 150.
+- **Record (BACKTEST, the six saved 8+ game nights):** 0.39x of half and half, higher on 5 nights, the same on 1, never lower. The lead is two nights (Oct 30: 38th against 52nd to 604th; Nov 2: 6th against 54th to 320th), both file lineups the pool half pushed out. Cash rate 28.5% against 31.1%. On the fifteen 5 to 7 game nights, putting half from the pool is 1.56x.
+
+**2. On 8+ games every lineup taken from the file holds at least one marked player** (`MARK_ON`). Marked: in the pool, projected under 10% owned, projected 15 or more points, with a ceiling (projection + 0.6745 x Std Dev) within 3 points of the big-game score for his price. No player is given a number of lineups.
+- **The guard:** when fewer than 70% of the file's lineups hold a marked player the rule is off for the night and the build says so. A narrow list shuts the night's best lineup out.
+- When too few of those lineups fit, the rest of the file fills, then the pool draw, and the build says so.
+- **Record (BACKTEST, against all-file, six nights):** the 150 the same on 5 nights and higher on 1 (Nov 4: 152nd to 34th); the 20s 0.82x with luck of position taken out (3 / 2). Marked players had a big game 23% of the time against 8% for the other low-owned pool players (LIVE). It is a judgment on six nights. It is touchy on the settings: an ownership line of 7.5% loses.
+- **Turn it off** (`MARK_ON = False`) if the 150 is lower on two of the next four 8+ game nights, or it ever costs a top-10 lineup.
+
+**3. The sheet's off-pool rows no longer carry the "hold at his projected own" tick or its lineup counts** (a leftover from before the no-counts decision; the page had already stopped showing it).
+
+**Not built, on the record:** any cut of the mini-MAX's tail (six cuts ran 1.05x to 1.81x; 5.7% of our lineups finish in the bottom tenth against 5.8% for the middle 150-entry user); the pool half built around the marked players (0.92x to 1.13x).
+
 ## Nov 22, 2026 — a typed minimum that is met, the pair in the 150, the mark lists
 
 From `NBA Contest Review And Late Swap Report 11-22.md` and `NBA Minimum Box For A Stud Report 11-22.md`. The data chat's code is applied as handed over (`Prototype/minbox/`, `Prototype/swap/pair150/`, `Prototype/out/r22/s3_patch/`).

@@ -211,11 +211,6 @@ def player_ticks(own, suggest_half=False):
             dict(tick="out", suggested=False, **cap_of(0.0))]
 
 
-def minimum_of(own):
-    """The off-pool tick: held at his projected own = this many of the 150 (and of a 20)."""
-    return max(1, int(round(own / 100.0 * SET_BIG))), max(1, int(round(own / 100.0 * SET_SMALL)))
-
-
 # --- the old rules, as votes ------------------------------------------------------
 def _box_view(side, r, outs_team):
     """Does the box score agree with a vote? side: 'against' (hold him down) or 'for'."""
@@ -438,16 +433,13 @@ def chalk_sheet(players, active, logs, history, games, linestar, pool_names,
                             "projection": round(p.proj, 1),
                             "starting": "starting" if p.starting is True else "bench" if p.starting is False else "not said",
                             "box": BR.line(p, R.get(p.dk_id)) if have_box else "box scores missing",
-                            "tick": "hold at his projected own",
-                            "minimum_lineups_of_150": minimum_of(p.ownership)[0], "minimum_lineups_of_20": minimum_of(p.ownership)[1],
                             "left_off_on_purpose_before": int(left_off.get(k, 0))})
-    tot = sum(r["minimum_lineups_of_150"] for r in off)
+    # Nov 23: the "hold at his projected own" tick and its lineup counts are off these rows.
+    # No rule puts a player into a set number of lineups (the user, Nov 21); an off-pool
+    # player is let in or left off, and the build decides how many.
     off_pool = {"rows": off, "names": len(off),
-                "all_ticked_lineup_spots": tot, "all_ticked_share_of_spots": round(tot / (SET_BIG * 8.0), 3),
-                "biggest_minimum": max((r["minimum_lineups_of_150"] for r in off), default=0),
                 "text": ("No pool typed: no off-pool list." if not has_pool else "Nobody on the off-pool list tonight." if not off else
-                         f"{len(off)} off-pool names. A tick holds a player at his projected own in the 150 (a minimum, in lineups). "
-                         f"All ticked: {tot} of the 150's 1,200 lineup spots.")}
+                         f"{len(off)} off-pool names. Not in your lineups unless you let one in; the build decides how many.")}
 
     team_notes = {t: [n for n in ns if not any(n in x["notes"] for x in lines)]
                   for t, ns in notes.items() if t in {x["team"] for x in lines}}
@@ -480,7 +472,6 @@ def chalk_sheet(players, active, logs, history, games, linestar, pool_names,
             "cap at half": "A cap at half his projected own, as a percent of the set. Suggested only on the mark 'heavily owned and under what he needs'. It applies to the 150, and on a 2 to 4 game slate to each 20 as well at the same percent (on 5+ games the 20s are taken from the 150).",
             "cap at three-quarters": "A cap at three-quarters of his projected own. Never suggested. Same sets as the cap at half.",
             "out": "A cap of zero. Never suggested.",
-            "hold at his projected own": "Off-pool list only: a minimum of round(own x 150 / 100) lineups in the 150, at least 1. On a 2 to 4 game slate the minimum box is the same NUMBER in each 20, so the sheet shows it and the tool should scale it (round(own x 20 / 100), at least 1).",
         },
     }
 
@@ -496,12 +487,6 @@ def tick_plan(sheet, ticked, games=None):
     caps, mins, small_mins, unknown, freed, added = {}, {}, {}, [], 0.0, 0
     for name, tick in (ticked or {}).items():
         k = normalize_name(name)
-        if tick == "hold at his projected own" and k in offby:
-            r = offby[k]
-            mins[r["name"]] = r["minimum_lineups_of_150"]
-            small_mins[r["name"]] = r["minimum_lineups_of_20"]
-            added += r["minimum_lineups_of_150"]
-            continue
         x = by.get(k)
         t = next((t for t in (x or {}).get("ticks", []) if t["tick"] == tick), None)
         if not t:
@@ -585,7 +570,7 @@ def sheet_text(sheet):
     for r in sheet["off_pool"]["rows"]:
         ls = "none" if r["linestar_own"] is None else f"{r['linestar_own']:.0f}%"
         L.append(f"[{r['list']}] {r['name']}  {r['team']}  ${r['price']:,}  own {r['own']:.0f}% (LineStar {ls})  projected {r['projection']:.1f}"
-                 f"   [ ] hold at his projected own = {r['minimum_lineups_of_150']} of 150   [ ] left off on purpose"
+                 f"   [ ] let him in   [ ] left off on purpose"
                  + (f" (marked {r['left_off_on_purpose_before']} time{'s' if r['left_off_on_purpose_before'] != 1 else ''} before)" if r["left_off_on_purpose_before"] else ""))
         L.append(f"      {r['box']}")
     return "\n".join(L) + "\n"

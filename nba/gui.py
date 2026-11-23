@@ -238,9 +238,10 @@ INDEX_HTML = r"""<!doctype html>
         commas, or one per line. Anything that matches nobody is named back to
         you rather than dropped quietly.</div>
       <div class="picknote">Your pool is where our own lineups come from: all
-        150 on 2–4 games, 75 on 8+ games, and the 20-max on 2–4 games. On 5–7 games
-        the 150 is Stokastic's lineups, and on 5+ games the 20-max is every 7th
-        lineup of the 150. If the pool cannot make legal lineups the
+        150 on 2–4 games, and the 20-max on 2–4 games. On 5+ games the 150 is
+        Stokastic's lineups that use only your pool's players (the pool draw only
+        fills what the file cannot give), and the 20-max is every 7th lineup of
+        the 150. If the pool cannot make legal lineups the
         whole slate is used, and the build says so.</div>
     </div>
     <div>
@@ -329,7 +330,9 @@ INDEX_HTML = r"""<!doctype html>
       is built by its size: a 150 or a 20-max.</p>
     <p><b>The 150:</b> 2–4 games, all from your pool · 5–7 games, all from Stokastic's
       lineups that use only your pool's players, cut to the top-10 shape, no player in
-      more than 60% · 8+ games, half and half. On every slate no two lineups share
+      more than 60% · 8+ games, all from Stokastic's lineups that use only your pool's
+      players, and every lineup holds at least one marked player (in your pool, under 10%
+      own, projected 15+, ceiling near a big game for his price). On every slate no two lineups share
       more than 5 players.
       <b>The 20-max:</b> on 5+ games, every 7th lineup of that 150; on 2–4 games,
       from your pool.</p>

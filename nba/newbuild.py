@@ -141,9 +141,12 @@ def plan(n, games, have_file):
             f"{games} games: no Stokastic lineups file, so all {n} from your pool"
     if games <= 7:
         return 0, n, NEW_DRAW, f"{games} games: all {n} from Stokastic's lineups"
-    own = n // 2
-    return own, n - own, OLD_DRAW, \
-        f"{games} games: {n - own} from Stokastic's lineups, {own} from your pool (old draw)"
+    # 8+ games (Mini-MAX Tail And Big Slates report, Nov 23): all from Stokastic's
+    # file too, now that it is cut to the pool. The half drawn from the pool was
+    # the weaker half: on six 8+ game nights the 150 finished higher without it
+    # on five and level on one. The pool draw (old draw) still fills whatever
+    # the file cannot give, as on 5-7 games.
+    return 0, n, OLD_DRAW, f"{games} games: all {n} from Stokastic's lineups"
 
 
 # --- injury tags (the tool's reader does not keep them) ---------------------
@@ -953,6 +956,52 @@ def twenties_min(chunks, rosters, sources, mins, by_id):
     return notes
 
 
+# --- one marked player in every lineup, 8+ games (Big Slates quick ask, Nov 23) ---
+# On a slate of MARK_GAMES or more games every lineup the 150 takes from
+# Stokastic's file holds at least one marked player: in the pool, projected
+# under MARK_OWN % owned, projected MARK_PROJ or more points, and with a ceiling
+# (projection + 0.6745 x Std Dev, which is the file's own Ceiling column) within
+# MARK_GAP points of the big-game score for his price (the chalk sheet's
+# table). There is no count for any player: the pick takes the file's lineups
+# in its own order, as before, from the ones that hold one. If those cannot
+# fill the set, the rest of the file fills it, then the pool draw.
+# MARK_MIN_SHARE: the list has to be broad. When fewer than this share of the
+# file's lineups hold a marked player the rule is off for the night and the
+# build says so (a narrow list shuts out the night's best lineups: with the
+# ownership line at 7.5% the 150 lost its best lineup on two nights of six).
+# MARK_ON = False turns the rule off.
+MARK_ON = True
+MARK_MIN_SHARE = 0.70
+MARK_GAMES = 8
+MARK_OWN = 10.0
+MARK_PROJ = 15.0
+MARK_GAP = 3.0
+CEIL_Z = 0.6745
+MARK_FILL = "file"        # what fills when too few lineups hold one: the rest of the file first
+
+
+def big_game_score(p, _t=[]):
+    """The big-game score for his price, from the chalk sheet's fitted table."""
+    if not _t:
+        import chalk_sheet as CS       # here, not at the top: chalk_sheet imports this module
+        _t.append((CS, CS.load_needs()))
+    CS, T = _t[0]
+    return CS.need(T, p.salary, p.ownership)[1]
+
+
+def marked_players(players, inj=None):
+    """dk_ids of tonight's marked players (see the note above)."""
+    out = set()
+    for p in players:
+        if not p.in_pool or p.removed or p.proj < MARK_PROJ or not p.ownership < MARK_OWN:
+            continue
+        if inj is not None and not is_active(p, inj):
+            continue
+        if p.proj + CEIL_Z * (p.sd or 0.0) >= big_game_score(p) - MARK_GAP:
+            out.add(p.dk_id)
+    return out
+
+
 # --- the build ---------------------------------------------------------------
 def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, seed=0,
               history=None, slotting=None, copies=1, file_pick=None, raises=None,
@@ -1011,6 +1060,24 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
         shape_info = {"file": len(fc), "pass": len(kept), "used": len(kept) >= shape_min,
                       "ownSum": round(eso, 1), "chalk": round(ech, 2)}
         if shape_info["used"]:
+            fc = kept
+    # One marked player in every lineup (8+ games): the file is cut to the
+    # lineups that hold one. fc_nomark is the file before the cut, for the fill.
+    mark_info = None
+    fc_nomark = fc
+    if big and MARK_ON and games >= MARK_GAMES and fc:
+        try:
+            marked = marked_players(players, inj)
+        except Exception as e:                  # never worth losing the build over
+            marked = set()
+            notes.append(f"The marked players could not be read ({type(e).__name__}: {e}), "
+                         f"so that rule is off tonight")
+        kept = [c for c in fc if any(p.dk_id in marked for p in c["ps"])]
+        mark_info = {"file": len(fc), "withOne": len(kept), "filled": 0,
+                     "share": round(len(kept) / float(len(fc)), 3),
+                     "used": len(kept) >= MARK_MIN_SHARE * len(fc),
+                     "marked": sorted(by_id[k].name for k in marked if k in by_id)}
+        if mark_info["used"]:
             fc = kept
     n_own, n_file, draw, rule = plan(n, games, bool(fc))
     if not any(p.in_pool for p in players):
@@ -1095,6 +1162,24 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
                          f"file (same limit and cap)")
             shape_info["short"] = len(half)
             half += rest
+    if mark_info and not mark_info["used"]:
+        notes.append(f"One marked player in every lineup is OFF tonight: only "
+                     f"{mark_info['withOne']} of the {mark_info['file']} file lineups "
+                     f"({mark_info['share']:.0%}) hold one of the {len(mark_info['marked'])} "
+                     f"marked players, under {MARK_MIN_SHARE:.0%}")
+    if mark_info and mark_info["used"]:
+        notes.append(f"One marked player in every lineup: {mark_info['withOne']} of the "
+                     f"{mark_info['file']} file lineups hold one of the {len(mark_info['marked'])} "
+                     f"marked players")
+        if n_file and len(half) < n_file and MARK_FILL == "file":
+            # Too few of them fit: the rest of the file fills, same limit and cap.
+            rest = select(fc_nomark, n_file - len(half), cap, n, cnt, taken, file_key, caps,
+                          max_shared=ms)
+            if rest:
+                notes.append(f"Only {len(half)} of them fit under the limit and the cap, so "
+                             f"{len(rest)} more came from the rest of Stokastic's file")
+                mark_info["filled"] = len(rest)
+                half += rest
     chosen = own + half
     sources = ["mine"] * len(own) + ["vendor"] * len(half)
     if n_file and len(half) < n_file:
@@ -1254,7 +1339,7 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
     return {"rosters": rosters, "sources": sources, "chunks": chunks, "notes": notes,
             "meta": {"rule": rule, "own": len(own), "file": len(half),
                      "filePick": file_key if n_file else None,
-                     "poolFile": pool_info,
+                     "poolFile": pool_info, "marked": mark_info,
                      "fileUsable": len(fc), "candidates": len(cands),
                      "draw": "old" if draw is OLD_DRAW else "new",
                      "blueprint": {k: v for k, v in (B or {}).items()},
