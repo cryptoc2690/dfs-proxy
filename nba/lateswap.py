@@ -299,7 +299,21 @@ NEWS_SHAPE_CHECK = False
 # nights. Turn it off (False = the step as it ran on Nov 21) if the 150 with the
 # pair is not ahead of the single swap on the next three nights it acts, or it
 # gives back a second top 10.
+# Nov 23 was its first live night and it was behind the single swap (999th against
+# 675th), so one of those three nights is used: two left.
 NEWS_PAIR = True
+# The top on a new player (Nov 24 review, the Nov 23 night): the step stops adding a
+# new starter (or the teammate of a starter who is out) once he is in NEWS_OWN_TOP
+# times his ownership in the fresh file, as a share of that contest's entries, and
+# never under one lineup. It is read from the file; it is not a count. On Nov 23
+# Allen Graves went from 9 lineups to 71 of 150 with the fresh file at 7% and
+# scored 12.5; with the top he stops at 22. BACKTEST on the 23 nights with a file
+# after lock (4 of them the live entries): the 150's best lineup is the same on
+# every night with the top at 2 times or looser (0.67x of outs only either way);
+# at 1.5 times one night is a little lower and at 1 times two are. Derik Queen on
+# Nov 21 (the fresh file at 52%) is not touched. None turns it off (the step as it
+# ran on Nov 23).
+NEWS_OWN_TOP = 2.0
 
 
 def _lock_file(base_row):
@@ -382,6 +396,7 @@ def late_news(players, lock_text, dk, locked, rows, n_games, skip_ids=None, day=
         before = collections.Counter(q.name for r in rs for q in r["lineup"])
         mv, lg = SN.auto_step(rs, news_c, players, n_games,
                               lock_players=lock_players if NEWS_SHAPE_CHECK else None,
+                              settings={"own_top": NEWS_OWN_TOP},
                               upgrades=ups)
         after = collections.Counter(q.name for r in rs for q in r["lineup"])
         moved = sorted({nm for m in mv for nm in m["out"] + m["in"]} | {g["name"] for g in lg})

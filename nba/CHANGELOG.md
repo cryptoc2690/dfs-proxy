@@ -2,6 +2,30 @@
 
 Newest first. One entry per change, in plain words: what changed and why.
 
+## Nov 24, 2026 — 8+ game slates: a wider pool and a floating line; late swap: a top on a new player
+
+From `NBA Contest Review And Big Slates Report 11-24.md` (the Nov 23 night) and `NBA Big Slates Follow-Up Report 11-24.md`. The data chat's code is applied as handed over (`Prototype/wide8/`, `Prototype/swap/r24/`).
+
+**What happened on Nov 23 (LIVE).** 8 games. Best lineups 999th of 59,453, 291st of 14,268 and 1,288th of 7,431; no lineup in the top 1%. Fourteen players had a big game, eleven of them projected under 5% owned, and ten of those eleven were not in the pool. Only 256 of Stokastic's 4,789 lineups passed the pool cut. The marked rule was off: 3 pool players met the mark. The late swap took Allen Graves from 9 lineups to 71 of 150 and he scored 12.5.
+
+**1. On 8+ games, low-owned players near what they need are let in** (`WIDE_ON`). Off the pool, projected 5% owned or less, with a projection within 2 points of what he needs for his price (the chalk sheet's break-even). "Let in" is what the tick does: Stokastic's lineups that hold him count as pool lineups. No count is set for anyone; the pick decides. They are not marked players, the pool draw does not use them, and they stay off-pool to the late swap.
+- **Record (BACKTEST, the seven saved 8+ game nights, against the tool before it):** a random 20 of the 150 0.73x, higher on 6 nights and lower on 1; it beat 40 of 40 random lists the same size. The 150 0.81x (2 / 0, five the same), and 0.98x without Nov 23. Top 1% lineups 15 to 22. About one let-in player in nine has a big game.
+- **Nov 23 with it:** 16 players let in, 256 pool-only lineups become 655, Jalen Slawson in 10 lineups and Kenrich Williams in 12. That night's best lineup reads anywhere from 172nd to 1,395th on settings half a point apart, so the case is the 20s on seven nights, not that night.
+- It also puts the most expensive pool player back near his share of the file (Gilgeous-Alexander on Nov 23: 14 of 150 to 19). The pool cut had pushed the top-priced player down on 7 of 7 big nights (LIVE).
+
+**2. On 8+ games the marked rule's ceiling line floats** (`MARK_FLOAT`). It starts at 3 points and widens half a point at a time until 70% of the file's lineups hold a marked player, so the rule runs every big night. If the list is still too narrow at 30 points the rule is off for the night and the build says so.
+- **Why:** a big game is a fixed multiple of price and prices have tightened (the middle $6,000+ player was projected 5.12 points per $1,000 on Oct 21 and 4.63 on Nov 23), so a fixed 3-point line marked 16 to 23 players on the six tested nights and 3 on Nov 23.
+- **Record (BACKTEST):** nothing changes on the six tested nights. On Nov 23 the line stops at 6.5 points with 14 marked players. A wider line gains nothing by itself; it goes in because the wider pool without the marked rule loses its best lineup on Oct 30 (38th to 604th) and Nov 2 (6th to 82nd).
+- **Turn both off** (`WIDE_ON = False`, `MARK_FLOAT = False`) if, on the next four 8+ game nights rebuilt with them on and off, a random 20 of the 150 is lower on three or the 150's best lineup is lower on two.
+
+**3. Late swap: a new player stops at 2 times his ownership in the fresh file** (`lateswap.NEWS_OWN_TOP`), as a share of that contest's entries and never under one lineup. Lineups that already hold him count. It is read from the file dropped for the swap; no count is typed.
+- **Record (BACKTEST, the 23 nights with a file after lock):** the 150's best lineup is the same on every night (0.67x of outs only either way). It is a guard, not a gain. Nov 23 with it: Graves in 22 of 150, not 71; 14 lineups in the bottom tenth, not 22; the set 254.9 points a lineup against 250.5. Nov 21 is not touched (Derik Queen was 52% in the fresh file). The "2" rests on one night (Oct 30).
+- The swap log's line for each new player gains his top and his ownership in the fresh file.
+
+**The pair stays on.** Nov 23 was its first live night and it was behind the single swap (999th against 675th). The points were lost on the new starters (860 over the 71 pairs), not on what the pair bought (235 more than what it sold). One night of its turn-off rule is used: off if it is not ahead on the next two nights it acts, or it gives back a second top 10.
+
+**Not built, on the record:** the pair never selling a low-owned or a marked player (0.77x and 0.73x against 0.67x); a rule that keeps the file's balance on 8+ games (23 versions, none higher in both sets); off-pool studs at 5% or less let in (they get 25 lineups of 1,050; held at their file share 1.11x); box-score minutes over the file's (the file was nearer 119 times to 48); the swap stopping at the build's cap (the same best lineup on all 23 nights). **Cannot be told:** on 5 to 7 games, no chalk player over 1.5 times his share of the file (0.74x, all of it two October nights); a cap of 70% to 80% on 8+ games; a cap on chalk after a 38+ minute night.
+
 ## Nov 23, 2026 — 8+ game slates: all 150 from the file, one marked player in every lineup
 
 From `NBA Big Slates Tonight 11-23.md`, `NBA Big Slates One Marked Player Report 11-23.md` and `NBA Mini-MAX Tail And Big Slates Report 11-23.md`. The data chat's two changes to `newbuild.py` are applied as handed over (`Prototype/big8/`).

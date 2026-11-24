@@ -978,6 +978,50 @@ MARK_PROJ = 15.0
 MARK_GAP = 3.0
 CEIL_Z = 0.6745
 MARK_FILL = "file"        # what fills when too few lineups hold one: the rest of the file first
+# The ceiling line floats (Contest Review And Big Slates report, Nov 24). Prices
+# have tightened since October, so fewer low-owned players have a ceiling within
+# MARK_GAP points of a big game: 16 to 23 pool players were marked on the six
+# nights the rule was tested on and 3 on Nov 23, where the guard turned it off.
+# With MARK_FLOAT the line starts at MARK_GAP and widens MARK_STEP points at a
+# time until MARK_MIN_SHARE of the file's lineups hold a marked player, so the
+# rule runs every 8+ game night. On a night the line at MARK_GAP is already
+# broad enough nothing changes. If the list is still too narrow at MARK_GAP_MAX
+# the rule is off for the night, as before. MARK_FLOAT = False is the fixed line.
+MARK_FLOAT = True
+MARK_STEP = 0.5
+MARK_GAP_MAX = 30.0
+
+# --- a wider pool on 8+ games (Contest Review And Big Slates report, Nov 24) ---
+# On a slate of WIDE_GAMES or more games, off-pool players projected at WIDE_OWN %
+# owned or less whose projection is within WIDE_NEAR points of what they need
+# for their price (the chalk sheet's break-even) are let in for the 150:
+# Stokastic's lineups that hold them count as pool lineups, exactly as the "let
+# him in" tick does. No count is set for anyone: a lineup is kept or not and the
+# pick decides the rest. They are not marked players and the pool draw does not
+# use them. WIDE_ON = False turns it off.
+WIDE_ON = True
+WIDE_GAMES = 8
+WIDE_OWN = 5.0
+WIDE_NEAR = 2.0
+
+
+def wide_pool(players, inj=None, _t=[]):
+    """dk_ids of the off-pool players let in on a big slate (see the note above)."""
+    if not _t:
+        import chalk_sheet as CS       # here, not at the top: chalk_sheet imports this module
+        _t.append((CS, CS.load_needs()))
+    CS, T = _t[0]
+    out = set()
+    for p in players:
+        if p.in_pool or p.removed or p.salary <= 0 or p.proj <= 0:
+            continue
+        if not (p.ownership or 0.0) <= WIDE_OWN:
+            continue
+        if inj is not None and not is_active(p, inj):
+            continue
+        if p.proj >= CS.need(T, p.salary, p.ownership or 0.0)[0] - WIDE_NEAR:
+            out.add(p.dk_id)
+    return out
 
 
 def big_game_score(p, _t=[]):
@@ -989,15 +1033,17 @@ def big_game_score(p, _t=[]):
     return CS.need(T, p.salary, p.ownership)[1]
 
 
-def marked_players(players, inj=None):
-    """dk_ids of tonight's marked players (see the note above)."""
+def marked_players(players, inj=None, gap=None):
+    """dk_ids of tonight's marked players (see the note above). gap: the ceiling
+    line in points (MARK_GAP when not given)."""
+    gap = MARK_GAP if gap is None else gap
     out = set()
     for p in players:
         if not p.in_pool or p.removed or p.proj < MARK_PROJ or not p.ownership < MARK_OWN:
             continue
         if inj is not None and not is_active(p, inj):
             continue
-        if p.proj + CEIL_Z * (p.sd or 0.0) >= big_game_score(p) - MARK_GAP:
+        if p.proj + CEIL_Z * (p.sd or 0.0) >= big_game_score(p) - gap:
             out.add(p.dk_id)
     return out
 
@@ -1046,9 +1092,20 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
     spread = spread if big else None
     ms = spread["limit"] if spread else None
     pool_info = None
+    wide_info = None
     if spread and spread.get("pool") and fc and any(p.in_pool for p in players):
         n_all = len(fc)
-        fc = pool_only(fc, players, floors, let_in)
+        wide = set()
+        if WIDE_ON and games >= WIDE_GAMES:
+            try:
+                wide = wide_pool(players, inj) & active_ids
+            except Exception as e:              # never worth losing the build over
+                notes.append(f"The wider pool could not be read ({type(e).__name__}: {e}), "
+                             f"so it is off tonight")
+            n_typed = len(pool_only(fc, players, floors, let_in))
+            wide_info = {"added": sorted(by_id[k].name for k in wide if k in by_id),
+                         "poolOnlyBefore": n_typed}
+        fc = pool_only(fc, players, floors, set(let_in or ()) | wide)
         pool_info = {"file": n_all, "poolOnly": len(fc),
                      "letIn": sorted(by_id[k].name for k in (let_in or ()) if k in by_id)}
     shape_info = None
@@ -1066,16 +1123,23 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
     mark_info = None
     fc_nomark = fc
     if big and MARK_ON and games >= MARK_GAMES and fc:
+        gap = MARK_GAP
+        marked, kept = set(), []
         try:
-            marked = marked_players(players, inj)
+            marked = marked_players(players, inj, gap)
+            kept = [c for c in fc if any(p.dk_id in marked for p in c["ps"])]
+            while MARK_FLOAT and len(kept) < MARK_MIN_SHARE * len(fc) and gap < MARK_GAP_MAX:
+                gap += MARK_STEP                # the line floats until the list is broad enough
+                marked = marked_players(players, inj, gap)
+                kept = [c for c in fc if any(p.dk_id in marked for p in c["ps"])]
         except Exception as e:                  # never worth losing the build over
-            marked = set()
+            marked, kept = set(), []
             notes.append(f"The marked players could not be read ({type(e).__name__}: {e}), "
                          f"so that rule is off tonight")
-        kept = [c for c in fc if any(p.dk_id in marked for p in c["ps"])]
         mark_info = {"file": len(fc), "withOne": len(kept), "filled": 0,
                      "share": round(len(kept) / float(len(fc)), 3),
                      "used": len(kept) >= MARK_MIN_SHARE * len(fc),
+                     "gap": gap, "floated": gap > MARK_GAP,
                      "marked": sorted(by_id[k].name for k in marked if k in by_id)}
         if mark_info["used"]:
             fc = kept
@@ -1087,6 +1151,12 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
         notes.append(f"Pool respected: {pool_info['poolOnly']} of Stokastic's {pool_info['file']} "
                      f"lineups are made only of players in your pool"
                      + (f" (let in: {', '.join(pool_info['letIn'])})" if pool_info["letIn"] else ""))
+    if wide_info and wide_info["added"]:
+        notes.append(f"Wider pool ({games} games): {len(wide_info['added'])} off-pool players at "
+                     f"{WIDE_OWN:g}% owned or less with a projection within {WIDE_NEAR:g} of what "
+                     f"they need were let in, with no count for any of them "
+                     f"({wide_info['poolOnlyBefore']} lineups before, {pool_info['poolOnly']} now): "
+                     + ", ".join(wide_info["added"]))
     if shape_info:
         notes.append(f"Top-10 shape: {shape_info['pass']} of Stokastic's {shape_info['file']} "
                      f"lineups pass" + ("" if shape_info["used"] else
@@ -1166,11 +1236,14 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
         notes.append(f"One marked player in every lineup is OFF tonight: only "
                      f"{mark_info['withOne']} of the {mark_info['file']} file lineups "
                      f"({mark_info['share']:.0%}) hold one of the {len(mark_info['marked'])} "
-                     f"marked players, under {MARK_MIN_SHARE:.0%}")
+                     f"marked players, under {MARK_MIN_SHARE:.0%}"
+                     + (", even with the ceiling line at its widest" if mark_info["floated"] else ""))
     if mark_info and mark_info["used"]:
         notes.append(f"One marked player in every lineup: {mark_info['withOne']} of the "
                      f"{mark_info['file']} file lineups hold one of the {len(mark_info['marked'])} "
-                     f"marked players")
+                     f"marked players"
+                     + (f" (the ceiling line was widened from {MARK_GAP:g} to {mark_info['gap']:g} "
+                        f"points to make the list broad enough)" if mark_info["floated"] else ""))
         if n_file and len(half) < n_file and MARK_FILL == "file":
             # Too few of them fit: the rest of the file fills, same limit and cap.
             rest = select(fc_nomark, n_file - len(half), cap, n, cnt, taken, file_key, caps,
@@ -1339,7 +1412,7 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
     return {"rosters": rosters, "sources": sources, "chunks": chunks, "notes": notes,
             "meta": {"rule": rule, "own": len(own), "file": len(half),
                      "filePick": file_key if n_file else None,
-                     "poolFile": pool_info, "marked": mark_info,
+                     "poolFile": pool_info, "marked": mark_info, "widePool": wide_info,
                      "fileUsable": len(fc), "candidates": len(cands),
                      "draw": "old" if draw is OLD_DRAW else "new",
                      "blueprint": {k: v for k, v in (B or {}).items()},

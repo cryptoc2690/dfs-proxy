@@ -331,8 +331,10 @@ INDEX_HTML = r"""<!doctype html>
     <p><b>The 150:</b> 2–4 games, all from your pool · 5–7 games, all from Stokastic's
       lineups that use only your pool's players, cut to the top-10 shape, no player in
       more than 60% · 8+ games, all from Stokastic's lineups that use only your pool's
-      players, and every lineup holds at least one marked player (in your pool, under 10%
-      own, projected 15+, ceiling near a big game for his price). On every slate no two lineups share
+      players plus the low-owned players let in for the night (off your pool, 5% owned or less,
+      projected within 2 points of what they need; no count for any of them), and every lineup
+      holds at least one marked player (in your pool, under 10% own, projected 15+, ceiling near
+      a big game for his price). On every slate no two lineups share
       more than 5 players.
       <b>The 20-max:</b> on 5+ games, every 7th lineup of that 150; on 2–4 games,
       from your pool.</p>
@@ -341,8 +343,8 @@ INDEX_HTML = r"""<!doctype html>
     <p><b>Late swap</b> (mid-slate): put a FRESH Stokastic pull in 1 and your CURRENT DK
       entries export in 3, then press Late swap. It replaces players who are
       out (ruled out, removed, or over a cap you typed). Then a new starter the
-      fresh file shows goes into any lineup where he is the better play near his
-      price. Nothing else moves. <b>One run does every contest:</b> drop the whole
+      fresh file shows goes into lineups where he is the better play near his
+      price, up to 2 times his ownership in the fresh file. Nothing else moves. <b>One run does every contest:</b> drop the whole
       DK export in 3 and every contest's live standings in 5 together. Each standings
       file goes to its own contest, and a contest the tool did not build is left alone.</p>
     <p>5 is for the morning after: drop DK's contest standings and grade the

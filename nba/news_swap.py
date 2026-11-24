@@ -44,6 +44,9 @@ SETTINGS = {
     "only_out_own": None,   # (low, high): only a player whose projected ownership is in this range comes out (tests)
     "pair": False,        # also try the pair: he comes in for a dearer player and the salary he frees
                           # lifts another open player to the best projection that fits (from `upgrades`)
+    "own_top": None,      # the top on a new player (Nov 24 review): his share of the set stops at this many times
+                          # his ownership in the file now, and is never under one lineup. It is read from the
+                          # file, so it is not a count. None: no such top (the step as it ran to Nov 23)
 }
 
 
@@ -131,14 +134,20 @@ def news_step(rows, starters, n_games, settings=None, start_of=None, upgrades=No
         x, xproj, lost = s["player"], float(s["proj"]), s.get("lost")
         held = sum(1 for ids in sets if x.dk_id in ids)
         need = min(target, cap_n) - held
+        top_n = None
+        if S.get("own_top") is not None:
+            top_n = max(1, int(S["own_top"] * (x.ownership or 0.0) / 100.0 * n + 0.5))
+            need = min(need, top_n - held)
         entry = {"name": x.name, "proj": round(xproj, 2), "held": held, "target": target, "added": 0, "why_short": ""}
         # Log only (Nov 22 review, what the swap log was missing): which rule brought him, the cap in
         # lineups, and how many lineups each limit stopped. No decision reads any of these.
         stop = {"dear": 0, "own": 0, "price": 0, "bar": 0, "taken": 0, "seat": 0, "shape": 0, "shared": 0, "same": 0}
-        entry.update(rule=s.get("rule"), cap=cap_n, need=max(0, need), stopped=stop)
+        entry.update(rule=s.get("rule"), cap=cap_n, need=max(0, need), stopped=stop,
+                     top=top_n, ownNow=round(x.ownership or 0.0, 2))
         log.append(entry)
         if need <= 0:
-            entry["why_short"] = "already held in that many"
+            entry["why_short"] = ("already at his top" if top_n is not None and held >= top_n
+                                  else "already held in that many")
             continue
         cands = []
         for ri, r in enumerate(rows):
@@ -251,4 +260,7 @@ def news_step(rows, starters, n_games, settings=None, start_of=None, upgrades=No
             entry["added"] += 1
         if entry["added"] < need:
             entry["why_short"] = "no more lineups fit his price, a slot and the set's limits"
+        elif top_n is not None and held + entry["added"] >= top_n:
+            entry["why_short"] = (f"his top: {S['own_top']:g} times his {x.ownership:.1f}% ownership in the "
+                                  f"fresh file is {top_n} of {n}")
     return moves, log

@@ -2183,7 +2183,8 @@ _upq = list(csv.reader(io.StringIO(_kq.get("dkCsv") or "")))
 _entq = [r for r in _upq[1:] if len(r) > 2 and r[2] == "900001"]
 _midq = dk_midslate(R5, GAMES5, _entq)
 _bq = next(x for x in R5 if x["Team"] not in _g0 and x["Starting"] == "false" and 3800 <= x["Salary"] <= 4600)
-_R5n = [dict(x, Starting="true", Projection=45.0, Minutes=30) if x is _bq else x for x in R5]
+# 40% in the fresh file, so the top on a new player (Nov 24: 2 times his fresh ownership) is over the build's own share
+_R5n = [dict(x, Starting="true", Projection=45.0, Minutes=30, **{"Ownership %": 40.0}) if x is _bq else x for x in R5]
 _swq = LS.run_late_swap(proj_csv(_R5n), _midq, "", {"noPullSave": True}, log_path=LS_LOG)
 _lnq = _swq.get("lateNews") or {}
 _tookq = [x for x in _swq.get("swaps", []) if _bq["Player"] in (x.get("newsIn") or [])]
@@ -2462,6 +2463,63 @@ check("big slates: with the switch off the build is all-file with no marked rule
 check("sheet: the off-pool rows carry no hold tick and no lineup count (Nov 23)",
       all("tick" not in r and "minimum_lineups_of_150" not in r for r in (_sh5.get("off_pool") or {}).get("rows", []))
       and "hold at his projected own" not in (_sh5.get("ticks_offered") or {}))
+
+# ---- Nov 24: the wider pool and the floating line on 8+ games, the top on a new player ----
+print("\n-- Nov 24: the wider pool, the floating line, the top on a new player --")
+import chalk_sheet as _CS24                   # noqa: E402
+_nd24 = _CS24.need(_CS24.load_needs(), 4000, 3.0)[0]
+_wp = [_mp("Wide in", 4000, _nd24 - 1.0, 3.0, 5.0, pool=False), _mp("Too far", 4000, _nd24 - 4.0, 3.0, 5.0, pool=False),
+       _mp("Too owned", 4000, _nd24 + 5.0, 6.0, 5.0, pool=False), _mp("In pool", 4000, _nd24 + 5.0, 3.0, 5.0)]
+check("wider pool: off the pool, 5% owned or less, projected within 2 points of what he needs; nobody else",
+      _NB.wide_pool(_wp) == {"Wide in"} and (_NB.WIDE_ON, _NB.WIDE_GAMES, _NB.WIDE_OWN, _NB.WIDE_NEAR) == (True, 8, 5.0, 2.0),
+      str(_NB.wide_pool(_wp)))
+check("floating line: the ceiling line is an argument, 3 points when not given, and the switch and its step are set",
+      _NB.marked_players(_mk9) == {"Near"} and _NB.marked_players(_mk9, gap=8.0) == {"Near", "Far"}
+      and (_NB.MARK_FLOAT, _NB.MARK_STEP, _NB.MARK_GAP_MAX) == (True, 0.5, 30.0))
+# the 9 game build with half the slate typed as the pool: the wider pool is read, and the line floats or the rule says it is off
+_pool9h = "\n".join(x["Player"] for i, x in enumerate(R9) if i % 2 == 0)
+_k9w = _nlog()
+nb9w = _real_run_build(PROJ9, FIELD9, DK9, {"pool": _pool9h})
+_s9w = (_rows_of(_k9w) or [{"settings": {"sets": {"big": {}}}}])[0]["settings"]["sets"]["big"]
+_w9, _m9w = _s9w.get("widePool"), _s9w.get("marked")
+_in9 = {x["Player"] for i, x in enumerate(R9) if i % 2 == 0}
+check("wider pool, 9 games: the players let in are off the pool and the file's pool-only lineups do not shrink; "
+      "the build names them and sets no count",
+      not nb9w.get("error") and _w9 is not None and not (set(_w9["added"]) & _in9)
+      and _s9w["poolFile"]["poolOnly"] >= _w9["poolOnlyBefore"]
+      and (not _w9["added"] or any("Wider pool (9 games)" in n["text"] for n in nb9w["notes"])),
+      str(nb9w.get("error") or _w9))
+check("floating line, 9 games: the rule runs once 70% of the lineups hold a marked player, or says it is off at its widest",
+      _m9w is not None and "gap" in _m9w and _m9w["floated"] == (_m9w["gap"] > 3.0)
+      and (_m9w["used"] == (_m9w["share"] >= 0.70))
+      and (_m9w["used"] or _m9w["gap"] >= _NB.MARK_GAP_MAX), str({k: _m9w.get(k) for k in ("gap", "share", "used")} if _m9w else None))
+_NB.WIDE_ON = _NB.MARK_FLOAT = False
+_k9x = _nlog()
+nb9x = _real_run_build(PROJ9, FIELD9, DK9, {"pool": _pool9h})
+_NB.WIDE_ON = _NB.MARK_FLOAT = True
+_s9x = (_rows_of(_k9x) or [{"settings": {"sets": {"big": {}}}}])[0]["settings"]["sets"]["big"]
+check("both switches off: nobody is let in and the line stays at 3 points",
+      not nb9x.get("error") and not _s9x.get("widePool")
+      and ((_s9x.get("marked") or {}).get("gap", 3.0) == 3.0) and not any("Wider pool" in n["text"] for n in nb9x["notes"]))
+_k6w = _nlog()
+nb6w = _real_run_build(PROJ5, FIELD5, DK5b, {"pool": _pool5})
+check("5 games: neither change applies",
+      not nb6w.get("error") and not (next(r for r in _rows_of(_k6w) if r["contest_id"] == "900001")["settings"]["sets"]["big"]).get("widePool")
+      and not any("Wider pool" in n["text"] for n in nb6w["notes"]))
+
+# the top on a new player in late swap
+_tops = {}
+for _own in (10.0, 1.0, 40.0):
+    _nxo = _np("New Starter", "SF", "CCC", "DDD", 4200, 24.0, starting=False, mins=18, own=_own)
+    _mt, _lt = _SN.auto_step(_n20(), _nws, [_nxo], 6, settings={"own_top": 2.0})
+    _tops[_own] = (len(_mt), _lt[0].get("top"))
+check("late news: a new player stops at 2 times his ownership in the fresh file (10% is 4 of 20), never under one "
+      "lineup, and a player the field holds heavily is stopped only by the build's own top share",
+      _tops == {10.0: (4, 4), 1.0: (1, 1), 40.0: (12, 16)} and LS.NEWS_OWN_TOP == 2.0, str(_tops))
+_mh, _lh = _SN.auto_step([_nl(f"H{i}", _nx if i < 5 else _np(f"Cheap{i}", "SF", "DDD", "CCC", 4400, 20.0)) for i in range(20)],
+                         _nws, [_nx], 6, settings={"own_top": 2.0})
+check("late news: lineups that already hold him count toward the top, and the log says why he stopped",
+      len(_mh) == 0 and _lh[0]["held"] == 5 and _lh[0]["why_short"] == "already at his top", str(_lh[0]))
 
 # The summary and exit MUST stay last — appending a new section after them
 # silently skips it and the suite still reports a clean pass.
