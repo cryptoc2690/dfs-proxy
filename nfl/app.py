@@ -1003,6 +1003,34 @@ def _sha1(text):
     return hashlib.sha1((text or "").encode("utf-8", "replace")).hexdigest()[:12]
 
 
+def _file_lineups(text):
+    """Stokastic's classic lineups file -> [tuple of normalised names].
+
+    Read from its `Lineups` column ("Dak Prescott, Emmett Johnson, ..."), or
+    from the roster columns ("Dak Prescott (45061197)") when that is missing."""
+    if not (text or "").strip():
+        return []
+    rows = list(csv.reader(io.StringIO(text.lstrip("\ufeff"))))
+    if len(rows) < 2:
+        return []
+    hdr = [h.strip() for h in rows[0]]
+    out = []
+    if "Lineups" in hdr:
+        i = hdr.index("Lineups")
+        for r in rows[1:]:
+            if len(r) > i and r[i].strip():
+                out.append(tuple(normalize_name(x) for x in r[i].split(",") if x.strip()))
+    else:
+        cols = [j for j, h in enumerate(hdr)
+                if h.upper() in ("QB", "RB", "WR", "TE", "FLEX", "DST")]
+        for r in rows[1:]:
+            names = [normalize_name(re.sub(r"\s*\(\d+\)\s*$", "", r[j]))
+                     for j in cols if j < len(r) and r[j].strip()]
+            if names:
+                out.append(tuple(names))
+    return [t for t in out if len(t) == 9]
+
+
 def _floor_lines(text, players):
     """'Name 2' lines -> ({dk_id: fewest lineups}, [unmatched or misread])."""
     by_name = {normalize_name(p.name): p for p in players}
@@ -1206,6 +1234,16 @@ def _run_main(players, rep, dk, dk_text, contests, skipped, big, small, o,
     # computes it (10-4: 101.0, 11-15: 157.3).
     field_sum = NB.field_own_sum(players)
     R = NB.slate_ranges(field_sum)
+    # Small slates (3 or 4 games, Shapes Build List 11-24): every lineup leaves
+    # $500-1,500 and QB+3 is allowed at the share of Stokastic's file that day.
+    n_games = NB.slate_games(players)
+    small_slate = n_games in NB.SMALL_SLATE_GAMES
+    if n_games == 2:
+        say("warn", "This is a 2-game slate. The tested rules cannot fill a set on "
+                    "four teams (a DST facing nobody in the lineup, no QB's RB and "
+                    "at most two opponents cannot all hold), so expect far fewer "
+                    "lineups than entries. The analysis chat has not set rules for "
+                    "2 games yet.")
     if not 800 <= own_sum <= 1000:
         say("warn", f"Ownership: {own_sum:.0f}% across nine roster slots. Expected "
                     f"about 900. The ranges are on projected ownership, so check "
@@ -1243,6 +1281,15 @@ def _run_main(players, rep, dk, dk_text, contests, skipped, big, small, o,
             ls = {}
         vegas = lrep.get("teams") or None
     P, obj, tmap = NB.player_table(players, ls)
+    qb3 = 0.0
+    if small_slate:
+        file_lus = _file_lineups(field_text)
+        qb3 = NB.qb3_share(file_lus, P)
+        if not file_lus:
+            say("warn", f"Small slate ({n_games} games) with no Stokastic lineups "
+                        f"file in slot 2, so QB+3 stays off: its share is read "
+                        f"from that file. Every lineup still leaves "
+                        f"${NB.SMALL_LEFT[0]:,}-{NB.SMALL_LEFT[1]:,}.")
     if not ls:
         say("warn", "No LineStar file, so the QB game-total floor (41.5) is NOT "
                     "applied: QBs from every game are eligible. The tested build "
@@ -1305,7 +1352,8 @@ def _run_main(players, rep, dk, dk_text, contests, skipped, big, small, o,
     for label, n, nqb, sd, _cs in plan:
         caps = {key_of[i]: int(round(v * n)) for i, v in pcaps.items() if i in key_of}
         fl = {key_of[i]: min(v, n) for i, v in floors.items() if i in key_of}
-        res = NB.build_set(P, elig, n, sd, nqb, caps=caps, floors=fl, ranges=R)
+        res = NB.build_set(P, elig, n, sd, nqb, caps=caps, floors=fl, ranges=R,
+                           small=small_slate, qb3=qb3)
         if not res["lineups"]:
             return {"error": f"Built no legal lineups for the {label} set"
                              + (f" — {res['notes'][0]}" if res["notes"] else "")
@@ -1323,6 +1371,8 @@ def _run_main(players, rep, dk, dk_text, contests, skipped, big, small, o,
         sets[label] = lus
         qb_n = collections.Counter(lu.qb().name.strip() for lu in lus)
         set_meta[label] = {"n": n, "nqb": nqb, "seed": sd, "candidates": res["candidates"],
+                           "candidatesQb3": res.get("candidates3", 0),
+                           "qb3Allowed": res.get("k3", 0), "left": res.get("left"),
                            "tries": res["tries"],
                            "quota": {obj[q].name.strip(): v for q, v in res["quota"].items()},
                            "caps": caps, "floors": fl}
@@ -1346,12 +1396,15 @@ def _run_main(players, rep, dk, dk_text, contests, skipped, big, small, o,
         bb = sum(1 for lu in lus if lu.metrics["nbb"])
         say("info", f"{label} set: {len(lus)} lineups, {len(qb_n)} QBs (top "
                     + ", ".join(f"{k} {v}" for k, v in qb_n.most_common(3))
-                    + f"), QB+2 {100 * npc2 // max(1, len(lus))}%, bring-back "
+                    + f"), QB+2 {100 * npc2 // max(1, len(lus))}%, "
+                    + (f"QB+3 {sum(1 for lu in lus if lu.metrics['npc'] == 3)} of "
+                       f"{res.get('k3', 0)} allowed, " if small_slate else "")
+                    + "bring-back "
                     f"{100 * bb // max(1, len(lus))}%, ownership sum "
                     f"{sum(lu.metrics['pown'] for lu in lus) / len(lus):.0f} avg, "
                     f"${sum(lu.metrics['left'] for lu in lus) / len(lus):.0f} left avg; "
-                    f"{res['candidates']:,} lineups inside the ranges from "
-                    f"{res['tries']:,} tries (seed {sd}).")
+                    f"{res['candidates'] + res.get('candidates3', 0):,} lineups "
+                    f"inside the ranges from {res['tries']:,} tries (seed {sd}).")
 
     # The upload: each contest gets its own set's lineups.
     slots = list(C.ROSTER)
@@ -1409,6 +1462,11 @@ def _run_main(players, rep, dk, dk_text, contests, skipped, big, small, o,
     bg = max(contests, key=lambda c: (len(c[2]), size_of(c))) if contests else None
     if bg is not None and size_of(bg):
         bits.append(f"contest size {size_of(bg):,}")
+    if small_slate:
+        bits.append(f"SMALL SLATE ({n_games} games): every lineup leaves "
+                    f"${NB.SMALL_LEFT[0]:,}–{NB.SMALL_LEFT[1]:,} · QB+3 on up to "
+                    + ", ".join(f"{m['qb3Allowed']} of {m['n']}" for m in set_meta.values())
+                    + f" (Stokastic's share {100 * qb3:.1f}%)")
     bits.append(f"own sum {R['pown'][0]:.0f}–{R['pown'][1]:.0f} (field {field_sum:.0f})")
     bits.append(f"LineStar totals for {len(tmap)} of {len(teams)} teams" if ls
                 else "NO LineStar — game-total range off")
@@ -1431,6 +1489,11 @@ def _run_main(players, rep, dk, dk_text, contests, skipped, big, small, o,
                 "ranges": {k: [None if x == float("inf") else round(x, 2) for x in v]
                            for k, v in R.items()},
                 "fieldOwnSum": round(field_sum, 2),
+                "games": n_games,
+                "smallSlate": small_slate,
+                "left": list(NB.SMALL_LEFT) if small_slate else list(R["left"]),
+                "qb3Share": round(qb3, 4),
+                "qb3FirstMain": bool(NB.QB3_FIRST_MAIN and not small_slate),
                 "ownSumRel": list(NB.POWN_REL),
                 "fixedRanges": {k: [None if x == float("inf") else x for x in v]
                                 for k, v in NB.FIXED_RANGES.items()},

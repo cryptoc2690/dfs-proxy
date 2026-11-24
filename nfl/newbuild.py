@@ -25,7 +25,7 @@ import random
 
 from dk import SALARY_CAP, normalize_name
 
-SPEC = "stage3-2026-11-19+relsum"
+SPEC = "stage3-2026-11-24+shapes"
 # DST drawn right after the stack (README_PORT 7b, DST deep dive 2026-11-08),
 # not last in the $400 window. Builds logged before this change (the 11-8 main
 # slate, week 9) used DST-last; that is why the Cardinals sat at the 55% cap
@@ -64,6 +64,20 @@ def field_own_sum(players):
 def slate_ranges(expected):
     """RANGES with the own-sum window placed on this slate."""
     return dict(RANGES, pown=(expected + POWN_REL[0], expected + POWN_REL[1]))
+# Small slates (Shapes Build List 11-24, item 2). A 3- or 4-game slate is a
+# copy field: on the modeled 3-game slates only 17% of entries were the only
+# copy of their lineup, so every lineup leaves $500-1,500 (the band beat a
+# ceiling alone, 9 slates up and 2 down) and QB+3 is allowed at the share of
+# Stokastic's lineups file that day. Not 2 games: the live rules cannot fill a
+# set on four teams. Evidence is modeled, strong at 3 games and thin at 4.
+SMALL_SLATE_GAMES = (3, 4)
+SMALL_LEFT = (500, 1500)            # salary left on every lineup of a small slate
+
+# Main slates (item 1): QB+3 lineups picked first for every QB with three typed
+# catchers, every QB keeping his quota. Off until the port is matched on the
+# saved 11-22 inputs and approved.
+QB3_FIRST_MAIN = False
+
 FLEX_W = {"RB": 0.34, "WR": 0.25, "TE": 0.41}
 STACK_PROBS = {1: 0.35, 2: 0.65}   # draw mix; the quota at selection sets the set
 P_BB = 0.60                        # bring-back draw probability
@@ -142,16 +156,17 @@ def lineup_feats(names, P):
                 qb=next((n for n in names if P[n]["pos"] == "QB"), None))
 
 
-def in_ranges(ft, R):
+def in_ranges(ft, R, npc_ok=(1, 2)):
     if not (R["pown"][0] <= ft["pown"] <= R["pown"][1]):
         return False
     if ft["lt5p"] > R["lt5p"][1] or ft["lt2p"] > R["lt2p"][1]:
         return False
-    if ft["left"] < 0 or ft["left"] > R["left"][1]:
+    # The salary-left floor is read from the range: 0 on a main slate.
+    if ft["left"] < R["left"][0] or ft["left"] > R["left"][1]:
         return False
     if ft["vt"] is not None and not (R["vt"][0] <= ft["vt"] <= R["vt"][1]):
         return False
-    if ft["npc"] not in (1, 2) or ft["qbrb"] or ft["dvo"] or ft["nbb"] > 2:
+    if ft["npc"] not in npc_ok or ft["qbrb"] or ft["dvo"] or ft["nbb"] > 2:
         return False
     return True
 
@@ -176,8 +191,11 @@ def qb_quotas(P, elig, n, nqb, alpha=ALPHA, vt_range=None):
 
 
 def generate(P, elig, quota, rng, R, p_bb=P_BB, stack_probs=None, min_proj=MIN_PROJ,
-             dst_first=None):
-    """-> {sorted name tuple: (score, qb, npc)}, attempts made."""
+             dst_first=None, npc_ok=(1, 2)):
+    """-> {sorted name tuple: (score, qb, npc)}, attempts made.
+
+    `npc_ok` is which stack sizes are kept ((3,) for the QB+3 draw). With
+    R["left"] = (0, 400) this is the build as it has run since Nov 9."""
     stack_probs = stack_probs or STACK_PROBS
     dst_first = DST_FIRST if dst_first is None else dst_first
     W = lambda n: P[n]["proj"] ** 2
@@ -188,6 +206,7 @@ def generate(P, elig, quota, rng, R, p_bb=P_BB, stack_probs=None, min_proj=MIN_P
     minsal = {pos: min(P[n]["sal"] for n in v) for pos, v in by_pos.items()}
     sizes = sorted(stack_probs)
     sw = [stack_probs[s] for s in sizes]
+    left_lo = R["left"][0]              # every slot leaves room for the floor
     last_lo = SALARY_CAP - R["left"][1]
 
     def wsample(pool, k):
@@ -230,7 +249,7 @@ def generate(P, elig, quota, rng, R, p_bb=P_BB, stack_probs=None, min_proj=MIN_P
                 floor_rem = sum(minsal.get(p, 2000) for p in slots)
                 off_teams = {P[n]["team"] for n in lineup}
                 pool = [n for n in by_pos["DST"] if P[n]["opp"] not in off_teams
-                        and P[n]["sal"] <= SALARY_CAP - used - floor_rem]
+                        and P[n]["sal"] <= SALARY_CAP - left_lo - used - floor_rem]
                 if not pool:
                     continue
                 pick = rng.choices(pool, [W(n) for n in pool])[0]
@@ -243,7 +262,7 @@ def generate(P, elig, quota, rng, R, p_bb=P_BB, stack_probs=None, min_proj=MIN_P
             for i, pos in enumerate(slots):
                 rem = slots[i + 1:]
                 floor_rem = sum(minsal.get(p, 2000) for p in rem)
-                hi = SALARY_CAP - used - floor_rem
+                hi = SALARY_CAP - left_lo - used - floor_rem
                 lo = (last_lo - used) if not rem else 0
                 off_teams = {P[n]["team"] for n in lineup if P[n]["pos"] != "DST"}
                 pool = [n for n in by_pos[pos] if n not in chosen
@@ -262,7 +281,7 @@ def generate(P, elig, quota, rng, R, p_bb=P_BB, stack_probs=None, min_proj=MIN_P
                 continue
             key = tuple(sorted(lineup))
             ft = lineup_feats(key, P)
-            if not in_ranges(ft, R):
+            if not in_ranges(ft, R, npc_ok):
                 continue
             if ft["left"] < 0 or ft["left"] > 2000:
                 continue
@@ -325,13 +344,86 @@ def select(cands, n, cap, quota, stack_quota=None, caps=None, floors=None):
     return chosen
 
 
+def select_qb3_first(cands3, cands, n, cap, quota, caps=None, floors=None):
+    """QB+3 first for every QB, every QB keeping his quota (shapes review 11-24)."""
+    caps = caps or {}
+    order = lambda kv: (-kv[1][0], kv[0])
+    items3 = sorted(cands3.items(), key=order)
+    items12 = sorted(cands.items(), key=order)
+    both = sorted(list(cands3.items()) + list(cands.items()), key=order)
+    chosen, taken = [], set()
+    cnt, qbc = collections.Counter(), collections.Counter()
+
+    def ok(names, qb, capx, use_quota):
+        if names in taken:
+            return False
+        if use_quota and qbc[qb] + 1 > quota.get(qb, 0):
+            return False
+        return all(cnt[p] + 1 <= capx * n and cnt[p] + 1 <= caps.get(p, n) for p in names)
+
+    def take(names, qb):
+        chosen.append(names)
+        taken.add(names)
+        qbc[qb] += 1
+        for p in names:
+            cnt[p] += 1
+
+    for k, want in (floors or {}).items():          # typed minimums first, as today
+        for names, (sc, qb, npc) in both:
+            if len(chosen) >= n or cnt[k] >= want:
+                break
+            if k in names and ok(names, qb, cap, True):
+                take(names, qb)
+    for items in (items3, items12):                   # pass A, then pass B
+        for names, (sc, qb, npc) in items:
+            if len(chosen) >= n:
+                break
+            if ok(names, qb, cap, True):
+                take(names, qb)
+    for capx, use_quota in ((cap + 0.10, True), (cap + 0.10, False), (1.0, False)):
+        for names, (sc, qb, npc) in both:
+            if len(chosen) >= n:
+                break
+            if ok(names, qb, capx, use_quota):
+                take(names, qb)
+        if len(chosen) >= n:
+            break
+    return chosen
+
+
+def slate_games(players):
+    """How many games the projections file covers (every row, projected or not)."""
+    return len({frozenset((p.team, p.opponent)) for p in players
+                if p.team and p.opponent})
+
+
+def qb3_share(file_lineups, P):
+    """Share of Stokastic's lineups with exactly three WR/TE of the QB's team
+    (`lineup_feats` npc == 3). `file_lineups` are name tuples; a lineup holding
+    a name that is not in P is left out. No file: 0."""
+    seen = hit = 0
+    for names in file_lineups or ():
+        if not all(x in P for x in names):
+            continue
+        seen += 1
+        hit += lineup_feats(names, P)["npc"] == 3
+    return hit / seen if seen else 0.0
+
+
 # ---------------- one set ----------------
 def build_set(P, elig, n, seed, nqb, caps=None, floors=None, ranges=None,
-              dst_first=None):
-    """-> {"lineups": [name tuples], "quota", "candidates", "tries", "notes"}"""
+              dst_first=None, small=False, qb3=0.0, qb3_first=None):
+    """-> {"lineups": [name tuples], "quota", "candidates", "tries", "notes", ...}
+
+    small: a 3- or 4-game slate. Every lineup leaves SMALL_LEFT, and QB+3 is
+    allowed on up to round(n * qb3) lineups through the stack quota.
+    qb3_first: the main-slate QB+3-first rule (QB3_FIRST_MAIN when None)."""
     R = ranges or RANGES
     if R.get("pown") is None:
         raise ValueError("ranges need a per-slate own-sum window: use slate_ranges()")
+    if small:
+        R = dict(R, left=SMALL_LEFT)
+    qb3_first = QB3_FIRST_MAIN if qb3_first is None else qb3_first
     rng = random.Random(seed)
     quota = qb_quotas(P, elig, n, nqb, ALPHA, vt_range=R["vt"])
     notes = []
@@ -340,9 +432,28 @@ def build_set(P, elig, n, seed, nqb, caps=None, floors=None, ranges=None,
                 "notes": ["no QB is eligible: check the pool has QBs and their "
                           "game totals sit inside the range"]}
     cands, tries = generate(P, elig, quota, rng, R, dst_first=dst_first)
-    chosen = select(cands, n, CAP, quota, stack_quotas(n), caps=caps, floors=floors)
-    return {"lineups": chosen, "quota": quota, "candidates": len(cands),
-            "tries": tries, "notes": notes}
+    out = {"quota": quota, "candidates": len(cands), "tries": tries, "notes": notes,
+           "left": list(R["left"]), "candidates3": 0, "k3": 0}
+    if small or qb3_first:
+        # The live draw above does not move; the QB+3 draw has its own generator.
+        cands3, _t3 = generate(P, elig, quota, random.Random(f"{seed}|qb3"), R,
+                               stack_probs={3: 1.0}, dst_first=dst_first, npc_ok=(3,))
+        out["candidates3"] = len(cands3)
+    if small:
+        k3 = round(n * qb3)
+        rest = n - k3
+        n2 = round(rest * SHARE2)
+        merged = dict(cands)
+        merged.update(cands3)
+        out["k3"] = k3
+        chosen = select(merged, n, CAP, quota, {1: rest - n2, 2: n2, 3: k3},
+                        caps=caps, floors=floors)
+    elif qb3_first:
+        chosen = select_qb3_first(cands3, cands, n, CAP, quota, caps=caps, floors=floors)
+    else:
+        chosen = select(cands, n, CAP, quota, stack_quotas(n), caps=caps, floors=floors)
+    out["lineups"] = chosen
+    return out
 
 
 def would_be_value_adds(P, pool, k=5):

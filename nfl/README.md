@@ -35,6 +35,38 @@ any late scratches and caps. Tick the contests. Build.
 | pick | by projected points under a 55% cap on every player, the QB quotas and the QB+2 quota |
 | not in it | no simulation, no Stokastic half, no cores, no value/owned adds, no lottery, no QB floor, no tier leverage, no tilt |
 
+**Small slates and QB+3, Nov 24 — read before reviewing Thanksgiving.** From
+the analysis chat's Shapes Build List 11-24. Both pieces are ported line for
+line and matched on its worked examples (Thursday's early files; the saved
+11-22 inputs).
+- **A 3- or 4-game slate builds differently, automatically.** Every lineup
+  leaves **$500–1,500** in place of "at most $400", and **QB+3 is allowed** on
+  up to `round(n × share)` lineups, where the share is how many of Stokastic's
+  lineups that day have exactly three WR/TE of the QB's team (9.5% on Thursday's
+  early file: 14 of 150, 2 of 20). **Drop Stokastic's lineups file in slot 2**
+  on these slates; without it QB+3 stays off and the build says so. Everything
+  else is the main build. The QB's own RB stays banned.
+- **Why:** a 3-game field is a copy field. On the modeled 3-game slates (cut
+  from the 11 real main slates) only 17% of entries were the only copy of their
+  lineup. The band beat today's build by +0.59 split top-1% lineups (up on all
+  11 slates) and beat a ceiling alone ("up to $1,500") by +0.38 (9 up, 2 down):
+  the build spends whatever it is allowed to, so only a floor moves it. QB+3 at
+  the file's share was level with banning it, so it is not banned. **This
+  evidence is modeled**, strong at 3 games and thin at 4 (+0.15).
+- **A 2-game slate is not covered.** The live rules cannot fill a set on four
+  teams; the build warns. Rules for Dec 19 are not set yet.
+- **Take-out lines:** the band comes out if, on the first two small slates, the
+  old build's lineups turn out to be in the real field fewer than 3 times each,
+  or the band is behind it on both. QB+3 on small slates comes out if the band
+  alone beats it on 3 of the first 4.
+- **Main slates: QB+3 first is ported but OFF** (`newbuild.QB3_FIRST_MAIN`).
+  The rule: a second draw of QB+3 lineups, picked first for every QB with three
+  typed catchers, every QB keeping his quota. 3.04 against 2.19 on eleven
+  slates (7 up, 2 down; hurts on 11-15 and 10-25); on 11-22 it made 71 of 150
+  lineups QB+3. It waits on the owner's call.
+- **Logged:** `build` `stage3-2026-11-24+shapes`, `games`, `smallSlate`, `left`,
+  `qb3Share`, `qb3FirstMain`, and per set `qb3Allowed` and `candidatesQb3`.
+
 **Ranges change, Nov 19 — read before reviewing week 11.** From the Contest
 Lens Rework (report 11-17, build items 1 and 2), approved Nov 19:
 - **The own-sum window moves with the slate.** The field's expected own sum is
