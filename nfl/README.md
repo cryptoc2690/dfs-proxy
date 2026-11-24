@@ -59,13 +59,24 @@ line and matched on its worked examples (Thursday's early files; the saved
   old build's lineups turn out to be in the real field fewer than 3 times each,
   or the band is behind it on both. QB+3 on small slates comes out if the band
   alone beats it on 3 of the first 4.
-- **Main slates: QB+3 first is ported but OFF** (`newbuild.QB3_FIRST_MAIN`).
-  The rule: a second draw of QB+3 lineups, picked first for every QB with three
-  typed catchers, every QB keeping his quota. 3.04 against 2.19 on eleven
-  slates (7 up, 2 down; hurts on 11-15 and 10-25); on 11-22 it made 71 of 150
-  lineups QB+3. It waits on the owner's call.
-- **Logged:** `build` `stage3-2026-11-24+shapes`, `games`, `smallSlate`, `left`,
-  `qb3Share`, `qb3FirstMain`, and per set `qb3Allowed` and `candidatesQb3`.
+- **Main slates: QB+3 at the field's share, on since Nov 24** (the owner's
+  pick; `newbuild.QB3_SHARE_MAIN`). The same rule as small slates: QB+3 is
+  allowed on up to `round(n × share)` lineups through the stack quota, the share
+  read from Stokastic's lineups file that day (about 4% on main: 6–7 of 150, 1
+  of 20). Salary left stays "at most $400". +0.33 split top-1% lineups on eleven
+  slates (4 up, 1 down). **Drop Stokastic's lineups file in slot 2 on main
+  slates too.** With no file, or a file from another slate, QB+3 stays off, the
+  build warns, and the set is the Nov 19 build exactly (checked on the saved
+  11-22 inputs: the upload is byte-identical).
+- **The heavier rule, QB+3 first, is ported but OFF** (`newbuild.QB3_FIRST_MAIN`).
+  A second draw of QB+3 lineups, picked first for every QB with three typed
+  catchers, every QB keeping his quota. 3.04 against 2.19 on eleven slates (7
+  up, 2 down; hurts on 11-15 and 10-25); on 11-22 it made 71 of 150 lineups
+  QB+3. Not chosen: it is the analysis chat's shadow. Setting it True overrides
+  the share rule.
+- **Logged:** `build` `stage3-2026-11-24+qb3share`, `games`, `smallSlate`,
+  `left`, `qb3Share`, `qb3Rule` (`file-share`, `first` or `off`), and per set
+  `qb3Allowed` and `candidatesQb3`.
 
 **Ranges change, Nov 19 — read before reviewing week 11.** From the Contest
 Lens Rework (report 11-17, build items 1 and 2), approved Nov 19:

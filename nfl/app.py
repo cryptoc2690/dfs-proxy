@@ -1281,15 +1281,26 @@ def _run_main(players, rep, dk, dk_text, contests, skipped, big, small, o,
             ls = {}
         vegas = lrep.get("teams") or None
     P, obj, tmap = NB.player_table(players, ls)
+    # QB+3 at the field's share (Nov 24): read from Stokastic's lineups file.
     qb3 = 0.0
-    if small_slate:
+    qb3_off = "turned off"
+    if small_slate or NB.QB3_SHARE_MAIN:
         file_lus = _file_lineups(field_text)
-        qb3 = NB.qb3_share(file_lus, P)
+        on_slate_lus = [t for t in file_lus if all(x in P for x in t)]
+        qb3_off = ("no Stokastic lineups file" if not file_lus
+                   else "the Stokastic lineups file is for another slate")
         if not file_lus:
-            say("warn", f"Small slate ({n_games} games) with no Stokastic lineups "
-                        f"file in slot 2, so QB+3 stays off: its share is read "
-                        f"from that file. Every lineup still leaves "
-                        f"${NB.SMALL_LEFT[0]:,}-{NB.SMALL_LEFT[1]:,}.")
+            say("warn", "No Stokastic lineups file in slot 2, so QB+3 stays off: "
+                        "its share is read from that file. Drop the classic "
+                        "lineups export for this slate to allow it.")
+        elif len(on_slate_lus) < 0.5 * len(file_lus):
+            say("warn", f"The Stokastic lineups file does not look like this slate "
+                        f"(only {len(on_slate_lus):,} of {len(file_lus):,} lineups "
+                        f"use players in the projections), so QB+3 stays off. "
+                        f"Drop the lineups export for this slate.")
+        else:
+            qb3 = NB.qb3_share(on_slate_lus, P)
+            qb3_off = "Stokastic's file has none"
     if not ls:
         say("warn", "No LineStar file, so the QB game-total floor (41.5) is NOT "
                     "applied: QBs from every game are eligible. The tested build "
@@ -1398,7 +1409,7 @@ def _run_main(players, rep, dk, dk_text, contests, skipped, big, small, o,
                     + ", ".join(f"{k} {v}" for k, v in qb_n.most_common(3))
                     + f"), QB+2 {100 * npc2 // max(1, len(lus))}%, "
                     + (f"QB+3 {sum(1 for lu in lus if lu.metrics['npc'] == 3)} of "
-                       f"{res.get('k3', 0)} allowed, " if small_slate else "")
+                       f"{res.get('k3', 0)} allowed, " if (small_slate or qb3) else "")
                     + "bring-back "
                     f"{100 * bb // max(1, len(lus))}%, ownership sum "
                     f"{sum(lu.metrics['pown'] for lu in lus) / len(lus):.0f} avg, "
@@ -1464,9 +1475,11 @@ def _run_main(players, rep, dk, dk_text, contests, skipped, big, small, o,
         bits.append(f"contest size {size_of(bg):,}")
     if small_slate:
         bits.append(f"SMALL SLATE ({n_games} games): every lineup leaves "
-                    f"${NB.SMALL_LEFT[0]:,}–{NB.SMALL_LEFT[1]:,} · QB+3 on up to "
-                    + ", ".join(f"{m['qb3Allowed']} of {m['n']}" for m in set_meta.values())
-                    + f" (Stokastic's share {100 * qb3:.1f}%)")
+                    f"${NB.SMALL_LEFT[0]:,}–{NB.SMALL_LEFT[1]:,}")
+    bits.append("QB+3 on up to "
+                + ", ".join(f"{m['qb3Allowed']} of {m['n']}" for m in set_meta.values())
+                + f" (Stokastic's share {100 * qb3:.1f}%)" if qb3
+                else f"QB+3 off ({qb3_off})")
     bits.append(f"own sum {R['pown'][0]:.0f}–{R['pown'][1]:.0f} (field {field_sum:.0f})")
     bits.append(f"LineStar totals for {len(tmap)} of {len(teams)} teams" if ls
                 else "NO LineStar — game-total range off")
@@ -1493,7 +1506,8 @@ def _run_main(players, rep, dk, dk_text, contests, skipped, big, small, o,
                 "smallSlate": small_slate,
                 "left": list(NB.SMALL_LEFT) if small_slate else list(R["left"]),
                 "qb3Share": round(qb3, 4),
-                "qb3FirstMain": bool(NB.QB3_FIRST_MAIN and not small_slate),
+                "qb3Rule": ("first" if (NB.QB3_FIRST_MAIN and not small_slate)
+                            else "file-share" if qb3 else "off"),
                 "ownSumRel": list(NB.POWN_REL),
                 "fixedRanges": {k: [None if x == float("inf") else x for x in v]
                                 for k, v in NB.FIXED_RANGES.items()},

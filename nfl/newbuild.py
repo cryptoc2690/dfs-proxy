@@ -25,7 +25,7 @@ import random
 
 from dk import SALARY_CAP, normalize_name
 
-SPEC = "stage3-2026-11-24+shapes"
+SPEC = "stage3-2026-11-24+qb3share"
 # DST drawn right after the stack (README_PORT 7b, DST deep dive 2026-11-08),
 # not last in the $400 window. Builds logged before this change (the 11-8 main
 # slate, week 9) used DST-last; that is why the Cardinals sat at the 55% cap
@@ -73,9 +73,16 @@ def slate_ranges(expected):
 SMALL_SLATE_GAMES = (3, 4)
 SMALL_LEFT = (500, 1500)            # salary left on every lineup of a small slate
 
-# Main slates (item 1): QB+3 lineups picked first for every QB with three typed
-# catchers, every QB keeping his quota. Off until the port is matched on the
-# saved 11-22 inputs and approved.
+# QB+3 on main slates. The owner's pick (Nov 24) is the field's share: QB+3 is
+# allowed on up to round(n * share) lineups through the stack quota, the share
+# read from Stokastic's lineups file that day, the same rule as small slates
+# (+0.33 split top-1% lineups on eleven slates; 4 up, 1 down; about 6 of 150).
+# Not banned, not forced. No file: no QB+3, and the build is the Nov 19 one.
+QB3_SHARE_MAIN = True
+# The heavier rule (item 1: QB+3 picked first for every QB with three typed
+# catchers; 3.04 against 2.19, 7 up and 2 down, 71 of 150 on 11-22, zero on
+# 11-15) is ported and matched on the saved 11-22 inputs, and stays OFF. It is
+# the analysis chat's shadow. True here would override the share rule.
 QB3_FIRST_MAIN = False
 
 FLEX_W = {"RB": 0.34, "WR": 0.25, "TE": 0.41}
@@ -415,9 +422,11 @@ def build_set(P, elig, n, seed, nqb, caps=None, floors=None, ranges=None,
               dst_first=None, small=False, qb3=0.0, qb3_first=None):
     """-> {"lineups": [name tuples], "quota", "candidates", "tries", "notes", ...}
 
-    small: a 3- or 4-game slate. Every lineup leaves SMALL_LEFT, and QB+3 is
-    allowed on up to round(n * qb3) lineups through the stack quota.
-    qb3_first: the main-slate QB+3-first rule (QB3_FIRST_MAIN when None)."""
+    small: a 3- or 4-game slate: every lineup leaves SMALL_LEFT.
+    qb3: the share of the set QB+3 may take (Stokastic's file share that day),
+    through the stack quota, on any slate size. 0 on a main slate is the build
+    as it ran from Nov 19.
+    qb3_first: the heavier main-slate rule (QB3_FIRST_MAIN when None)."""
     R = ranges or RANGES
     if R.get("pown") is None:
         raise ValueError("ranges need a per-slate own-sum window: use slate_ranges()")
@@ -434,12 +443,14 @@ def build_set(P, elig, n, seed, nqb, caps=None, floors=None, ranges=None,
     cands, tries = generate(P, elig, quota, rng, R, dst_first=dst_first)
     out = {"quota": quota, "candidates": len(cands), "tries": tries, "notes": notes,
            "left": list(R["left"]), "candidates3": 0, "k3": 0}
-    if small or qb3_first:
+    qb3_first = qb3_first and not small
+    by_share = small or (qb3 > 0 and not qb3_first)
+    if by_share or qb3_first:
         # The live draw above does not move; the QB+3 draw has its own generator.
         cands3, _t3 = generate(P, elig, quota, random.Random(f"{seed}|qb3"), R,
                                stack_probs={3: 1.0}, dst_first=dst_first, npc_ok=(3,))
         out["candidates3"] = len(cands3)
-    if small:
+    if by_share:
         k3 = round(n * qb3)
         rest = n - k3
         n2 = round(rest * SHARE2)

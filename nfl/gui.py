@@ -142,8 +142,8 @@ INDEX_HTML = r"""<!doctype html>
 <div id="filerail">
   <div class="fslot req" id="s_proj"><b>1 · Stokastic projections</b>
     <span class="fstate">required — drop or click</span></div>
-  <div class="fslot req" id="s_field"><b>2 · Stokastic lineups <span style="opacity:.6">(showdown · 3–4 game slates)</span></b>
-    <span class="fstate">the opponent field — drop or click</span></div>
+  <div class="fslot req" id="s_field"><b>2 · Stokastic lineups</b>
+    <span class="fstate">showdown: the field · main: the QB+3 share — drop or click</span></div>
   <div class="fslot req" id="s_dk"><b>3 · DK entries export</b>
     <span class="fstate">needed to upload — drop or click</span></div>
   <div class="fslot" id="s_ls"><b>4 · LineStar <span style="opacity:.6">(main: game totals)</span></b>
@@ -170,9 +170,10 @@ INDEX_HTML = r"""<!doctype html>
         lineup inside the winners' ranges (ownership sum within −26.5/+36.9 of the
         field's expected sum for the slate, ≤3 under 5%, ≤1 under 2%, ≤$400 left,
         QB game total 41.5+ from LineStar), picked by
-        projected points. No Stokastic half, no cores, no add-ons. <b>On a 3- or 4-game slate</b>
-        every lineup leaves $500–1,500 instead, and QB+3 is allowed at the share
-        in Stokastic's lineups file (drop it in slot 2).</div>
+        projected points. No Stokastic half, no cores, no add-ons. <b>QB+3</b> is
+        allowed at the share in Stokastic's lineups file that day (drop it in
+        slot 2; without it QB+3 stays off). <b>On a 3- or 4-game slate</b> every
+        lineup leaves $500–1,500 instead of at most $400.</div>
     </div>
     <div class="oldset">
       <label>Lineups <span class="muted">— blank = read from the DK file</span></label>
@@ -340,11 +341,10 @@ INDEX_HTML = r"""<!doctype html>
       actual scores in it — score your logged entries against them.</span>
   </div>
   <div id="welcome">
-    <p><b>Main slate:</b> drop 1 (Stokastic projections), 3 (your DK entries
-      export, downloaded before lock) and 4 (LineStar pre-game, for the game
-      totals). Type your pool, any late scratches and caps in Settings, tick the
-      contests, press build. On a 3- or 4-game slate also drop 2 (Stokastic
-      lineups): the build reads how often the field stacks QB+3 from it.</p>
+    <p><b>Main slate:</b> drop 1 (Stokastic projections), 2 (Stokastic lineups,
+      for the QB+3 share), 3 (your DK entries export, downloaded before lock)
+      and 4 (LineStar pre-game, for the game totals). Type your pool, any late scratches and caps in Settings, tick the
+      contests, press build.</p>
     <p><b>Showdown:</b> drop 1, 2 (Stokastic lineups — pull it in the same minute
       as the projections) and 3. Showdown builds exactly as before.</p>
     <p>Everything else comes from the files: the format, the contests, how many
