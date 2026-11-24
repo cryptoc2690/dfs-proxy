@@ -2521,6 +2521,34 @@ _mh, _lh = _SN.auto_step([_nl(f"H{i}", _nx if i < 5 else _np(f"Cheap{i}", "SF", 
 check("late news: lineups that already hold him count toward the top, and the log says why he stopped",
       len(_mh) == 0 and _lh[0]["held"] == 5 and _lh[0]["why_short"] == "already at his top", str(_lh[0]))
 
+# ---- Nov 24 (Raw Points report): one of tonight's top five projections in every lineup on 8+ games ----
+print("\n-- Nov 24: one of tonight's top five projections in every lineup (8+ games) --")
+_tp = [_mp(f"T{i}", 5000 + 500 * i, 20.0 + 5 * i, 10.0, 6.0, pool=(i % 2 == 0)) for i in range(8)]
+_tp[6].removed = True
+check("top projections: the five highest among the players not removed, any price, in the pool or not; "
+      "a removed player's place goes to the next one; the switch and its settings are set",
+      _NB.top_projections(_tp) == {"T7", "T5", "T4", "T3", "T2"} and _NB.top_projections(_tp, n=1) == {"T7"}
+      and (_NB.RAW_ON, _NB.RAW_GAMES, _NB.RAW_TOP) == (True, 8, 5), str(sorted(_NB.top_projections(_tp))))
+_r9 = _s9w.get("rawTop")
+_top9 = {x["Player"] for x in sorted(R9, key=lambda x: (-float(x["Projection"]), x["Player"]))[:5]}
+check("top projections, 9 games: the lineups that hold one of the five are taken first, the build names the five "
+      "and says how many file lineups hold one; no count is set for anyone",
+      _r9 is not None and len(_r9["top"]) == 5 and set(_r9["top"]) == _top9
+      and _r9["withOne"] <= _r9["file"] and _r9["taken"] <= _r9["withOne"] and _r9["filled"] >= 0
+      and any("top 5 projections in every lineup" in n["text"] for n in nb9w["notes"]),
+      str(_r9) + " | " + str(sorted(_top9)))
+_NB.RAW_ON = False
+_k9r = _nlog()
+nb9r = _real_run_build(PROJ9, FIELD9, DK9, {"pool": _pool9h})
+_NB.RAW_ON = True
+_s9r = (_rows_of(_k9r) or [{"settings": {"sets": {"big": {}}}}])[0]["settings"]["sets"]["big"]
+check("top projections, switch off: the rule does not run and the build says nothing about it",
+      not nb9r.get("error") and not _s9r.get("rawTop")
+      and not any("projections in every lineup" in n["text"] for n in nb9r["notes"]), str(_s9r.get("rawTop")))
+check("top projections, 5 games: the rule does not apply",
+      not (next(r for r in _rows_of(_k6w) if r["contest_id"] == "900001")["settings"]["sets"]["big"]).get("rawTop")
+      and not any("projections in every lineup" in n["text"] for n in nb6w["notes"]))
+
 # The summary and exit MUST stay last — appending a new section after them
 # silently skips it and the suite still reports a clean pass.
 print(f"\n{'=' * 56}\n  {ok} passed, {fail} failed\n{'=' * 56}")

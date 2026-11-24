@@ -1033,6 +1033,34 @@ def big_game_score(p, _t=[]):
     return CS.need(T, p.salary, p.ownership)[1]
 
 
+# --- one of tonight's top projections in every lineup (Raw Points report, Nov 24) ---
+# On a slate of RAW_GAMES or more games every lineup the 150 takes from
+# Stokastic's file holds at least one of tonight's top RAW_TOP projections (raw
+# projected points, any price, in the pool or not). The file lineups that hold
+# one are taken first, in the file's own order; the rest of the file fills only
+# if they run short under the limit and the cap. No count is set for anyone.
+# On the seven 8+ game nights the lineups that placed held more of the top
+# projections than the field (1.12 of the top five a lineup against 0.80) and
+# the 150 held 0.94. With the rule the 150's best lineup finished higher on
+# three nights and lower on none, and a random 20 of the 150 higher on four of
+# seven; the same holds for the top 4 to 8, not for the top 3 (too narrow), not
+# for the five highest prices and not for two of the five. RAW_ON = False turns
+# it off. On 5 to 7 games it is level so far, so it is off there.
+RAW_ON = True
+RAW_GAMES = 8
+RAW_TOP = 5
+
+
+def top_projections(players, inj=None, n=None):
+    """dk_ids of tonight's top projections (see the note above): the n highest
+    projections among the players who are playing and not removed."""
+    n = RAW_TOP if n is None else n
+    live = [p for p in players if not p.removed and p.salary > 0 and p.proj > 0
+            and (inj is None or is_active(p, inj))]
+    live.sort(key=lambda p: (-p.proj, p.name))
+    return {p.dk_id for p in live[:n]}
+
+
 def marked_players(players, inj=None, gap=None):
     """dk_ids of tonight's marked players (see the note above). gap: the ceiling
     line in points (MARK_GAP when not given)."""
@@ -1121,6 +1149,7 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
     # One marked player in every lineup (8+ games): the file is cut to the
     # lineups that hold one. fc_nomark is the file before the cut, for the fill.
     mark_info = None
+    raw_info = None
     fc_nomark = fc
     if big and MARK_ON and games >= MARK_GAMES and fc:
         gap = MARK_GAP
@@ -1219,8 +1248,34 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
                 f"{by_id[k].name} to {v} of {n} ({by_id[k].ownership:.0f}% projected owned)"
                 for k, v in win_info["studFloors"].items()))
     else:
-        half = select(fc, n_file, cap, n, cnt, taken, file_key, caps,
-                      max_shared=ms) if n_file else []
+        half = []
+        if big and RAW_ON and games >= RAW_GAMES and n_file and fc:
+            # One of tonight's top projections in every lineup: the file lineups
+            # that hold one are taken first; the rest fill if they run short.
+            try:
+                raw_top = top_projections(players, inj)
+            except Exception as e:              # never worth losing the build over
+                raw_top = set()
+                notes.append(f"Tonight's top projections could not be read "
+                             f"({type(e).__name__}: {e}), so that rule is off tonight")
+            if raw_top:
+                kept = [c for c in fc if any(p.dk_id in raw_top for p in c["ps"])]
+                half = select(kept, n_file, cap, n, cnt, taken, file_key, caps,
+                              max_shared=ms)
+                raw_info = {"file": len(fc), "withOne": len(kept), "taken": len(half),
+                            "top": sorted((by_id[k].name for k in raw_top if k in by_id),
+                                          key=lambda nm: nm)}
+        if n_file and len(half) < n_file:
+            half += select(fc, n_file - len(half), cap, n, cnt, taken, file_key, caps,
+                           max_shared=ms)
+        if raw_info:
+            raw_info["filled"] = len(half) - raw_info["taken"]
+            notes.append(f"One of tonight's top {RAW_TOP} projections in every lineup: "
+                         f"{raw_info['withOne']} of the {raw_info['file']} file lineups hold "
+                         f"one ({', '.join(raw_info['top'])})"
+                         + (f"; only {raw_info['taken']} of them fit under the limit and the "
+                            f"cap, so {raw_info['filled']} more came from the rest of the file"
+                            if raw_info["filled"] else ""))
     if n_file and len(half) < n_file and shape_info and shape_info["used"]:
         # The shape, the limit and the cap together left the set short: the rest
         # comes from the whole file in its order, under the same limit and cap.
@@ -1412,7 +1467,7 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
     return {"rosters": rosters, "sources": sources, "chunks": chunks, "notes": notes,
             "meta": {"rule": rule, "own": len(own), "file": len(half),
                      "filePick": file_key if n_file else None,
-                     "poolFile": pool_info, "marked": mark_info, "widePool": wide_info,
+                     "poolFile": pool_info, "marked": mark_info, "widePool": wide_info, "rawTop": raw_info,
                      "fileUsable": len(fc), "candidates": len(cands),
                      "draw": "old" if draw is OLD_DRAW else "new",
                      "blueprint": {k: v for k, v in (B or {}).items()},

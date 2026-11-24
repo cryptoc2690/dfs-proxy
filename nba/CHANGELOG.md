@@ -2,6 +2,21 @@
 
 Newest first. One entry per change, in plain words: what changed and why.
 
+## Nov 24, 2026 — 8+ game slates: one of tonight's top five projections in every lineup
+
+From `NBA Raw Points On Short Slates Report 11-24.md`. The data chat's change to `newbuild.py` is applied as handed over (`Prototype/raw8/`).
+
+**The question** was whether raw points matter more than value on short slates. They do not: on 2 to 4 games the field already holds the top projections (1.39 of the top five a lineup against 1.35 in the top 1%, LIVE), and no lean toward them finished higher in the build (26 versions, BACKTEST). It shows up on 8+ games, where the field spreads out: the lineups that placed held 1.12 of the top five projections, the field 0.80 and the tool's 150 0.94 (LIVE, seven nights).
+
+**On 8+ games the lineups that hold one of tonight's top five projections are taken first** (`RAW_ON`). The five highest raw projections among the players who are playing and not removed, any price, in the pool or not, read from the projections file. After the pool cut and the marked rule, the file's lineups that hold one are picked first, in the file's own order, under the same limit of 5 and the same 85% cap. The rest of the file fills only if they run short, and the build says so. No count is set for anyone. The 20s follow as every 7th lineup. Settings `RAW_TOP = 5`, `RAW_GAMES = 8`.
+- **Record (BACKTEST, the seven saved 8+ game nights, against the tool before it):** the 150 0.49x, higher on 3 nights, lower on none, four the same (Nov 4: 30th to 2nd; Nov 18: 169th to 20th; Nov 23: 374th to 308th). A random 20 of the 150 0.80x. Top 10% lineups rose on six nights of seven. It beat 29 of 30 random lists of five in the 150 and 30 of 30 in a random 20. The top four, six and eight give the same; the top three is too narrow (2.09x); the five highest prices are 2.36x.
+- **How thin it is:** it rests on two nights. Without Nov 4 and Nov 18 the 150 is 0.96x and a random 20 is 0.95x. Nov 18 ran on a stale file: Cade Cunningham was on the list and did not play (the gain came from Franz Wagner and Giannis Antetokounmpo). It is the fourth rule fitted to the same seven nights.
+- **It moves lineups onto a few players:** Wagner 20 to 53 of 150 on Nov 18, Antetokounmpo 44 to 73 on Oct 30. The five hold 1.24 a lineup with the rule.
+- **It needs the marked rule beside it:** with the marked rule off it is 0.87x and a random 20 is level.
+- **Turn it off** (`RAW_ON = False`) if, on the next four 8+ game nights rebuilt with the switch on and off, a random 20 of the 150 is lower on three or the 150's best lineup is lower on two.
+
+**Not built, on the record:** on short slates, any lean toward the top projections (mild ones level, strong ones lower with a longer tail); two $9,000+ players allowed in a lineup (1.06x, lower on 4 nights of 5); the cheap players held to a line (failing lineups fall from 21% to between 8% and 13%, the best lineup does not rise); a raw-points measure in place of "what he needs" for top-priced players (the 14 who fell short on short slates were held at 6.5% by the top 1% against the field's 24.1%). **Cannot be told:** the same rule on 5 to 7 games (0.93x, level without two October nights). It becomes a build if, on the next six such nights rebuilt with `RAW_GAMES` at 5 and at 8, a random 20 is higher on four or more and the 150's best lineup is lower on no more than one.
+
 ## Nov 24, 2026 — 8+ game slates: a wider pool and a floating line; late swap: a top on a new player
 
 From `NBA Contest Review And Big Slates Report 11-24.md` (the Nov 23 night) and `NBA Big Slates Follow-Up Report 11-24.md`. The data chat's code is applied as handed over (`Prototype/wide8/`, `Prototype/swap/r24/`).
