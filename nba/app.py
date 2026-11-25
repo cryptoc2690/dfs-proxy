@@ -1751,6 +1751,7 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                         "tick you did not take: " + "; ".join(left_) + ".")
 
     sets, all_notes = {}, []
+    win20_applied = False     # Nov 25: the 20s taken from Stokastic's file by Win%
     base150 = None            # the 150 the 20s are drawn from (G17)
     for kind, n in (("big", n_big), ("small", n_small)):
         if not n:
@@ -1926,6 +1927,48 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
                     for p in ps:
                         r_[p.dk_id] = max(r_.get(p.dk_id, 0.0), BR.SHADOW_K * p.ownership / 100.0)
                     shadow_of(nm, raises_=r_)
+        # Nov 25 (Tonight note): Stokastic's file taken plainly by Win%. The 20s are
+        # its first 20, the same 20 in every 20-max; the 150 is its first 150 that
+        # spend the whole $50,000. NB.WIN20_ON / NB.WIN150_ON = False (or the
+        # options win20Off / win150Off) give back the lineups built above.
+        if kind == "small" and NB.WIN20_ON and not o.get("win20Off"):
+            top = NB.file_by_win(field, players, inj, C.best_slotting, n)
+            if len(top) >= n:
+                n_ch = len(res.get("chunks") or []) or copies
+                res["chunks"] = [([list(r) for r in top], ["vendor"] * len(top))
+                                 for _ in range(n_ch)]
+                res["rosters"], res["sources"] = res["chunks"][0]
+                res["meta"].pop("from150", None)
+                res["meta"]["win20"] = {"n": len(top), "copies": n_ch}
+                res["notes"] = [f"Stokastic's first {len(top)} lineups by Win%, the same "
+                                f"{len(top)} in every 20-max. Typed caps and minimums do not "
+                                f"act on them; removals do."]
+                win20_applied = True
+            else:
+                say("warn", f"Stokastic's file gave only {len(top)} lineups that can be entered, "
+                            f"so the 20s are the tool's own tonight.")
+        if kind == "big" and NB.WIN150_ON and not o.get("win150Off"):
+            top = NB.file_by_win(field, players, inj, C.best_slotting, n, whole=True)
+            n_whole = len(top)
+            if n_whole < n:                     # short: fill by Win% whatever salary is left
+                have = {frozenset(p.dk_id for p in r) for r in top}
+                for r in NB.file_by_win(field, players, inj, C.best_slotting, 2 * n):
+                    if len(top) >= n:
+                        break
+                    if frozenset(p.dk_id for p in r) not in have:
+                        top.append(r)
+            if len(top) >= n:
+                res["rosters"] = [list(r) for r in top]
+                res["sources"] = ["vendor"] * len(top)
+                res["chunks"] = [(res["rosters"], res["sources"])]
+                res["meta"]["win150"] = {"n": len(top), "whole": n_whole}
+                res["notes"] = [f"Stokastic's first {len(top)} lineups by Win% that spend the "
+                                f"whole $50,000" + ("" if n_whole >= n else
+                                f" ({n_whole} do; the rest are the next by Win%)")
+                                + ". Typed caps and minimums do not act on them; removals do."]
+            else:
+                say("warn", f"Stokastic's file gave only {len(top)} lineups that can be entered, "
+                            f"so the 150 is the tool's own tonight.")
         label = "150-max" if kind == "big" else "20-max"
         for t in res["notes"]:
             all_notes.append(f"{label}: {t}")
@@ -2173,7 +2216,8 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
         "shape": ((sets.get("big") or {}).get("meta", {}).get("spread") or {}).get("shapeInfo")
                  or (((base150 or {}).get("meta", {}).get("spread") or {}).get("shapeInfo")),
         "starts20": ((sets.get("small") or {}).get("meta", {}).get("from150") or {}).get("starts")}
-    settings["from150"] = {"applied": bool(from150 and n_small), "step": NB.FROM150_STEP,
+    settings["from150"] = {"applied": bool(from150 and n_small and not win20_applied),
+                           "step": NB.FROM150_STEP,
                            "games": n_games, "off": bool(o.get("from150Off")),
                            "note": "the 20s of any 150 shadow are its every 7th lineup, "
                                    "contest i from lineup i"}

@@ -571,6 +571,38 @@ def file_candidates(field_lineups, active_ids, slotting):
     return out
 
 
+# --- Nov 25: Stokastic's file taken plainly by Win% --------------------------
+WIN20_ON = True     # every 20-max is Stokastic's first 20 by Win%, the same 20 in each
+WIN150_ON = True    # the 150 is Stokastic's first 150 by Win% that spend the whole $50,000
+
+
+def file_by_win(field_lineups, players, inj, slotting, k, whole=False):
+    """Stokastic's first k lineups by Win% that can be entered tonight (ties in
+    the file's order). whole: only lineups that spend the whole salary. Typed
+    removals and players ruled out are respected; caps, minimums and the pool
+    are not read. -> rosters (players in DK slot order), k or fewer."""
+    active_ids = {p.dk_id for p in players if is_active(p, inj)}
+    order = sorted(range(len(field_lineups)),
+                   key=lambda i: -float(field_lineups[i].metrics.get("win") or 0.0))
+    out, seen = [], set()
+    for i in order:
+        ps = field_lineups[i].players
+        key = frozenset(p.dk_id for p in ps)
+        if key in seen or len(key) != 8 or any(p.dk_id not in active_ids for p in ps):
+            continue
+        sal = sum(p.salary for p in ps)
+        if sal > SALARY_CAP or (whole and sal < SALARY_CAP) or len({p.game for p in ps}) < 2:
+            continue
+        slots = slotting(ps)
+        if not slots:
+            continue
+        seen.add(key)
+        out.append(list(slots))
+        if len(out) >= k:
+            break
+    return out
+
+
 def pool_only(fc, players, floors=None, let_in=None):
     """The pool respected: Stokastic's lineups made only of players in your pool.
 
