@@ -1233,8 +1233,12 @@ check("new build: the 20-max raises the top three owned (15%+) toward 2x, at mos
 _ex150 = collections.Counter(p["name"] for r in _big for p in r["players"])
 check("new build: nobody above 85% of the 150", max(_ex150.values()) <= 0.85 * 150 + 0.5,
       str(_ex150.most_common(1)))
-check("new build: nobody in fewer than 4 of the 150", min(_ex150.values()) >= 4,
-      str(min(_ex150.items(), key=lambda kv: kv[1])))
+import newbuild as _NBtail                    # noqa: E402
+check("new build: the 4-lineup minimum is off (Nov 24): nobody is swapped out for being in 1, 2 or 3 of the 150, "
+      "the build reports no tail swaps, and the old step is still in the file behind its switch",
+      _NBtail.TAIL_ON is False and _big[0]["settings"]["sets"]["big"]["tail"] == 0
+      and _NBtail.MIN_LINEUPS == 4 and callable(_NBtail.tail_fix),
+      str((_NBtail.TAIL_ON, _big[0]["settings"]["sets"]["big"].get("tail"), min(_ex150.items(), key=lambda kv: kv[1]))))
 check("new build: every 150 roster distinct", len({frozenset(p["id"] for p in r["players"]) for r in _big}) == 150)
 check("new build: the log names the rule and the build", _big[0]["settings"]["build"] == "nov7"
       and "Stokastic" in _big[0]["settings"]["sets"]["big"]["rule"], _big[0]["settings"]["sets"]["big"]["rule"])
@@ -1280,10 +1284,10 @@ check("big slates: on 8+ games the build reads the marked players and says wheth
       set(_m9) >= {"file", "withOne", "share", "used", "marked"} and _m9["used"] == (_m9["withOne"] >= 0.70 * _m9["file"])
       and any("ne marked player in every lineup" in n["text"] for n in nb9f["notes"]),
       str({k: _m9.get(k) for k in ("file", "withOne", "share", "used")}))
-check("big slates: when the rule is on, every lineup taken from the file holds a marked player (the tail fix "
-      "may change a few after)",
+check("big slates: when the rule is on, every lineup taken from the file holds a marked player (nothing swaps "
+      "one out after the pick now the 4-lineup minimum is off)",
       not _m9.get("used") or _m9.get("filled") or sum(1 for r in _r9f if r["source"] == "vendor"
-                                 and not any(q["name"] in set(_m9["marked"]) for q in r["players"])) <= 8,
+                                 and not any(q["name"] in set(_m9["marked"]) for q in r["players"])) == 0,
       str(sum(1 for r in _r9f if r["source"] == "vendor" and not any(q["name"] in set(_m9.get("marked") or []) for q in r["players"]))))
 _cap_nm = _ex150.most_common(1)[0][0]
 _k5 = _nlog()

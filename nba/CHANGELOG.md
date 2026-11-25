@@ -2,6 +2,22 @@
 
 Newest first. One entry per change, in plain words: what changed and why.
 
+## Nov 24, 2026 — the 4-lineup minimum is off
+
+From `NBA Four Lineup Minimum Report 11-24.md`. The data chat's change to `newbuild.py` is applied as handed over (`Prototype/tail4/`).
+
+**What it was.** After the pick, any player in fewer than 4 lineups of a 150 was swapped, lineup by lineup, for the set's most-used player within $500. It was a count: a player could not be in 1, 2 or 3 lineups. It ran on every slate size. On 7 games or fewer it changed about 2 lineups a night. On 8+ games, with the wider pool and the top-five rule in, it changed 22 to 38.
+
+**It is off on every slate size** (`TAIL_ON = False`). The 150 is the pick's own lineups. A typed minimum is still met and a typed cap still acts. On 5+ games the 20s are every 7th lineup of the 150, so they follow. `TAIL_ON = True` is the tool as it was, lineup for lineup. A night built before this is regraded with it on.
+- **Record (BACKTEST, 33 saved nights, on against off):** top-10 finishes 3 with it and 3 without. 2 to 4 games 1.00x; 5 to 7 games 1.03x (0 / 1); 8+ games 0.64x (2 / 0), two lineups.
+- **The three best lineups it moved were chance.** Nov 2, 54th to 6th: Joel Embiid, in 2 lineups, scored 28.0 against a need of 45.1, and every possible replacement outscored him. Nov 4, 5th to 2nd, on 2.7 points. Oct 31, 8th to 13th: a 4.8% owned pool player who hit was swapped for 43% chalk.
+- **It broke the set's own limits:** 72 of 1,050 lineups over the limit of 5 shared players on 8+ games (the Nov 2 6th place was one), and a player over the 60% cap on three 5 to 7 game nights.
+- **It undid part of the wider pool:** 61 of the 127 let-in players the pick used were taken out of the 150 altogether. With it off the wider pool still earns its place: 0.62x (2 / 1) for the 150 and 0.70x (6 / 1) for a random 20.
+- **The cost:** those three lineups go back (6th to 54th, 2nd to 5th, 13th to 8th). On 8+ games top 10% lineups read 22.9 a night against 24.0 and a random 20 reads 1.07x (1 / 3); top 1% lineups read 26 against 24.
+- **Turn it back on** if, on the next six 8+ game nights rebuilt both ways, the 150's best lineup is higher with it on two or more and lower on none.
+
+**Not built, on the record:** the same step at 3, 5 or 8 lineups, within $300 or $1,000, or kept inside the limit and the cap (all counts); a swap by projection or by what he needs with no count (lower). **Cannot be told:** on 8+ games, the let-in players swapped back out after the pick while their lineups stay (a random 20 0.83x, the best lineup the same on six of seven nights). A build if, on the next four 8+ game nights, a random 20 is higher on three and the best lineup is lower on none.
+
 ## Nov 24, 2026 — 8+ game slates: one of tonight's top five projections in every lineup
 
 From `NBA Raw Points On Short Slates Report 11-24.md`. The data chat's change to `newbuild.py` is applied as handed over (`Prototype/raw8/`).

@@ -67,6 +67,17 @@ SMALL_SET = 20            # a contest this size or smaller gets the 20-max build
 CAP_BIG = 0.85            # no player in more than 85% of a 150
 CAP_SMALL = 0.90          # ... or 90% of a 20
 MIN_LINEUPS = 4           # a 150 drops anyone in fewer than 4 lineups
+# The tail fix is OFF (Four Lineup Minimum quick ask, Nov 24). It was a count:
+# a player could not be in 1, 2 or 3 lineups of the 150. On the 33 saved nights
+# it added no top-10 finish (3 with it, 3 without): it made a 6th on Nov 2
+# because a pool player in 2 lineups failed (any swap would have done it, and
+# the lineup it made breaks the limit of 5 shared players), made a 2nd out of a
+# 5th on Nov 4, and turned an 8th into a 13th on Oct 31 by swapping a 4.8%
+# owned pool player who hit for 43% chalk. On 8+ game slates it changed 22 to
+# 38 lineups a night, left 72 of 1,050 over the limit of 5 shared players, and
+# dropped 61 of the 127 players the wider pool had put in the 150. True turns
+# it back on exactly as it was.
+TAIL_ON = False
 # T1 (20s, Spread And Pool report, Nov 20): the top-three raise is OFF (K = 0).
 # It was a cash part; the 20s finish level or higher without it. The grader
 # passes 2.0 to rebuild a night built with it.
@@ -1443,7 +1454,7 @@ def build_set(players, n, games, field_lineups, inj, caps=None, floors=None, see
                      f"{n} in the pick order")
     rosters, sources = chunks[0] if chunks else ([], [])
     tail = 0
-    if big and rosters:
+    if big and rosters and TAIL_ON:
         tail = tail_fix(rosters, by_id, MIN_LINEUPS, keep=set(floors), caps=caps)
     lev = None
     if anchor and anchor.get("id") in active_ids and chunks:

@@ -92,7 +92,7 @@ in `app.py`: kept for showdown and for after-the-fact replays only.
   Stokastic's best 150, the field as projected (the studs' own summed) and each built
   set (`settings.studLoad`). A warning when the 150 holds twice the file's rate or more
   (Nov 16: 0.32 / 0.43 / 0.75). Nothing in the build reads it.
-- One cap (85% of a 150, 90% of a 20); a 150 has nobody in fewer than 4 lineups.
+- One cap (85% of a 150, 90% of a 20). The 4-lineup minimum is off since Nov 24 (`TAIL_ON`): a player can be in 1, 2 or 3 lineups of a 150.
 - The 150's takeover lean: a player whose projection is 1.3x his normal because a
   regular is out (the takeover mark), at 15%+ projected own, is floored at 1.5x his own
   (cap 95%), over Stokastic's and our own lineups alike. Not in the 20-max.
