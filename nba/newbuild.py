@@ -571,9 +571,34 @@ def file_candidates(field_lineups, active_ids, slotting):
     return out
 
 
+# --- Nov 26: the name match (Core Hold, Name Match And Nov 25) ----------------
+# A projected player DK spells another way (Stokastic "Nicolas Claxton", DK
+# "Nic Claxton") is matched by namefix.py instead of dropped. False gives back
+# today's lineups, notes and upload files exactly. Switched on Nov 26.
+NAME_MATCH_ON = True
+
+
 # --- Nov 25: Stokastic's file taken plainly by Win% --------------------------
 WIN20_ON = True     # every 20-max is Stokastic's first 20 by Win%, the same 20 in each
 WIN150_ON = True    # the 150 is Stokastic's first 150 by Win% that spend the whole $50,000
+
+# --- Nov 25: the lineup maker (After Lock, The Board And The Handover) -------
+# The mini-MAX 150 made from the typed pool by maker.py in place of the pick
+# above. On the 34 saved nights it is the set with the most nights holding a
+# lineup that beat the real 10th place; it is not proven against the Win% 150.
+# Each part has its own switch. MAKER_ON = False gives back today's lineups.
+MAKER_ON = True      # the 150 is made from the typed pool (off: the Win% 150). Switched on Nov 26.
+MAKER_WHOLE = True   # every made lineup spends the whole $50,000
+MAKER_CORE = True    # the core rule: its two best players in 9 lineups of 10
+MAKER_OWN = 4.0      # points a non-core player gives up per 30 points of ownership (0 = off)
+# Nov 26 (Core Hold report): what a core player gets. "hold" is the Nov 25 form.
+# Shipped: "line" at 50, the hold only for a core player projected 50% owned or
+# less. Above that the build takes him by itself and nothing is forced.
+MAKER_CORE_FORM = "line"   # "hold" | "pool" | "free" | "line" | "mult" | "lift" (maker.py explains each)
+MAKER_CORE_LINE = 50.0     # "line": held only when he projects this % owned or less ...
+MAKER_CORE_FLOOR = 0.0     # ... and this % owned or more
+MAKER_CORE_MULT = 1.5      # "mult": held in no more than this x his projected ownership
+MAKER_CORE_LIFT = 0.15     # "lift": his projection lifted by this share, no hold
 
 
 def file_by_win(field_lineups, players, inj, slotting, k, whole=False):

@@ -458,6 +458,16 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
         return {"error": f"Late swap is classic only; this file's slots are "
                          f"{', '.join(slots)}. A showdown locks all at once."}
 
+    # Nov 26, the name match: a player DK spells another way than the fresh
+    # projections is found (same team, salary and last name, matched by nobody
+    # else), so the entries holding him are swapped like any other and his
+    # lock is read. NB.NAME_MATCH_ON = False leaves the run as it was.
+    import newbuild as _NB
+    name_fix = {}
+    if getattr(_NB, "NAME_MATCH_ON", False):
+        import namefix as _NF
+        name_fix = _NF.alias(dk, players)["fixes"]
+
     # DK ids, eligibility, tip times and locks from DK's own file.
     by_norm = {}
     for p in players:
@@ -505,6 +515,9 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
                            "wasStarting": b.get("starting"), "nowStarting": p.starting})
     pool_names = read_sharp(o.get("pool") or "")
     core_names = read_sharp(o.get("cores") or "")
+    if name_fix:
+        pool_names = _NF.also_names(pool_names, name_fix)
+        core_names = _NF.also_names(core_names, name_fix)
     if base_row and not pool_names and not core_names:
         st = base_row.get("settings") or {}
         pool_names = {normalize_name(n) for n in st.get("pool") or []}
@@ -662,6 +675,13 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
     contest = None
     if (standings_text or "").strip():
         stand, srep = read_standings(standings_text)
+        if name_fix:                         # the standings spell him DK's way
+            if isinstance(srep.get("ownership"), dict):
+                _NF.also(srep["ownership"], name_fix)
+            _rev = {v_: k_ for k_, v_ in name_fix.items()}
+            for r_ in stand:                 # his name on an entry's revealed roster
+                if r_.get("names"):
+                    r_["names"] = [_rev.get(n_, n_) for n_ in r_["names"]]
         ours_in = {e["entry_id"] for e in dk["entries"]} & {r["entry_id"] for r in stand}
         run_info["standings"] = {"entries": len(stand), "ours": len(ours_in),
                                  "used": bool(ours_in) and not srep.get("error")}
@@ -1107,9 +1127,11 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
             slotted = list(lineup)
             for i, p in zip(open_idx, filled):
                 slotted[i] = p
-            out_cells = [{"name": p.name, "dk_id": p.dk_id} for p in slotted]
+            out_cells = [_cell_of(p) for p in slotted]
         else:
-            out_cells = [{"name": c["name"], "dk_id": c["dk_id"]} for c in e["cells"]]
+            out_cells = [dict({"name": c["name"], "dk_id": c["dk_id"]},
+                              **({"dk_name": c["dk_name"]} if c.get("dk_name") else {}))
+                         for c in e["cells"]]
             slotted = list(lineup)
         bad = _check(slotted, lineup, is_locked, slots) if pick else ""
         if bad:
@@ -1193,7 +1215,7 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
                         if rec.get("keep"):
                             changed += 1
                         cap_commit(new, sl, cid)
-                        cells = [{"name": q.name, "dk_id": q.dk_id} for q in new]
+                        cells = [_cell_of(q) for q in new]
                         rec.update({"keep": False, "hold": None,
                                     "out": [q.name for q in lu0 if q not in new],
                                     "in": [q.name for q in new if q not in lu0],
@@ -1503,10 +1525,19 @@ def _hold_reason(blocked, open_idx, winning, why_news, allow_free=True):
     return f"no news, and nothing clears +{SWAP_DISC_GAIN:.0f}"
 
 
+def _cell_of(p):
+    """An upload cell for a player; DK's own spelling rides along when the name
+    match gave him one (Nov 26)."""
+    c = {"name": p.name, "dk_id": p.dk_id}
+    if getattr(p, "dk_name", ""):
+        c["dk_name"] = p.dk_name
+    return c
+
+
 def _dk_line(e, cells):
     cname = (e["contest"] or "").replace('"', '""')
     return (f'{e["entry_id"]},"{cname}",{e["contest_id"]},{e["fee"]},'
-            + ",".join(f'"{c["name"]} ({c["dk_id"]})"' for c in cells))
+            + ",".join(f'"{c.get("dk_name") or c["name"]} ({c["dk_id"]})"' for c in cells))
 
 
 def _check(slotted, before, is_locked, slots):

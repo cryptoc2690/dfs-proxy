@@ -299,14 +299,22 @@ def apply_removals(players, names, redistribute=False):
 
 
 # ---------------- DK ids, eligibility, and the field ----------------
-def _attach_dk(players, dk):
+def _attach_dk(players, dk, fields=()):
     """Swap in DK's ids, and take DK's word on eligibility and tip time.
 
     An empty id counts as a miss, not a hit: a hit on an empty id once put a
     player's normalised NAME into the upload file where a number belongs (NFL).
+
+    Nov 26: with NB.NAME_MATCH_ON the name match (namefix.py) runs first, so a
+    player DK spells another way is found by the join below. What it did is
+    left in dk["nameFix"]. fields: the lineups file text(s), when loaded.
     """
     if not dk or not dk.get("pool"):
         return 0, [], []
+    import newbuild as _NB
+    if getattr(_NB, "NAME_MATCH_ON", False):
+        import namefix as _NF
+        dk["nameFix"] = _NF.alias(dk, players, fields)
     hit, miss, no_cpt = 0, [], []
     for p in players:
         rec = dk["pool"].get(normalize_name(p.name))
@@ -838,7 +846,7 @@ def _assign(contests, lineups):
 def _dk_rows(entries, rosters, header, fmt):
     lines = [header]
     for e, ps in zip(entries, rosters):
-        cells = [f'"{p.name} ({p.upload_id(i == 0) if fmt == "showdown" else p.dk_id})"'
+        cells = [f'"{getattr(p, "dk_name", "") or p.name} ({p.upload_id(i == 0) if fmt == "showdown" else p.dk_id})"'
                  for i, p in enumerate(ps)]
         cname = (e["contest"] or "").replace('"', '""')
         lines.append(f'{e["entry_id"]},"{cname}",{e["contest_id"]},{e["fee"]},'
@@ -1389,9 +1397,37 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
             return {"error": "The DK file has entry rows but no player pool, so it is an "
                              "upload file, not DK's export. Download the entries file "
                              "again.", "notes": notes}
-        hit, miss, _no_cpt = _attach_dk(players, dk)
+        hit, miss, _no_cpt = _attach_dk(players, dk, fields)
         say("good", f"DK entries: {len(dk['entries'])} entries, {hit} player IDs matched.",
             "check", f"DK entries ({len(dk['entries'])}, {hit} player IDs matched)")
+        if NB.NAME_MATCH_ON:
+            # The name match: say who was matched, and do not go on without a
+            # player who matters (in the typed pool, named in Stokastic's
+            # lineups, or projected 2%+ owned) unless he is typed under Remove.
+            import namefix as NF
+            nf_ = dk.get("nameFix") or {}
+            for p_, rec_, how_ in nf_.get("matched") or ():
+                if p_.proj > 0:
+                    say("good", f"Name match: Stokastic's {p_.name} is DK's {rec_['name']} "
+                                f"({how_}). He is on the slate.", "check",
+                        f"name match: {p_.name} = {rec_['name']}")
+            seat_ = NF.seats(fields)
+            typed_ = read_sharp(o.get("pool") or "") | read_sharp(o.get("cores") or "")
+            gone_ = read_sharp(o.get("remove") or "")
+            stop_ = [(p_, why_) for p_, why_ in nf_.get("unmatched") or ()
+                     if NF.matters(p_, why_, typed_, seat_) and normalize_name(p_.name) not in gone_]
+            if stop_:
+                return {"error": "Not building: " + "; ".join(
+                    f"{p_.name} ({p_.team}, ${p_.salary:,}, projected {p_.proj:.1f}, "
+                    f"{p_.ownership:.0f}% owned"
+                    + (", in your pool" if normalize_name(p_.name) in typed_ else "")
+                    + (f", in {sum((seat_.get(normalize_name(p_.name)) or {}).values())} of "
+                       f"Stokastic's lineups" if seat_.get(normalize_name(p_.name)) else "")
+                    + f") has no DK player the tool can match him to: {why_}"
+                    for p_, why_ in stop_[:6])
+                    + ". He cannot be entered and every lineup of the file holding him would be "
+                      "skipped. Download the DK entries file again if it is the wrong slate's; "
+                      "to build without him, type his name under Remove.", "notes": notes}
         live_miss = [p.name for p in players if p.name in miss and p.proj > 0]
         if live_miss:
             say("warn", f"{len(live_miss)} projected player(s) have no DK match by name "
@@ -1415,6 +1451,9 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
     if (linestar_text or "").strip():
         ls, lrep = read_linestar(linestar_text)
         if not lrep.get("error") and not lrep.get("is_results"):
+            if NB.NAME_MATCH_ON and dk:      # LineStar spells him DK's way
+                import namefix as NF
+                NF.also(ls, (dk.get("nameFix") or {}).get("fixes"))
             ls_map = ls
             zeroed = []
             for p in players:
@@ -1433,6 +1472,11 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
     # Pool (cores are pool players), removals, caps and minimums.
     pool_names = read_sharp(o.get("pool") or "") | read_sharp(o.get("cores") or "")
     known = {normalize_name(p.name) for p in players}
+    if NB.NAME_MATCH_ON and dk:              # a pool typed with DK's spelling of him
+        import namefix as NF
+        fx_ = (dk.get("nameFix") or {}).get("fixes") or {}
+        pool_names = NF.also_names(pool_names, fx_)
+        known |= set(fx_.values())
     for p in players:
         p.in_pool = normalize_name(p.name) in pool_names
         p._sheet = bool(pool_names)
@@ -1969,6 +2013,49 @@ def run_build(proj_text, field_text="", dk_text="", options=None, linestar_text=
             else:
                 say("warn", f"Stokastic's file gave only {len(top)} lineups that can be entered, "
                             f"so the 150 is the tool's own tonight.")
+        # Nov 25 (After Lock handover): the 150 made from the typed pool by the
+        # lineup maker. NB.MAKER_ON = False (or the option makerOff) gives back
+        # the 150 chosen above. Typed removals, caps, minimums and ticks act on
+        # it: removals through is_active, the rest as the caps and minimums
+        # worked out above for this set.
+        if kind == "big" and NB.MAKER_ON and not o.get("makerOff"):
+            import maker as MK
+            import role as RLm
+            act = [p for p in players if NB.is_active(p, inj)]
+            core, why = [], {}
+            if NB.MAKER_CORE:
+                mlogs = RLm.load_logs(_slate_day(o))
+                for p, w in MK.core_players(act, mlogs, RLm._joiner(mlogs["games"])):
+                    core.append(p.dk_id)
+                    why[p.name] = w
+            mk = MK.build(act, n, seed, {p.dk_id for p in act if p.in_pool or p.core},
+                          core=core, own_rate=float(NB.MAKER_OWN or 0.0), whole=bool(NB.MAKER_WHOLE),
+                          caps=bcaps, floors=floors, slotting=C.best_slotting,
+                          core_form=str(NB.MAKER_CORE_FORM), core_line=float(NB.MAKER_CORE_LINE),
+                          core_mult=float(NB.MAKER_CORE_MULT), core_lift=float(NB.MAKER_CORE_LIFT),
+                          core_floor=float(NB.MAKER_CORE_FLOOR))
+            if len(mk["rosters"]) >= n:
+                res["rosters"] = [list(r) for r in mk["rosters"]]
+                res["sources"] = ["mine"] * len(res["rosters"])
+                res["chunks"] = [(res["rosters"], res["sources"])]
+                res["meta"].pop("win150", None)
+                res["meta"]["maker"] = dict(mk["meta"], why=why, whole_on=bool(NB.MAKER_WHOLE))
+                m_ = mk["meta"]
+                res["notes"] = [f"The lineup maker: {m_['n']} lineups from your pool of {m_['players']}"
+                                + (f", {m_['whole']} spend the whole $50,000" if NB.MAKER_WHOLE else "")
+                                + (". Core: " + "; ".join(f"{nm} ({why.get(nm, '')}) in {c_}"
+                                                           for nm, c_ in m_["coreIn"].items())
+                                   if m_["core"] else (". No player meets the core rule tonight"
+                                                       if NB.MAKER_CORE else ""))
+                                + (f". Ownership weighed at {NB.MAKER_OWN:g}" if NB.MAKER_OWN else "")
+                                + "."]
+                for nm, (got, need) in m_["minimums"].items():
+                    if got < need:
+                        say("warn", f"Minimum not met by the lineup maker: {nm} is in {got} of the "
+                                    f"{need} lineups typed.")
+            else:
+                say("warn", f"The lineup maker made only {len(mk['rosters'])} lineups from your pool, "
+                            f"so the 150 is the one chosen above tonight.")
         label = "150-max" if kind == "big" else "20-max"
         for t in res["notes"]:
             all_notes.append(f"{label}: {t}")
