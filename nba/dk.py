@@ -189,8 +189,24 @@ def normalize_name(name: str) -> str:
     Jr., Robert Williams III). DK player IDs are the real key; names are the
     fallback that has to survive all three.
     """
+    # Nov 26 (late swap speed): the same few hundred names are cleaned millions
+    # of times in one swap. The answer for a name never changes, so it is kept.
+    try:
+        return _NORM_SEEN[name]
+    except (KeyError, TypeError):
+        pass
     n = unicodedata.normalize("NFKD", name or "")
     n = "".join(c for c in n if not unicodedata.combining(c))
     n = re.sub(r"[.'’\-,]", "", n.lower())
     n = re.sub(r"\s+", " ", n).strip()
-    return re.sub(r"\b(jr|sr|ii|iii|iv|v)\b", "", n).strip()
+    n = re.sub(r"\b(jr|sr|ii|iii|iv|v)\b", "", n).strip()
+    try:
+        if len(_NORM_SEEN) > 50000:
+            _NORM_SEEN.clear()
+        _NORM_SEEN[name] = n
+    except TypeError:
+        pass
+    return n
+
+
+_NORM_SEEN = {}

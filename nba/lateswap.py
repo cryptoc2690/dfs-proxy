@@ -109,6 +109,19 @@ SWAP_LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 
 # ---------------- the logged build: what we believed at lock ----------------
+def _may_be_slate(line, want):
+    """Nov 26 (late swap speed): a build-log row of this game set names every one
+    of its games, so a line that lacks one is skipped before it is parsed. The
+    log is 479 MB and was parsed whole seven times a run. Same rows kept."""
+    for g in want:
+        if g not in line:
+            return False
+    return True
+
+
+_STAND_READ = {}      # standings text -> its parsed (rows, report), handed on once
+
+
 def news_baseline(log_path, games):
     """{norm name: {"proj", "starting"}} from the LAST build of this game set.
 
@@ -120,6 +133,8 @@ def news_baseline(log_path, games):
     try:
         with open(log_path, encoding="utf-8") as fh:
             for line in fh:
+                if not _may_be_slate(line, want):
+                    continue
                 try:
                     r = json.loads(line)
                 except ValueError:
@@ -674,7 +689,7 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
     # Standings: live points, rank, the field.
     contest = None
     if (standings_text or "").strip():
-        stand, srep = read_standings(standings_text)
+        stand, srep = _STAND_READ.pop(standings_text, None) or read_standings(standings_text)
         if name_fix:                         # the standings spell him DK's way
             if isinstance(srep.get("ownership"), dict):
                 _NF.also(srep["ownership"], name_fix)
@@ -746,7 +761,7 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
         key = frozenset(p.dk_id for p in roster)
         if key not in cache:
             open_rows = [row(p) for p in roster if normalize_name(p.name) not in locked]
-            tot = sorted(sum(t) for t in zip(*open_rows)) if open_rows else zero
+            tot = sorted(map(sum, zip(*open_rows))) if open_rows else zero
             cache[key] = (sum(tot) / sims, tot[int(sims * 0.85)], tot[int(sims * 0.95)])
         return cache[key]
 
@@ -926,6 +941,7 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
                             key=lambda p: -p.proj / max(p.salary, 1))[:SWAP_TOP_PER_SLOT]
             per_slot[sl] = list({p.dk_id: p for p in by_proj + by_val}.values())
         cur_open = [lineup[i] for i in open_idx]
+        cur_ids = {p.dk_id for p in cur_open}
         rosters = {frozenset(p.dk_id for p in lineup): list(lineup)}
 
         def consider(open_players):
@@ -949,7 +965,7 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
                 for q in cand:
                     if q.salary > room:
                         continue
-                    if q in cur_open:
+                    if q.dk_id in cur_ids:
                         continue
                     consider(cur_open[:i] + [q] + cur_open[i + 1:])
             top = list({p.dk_id: p for p in (
@@ -973,10 +989,10 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
                         if j == i:
                             continue
                         for a in wide:
-                            if a in cur_open:
+                            if a.dk_id in cur_ids:
                                 continue
                             for b in wide:
-                                if a is b or b in cur_open:
+                                if a is b or b.dk_id in cur_ids:
                                     continue
                                 nxt = list(cur_open)
                                 nxt[i], nxt[j] = a, b
@@ -986,21 +1002,22 @@ def run_late_swap(proj_text, dk_text, standings_text="", options=None, log_path=
                 for j in range(i + 1, len(cur_open)):
                     for a in top:
                         for b in top:
-                            if a is b or a in cur_open or b in cur_open:
+                            if a is b or a.dk_id in cur_ids or b.dk_id in cur_ids:
                                 continue
                             nxt = list(cur_open)
                             nxt[i], nxt[j] = a, b
                             consider(nxt)
             weight = {p.dk_id: max(p.proj, 0.1) ** E.FILL_EXP for p in pool_c}
             for _ in range(SWAP_RANDOM_FILLS):              # whole re-fills
-                pick, left = [], budget
+                pick, left, pick_ids = [], budget, set()
                 for s in open_slots:
-                    el = [q for q in per_slot[s] if q not in pick
+                    el = [q for q in per_slot[s] if q.dk_id not in pick_ids
                           and q.salary <= left - 3000 * (len(open_slots) - len(pick) - 1)]
                     if not el:
                         break
                     q = E._pick(el, [weight[x.dk_id] for x in el], rng)
                     pick.append(q)
+                    pick_ids.add(q.dk_id)
                     left -= q.salary
                 if len(pick) == len(open_slots):
                     consider(pick)
@@ -1325,7 +1342,7 @@ def _run_facts(dk, players, locked, games, o, log_path):
     try:
         with open(log_path, encoding="utf-8") as fh:
             for line in fh:
-                if '"entry_id"' not in line:
+                if '"entry_id"' not in line or not _may_be_slate(line, want):
                     continue
                 try:
                     r = json.loads(line)
@@ -1352,7 +1369,7 @@ def _built_contests(log_path, games):
     try:
         with open(log_path, encoding="utf-8") as fh:
             for line in fh:
-                if '"contest_id"' not in line:
+                if '"contest_id"' not in line or not _may_be_slate(line, want):
                     continue
                 try:
                     r = json.loads(line)
@@ -1380,6 +1397,7 @@ def run_late_swap_all(proj_text, dk_text, standings_texts=None, options=None, lo
       log row. The results are joined into one table and one upload file.
     """
     o = dict(options or {})
+    _STAND_READ.clear()
     texts = [t for t in (standings_texts or []) if (t or "").strip()]
     names = list(o.pop("standingsNames", None) or [])
     dk = read_dk_entries(dk_text) if (dk_text or "").strip() else None
@@ -1422,6 +1440,7 @@ def run_late_swap_all(proj_text, dk_text, standings_texts=None, options=None, lo
     for i, t in enumerate(texts):
         label = names[i] if i < len(names) and names[i] else f"standings file {i + 1}"
         stand, srep = read_standings(t)
+        _STAND_READ[t] = (stand, srep)        # read once; the contest's run takes it
         if srep.get("error"):
             say("warn", f"{label}: {srep['error']}")
             continue
